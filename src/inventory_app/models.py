@@ -66,7 +66,7 @@ class StocktakeLine(Base):
     item_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False)
 
     expected_quantity: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False, server_default="0")
-    counted_quantity: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    counted_quantity: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False, server_default="0")
 
     shelf_location: Mapped[str | None] = mapped_column(String, nullable=True)
     shelf_location_note: Mapped[str | None] = mapped_column(Text, nullable=True)

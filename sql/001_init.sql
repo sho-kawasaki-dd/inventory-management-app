@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS stocks (
   shelf_location TEXT,
   shelf_location_note TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (item_id)
+  UNIQUE (item_id),
+  CONSTRAINT ck_stocks_quantity_nonnegative CHECK (quantity >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS stocktakes (
@@ -35,10 +36,12 @@ CREATE TABLE IF NOT EXISTS stocktake_lines (
   stocktake_id UUID NOT NULL REFERENCES stocktakes(id) ON DELETE CASCADE,
   item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   expected_quantity NUMERIC(14,3) NOT NULL DEFAULT 0,
-  counted_quantity NUMERIC(14,3),
+  counted_quantity NUMERIC(14,3) NOT NULL DEFAULT 0,
   shelf_location TEXT,
   shelf_location_note TEXT,
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (stocktake_id, item_id)
+  UNIQUE (stocktake_id, item_id),
+  CONSTRAINT ck_stocktake_lines_expected_quantity_nonnegative CHECK (expected_quantity >= 0),
+  CONSTRAINT ck_stocktake_lines_counted_quantity_nonnegative CHECK (counted_quantity >= 0)
 );

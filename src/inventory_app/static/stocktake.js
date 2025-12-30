@@ -33,7 +33,7 @@ window.StocktakePage = (() => {
       const tr = document.createElement('tr');
       if (ln.is_diff) tr.classList.add('diff');
 
-      const countedVal = (ln.counted_quantity === null || ln.counted_quantity === undefined) ? '' : ln.counted_quantity;
+      const countedVal = ln.counted_quantity ?? ln.expected_quantity;
       tr.innerHTML = `
         <td>${ln.shelf_location ?? ''}</td>
         <td>${ln.name}</td>
@@ -52,7 +52,19 @@ window.StocktakePage = (() => {
       el.addEventListener('change', async (e) => {
         const lineId = e.target.getAttribute('data-line-id');
         const v = e.target.value;
-        const payload = { counted_quantity: v === '' ? null : Number(v) };
+        // Don't allow empty value - require a number
+        if (v === '' || v === null) {
+          alert('Counted quantity is required');
+          await load(stocktakeId);
+          return;
+        }
+        const numValue = Number(v);
+        if (numValue < 0) {
+          alert('Counted quantity must be non-negative');
+          await load(stocktakeId);
+          return;
+        }
+        const payload = { counted_quantity: numValue };
         await window.InventoryApp.api(`${API_BASE}/stocktakes/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(payload) });
         // refresh meta/diff highlighting
         await load(stocktakeId);
