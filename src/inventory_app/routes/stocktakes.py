@@ -9,6 +9,7 @@ from inventory_app.db import get_session
 from inventory_app.http import error, ok
 from inventory_app.models import Item, Stock, Stocktake, StocktakeLine
 from inventory_app.schemas.stocktakes import StocktakeCreate
+from inventory_app.services.inventory import InsufficientStockError, apply_inventory_delta
 
 bp = Blueprint("stocktakes", __name__)
 
@@ -175,7 +176,7 @@ def update_stocktake_line(line_id: int):
 
 @bp.post("/stocktakes/<uuid:stocktake_id>/confirm")
 def confirm_stocktake(stocktake_id: UUID):
-    """Apply counted quantities to stocks."""
+    """Apply counted quantities to stocks using transaction-based approach."""
     s = get_session()
     st = s.get(Stocktake, stocktake_id)
     if not st:
@@ -185,17 +186,31 @@ def confirm_stocktake(stocktake_id: UUID):
         select(StocktakeLine).where(StocktakeLine.stocktake_id == stocktake_id)
     ).scalars().all()
 
-    # Validate and apply counted quantities
+    # Validate and apply counted quantities using transaction-based approach
     for line in lines:
         if line.counted_quantity < 0:
             return error("Counted quantities must be non-negative", 400)
         
+        # Get current stock quantity (or treat as 0 if no stock record)
         stock = s.execute(select(Stock).where(Stock.item_id == line.item_id)).scalar_one_or_none()
-        if not stock:
-            stock = Stock(item_id=line.item_id, quantity=line.counted_quantity)
-            s.add(stock)
-        else:
-            stock.quantity = line.counted_quantity
+        current_quantity = float(stock.quantity) if stock else 0.0
+        
+        # Calculate delta: counted - current
+        delta = float(line.counted_quantity) - current_quantity
+        
+        # Only create transaction if there's a difference
+        if delta != 0:
+            try:
+                apply_inventory_delta(
+                    session=s,
+                    item_id=line.item_id,
+                    delta=delta,
+                    txn_type="STOCKTAKE",
+                    reason=f"Stocktake: {st.title}",
+                )
+            except InsufficientStockError as e:
+                s.rollback()
+                return error(str(e), 409)
 
     st.completed_at = func.now()
     s.commit()

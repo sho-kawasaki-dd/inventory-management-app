@@ -10,6 +10,7 @@ from inventory_app.routes.items import bp as items_bp
 from inventory_app.routes.stocks import bp as stocks_bp
 from inventory_app.routes.stocktakes import bp as stocktakes_bp
 from inventory_app.routes.suggestions import bp as suggestions_bp
+from inventory_app.routes.transactions import bp as transactions_bp
 from inventory_app.ui.routes import bp as ui_bp
 
 
@@ -28,6 +29,7 @@ def create_app() -> Flask:
     app.register_blueprint(stocks_bp, url_prefix="/api")
     app.register_blueprint(stocktakes_bp, url_prefix="/api")
     app.register_blueprint(suggestions_bp, url_prefix="/api")
+    app.register_blueprint(transactions_bp, url_prefix="/api")
 
     return app
 
