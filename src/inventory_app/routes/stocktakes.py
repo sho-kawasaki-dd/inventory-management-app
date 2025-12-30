@@ -29,7 +29,6 @@ def list_stocktakes():
         .where(
             and_(
                 StocktakeLine.stocktake_id == Stocktake.id,
-                StocktakeLine.counted_quantity.is_not(None),
                 StocktakeLine.counted_quantity != StocktakeLine.expected_quantity,
             )
         )
@@ -82,7 +81,7 @@ def create_stocktake():
             stocktake_id=st.id,
             item_id=item.id,
             expected_quantity=stock.quantity,
-            counted_quantity=None,
+            counted_quantity=stock.quantity,  # Initialize with expected_quantity, not null
             shelf_location=stock.shelf_location,
             shelf_location_note=stock.shelf_location_note,
         )
@@ -110,8 +109,8 @@ def get_stocktake(stocktake_id: UUID):
     diff_count = 0
     for line, item in lines:
         expected = float(line.expected_quantity or 0)
-        counted = None if line.counted_quantity is None else float(line.counted_quantity)
-        is_diff = counted is not None and counted != expected
+        counted = float(line.counted_quantity)
+        is_diff = counted != expected
         if is_diff:
             diff_count += 1
 
@@ -154,6 +153,18 @@ def update_stocktake_line(line_id: int):
         return error("Line not found", 404)
 
     payload = request.get_json(force=True)
+    
+    # Validate counted_quantity if provided
+    if "counted_quantity" in payload:
+        if payload["counted_quantity"] is None:
+            return error("Counted quantity cannot be null", 400)
+        try:
+            qty = float(payload["counted_quantity"])
+            if qty < 0:
+                return error("Counted quantity must be non-negative", 400)
+        except (ValueError, TypeError):
+            return error("Counted quantity must be a valid number", 400)
+    
     for field in ["counted_quantity", "note"]:
         if field in payload:
             setattr(line, field, payload[field])
@@ -174,9 +185,11 @@ def confirm_stocktake(stocktake_id: UUID):
         select(StocktakeLine).where(StocktakeLine.stocktake_id == stocktake_id)
     ).scalars().all()
 
+    # Validate and apply counted quantities
     for line in lines:
-        if line.counted_quantity is None:
-            continue
+        if line.counted_quantity < 0:
+            return error("Counted quantities must be non-negative", 400)
+        
         stock = s.execute(select(Stock).where(Stock.item_id == line.item_id)).scalar_one_or_none()
         if not stock:
             stock = Stock(item_id=line.item_id, quantity=line.counted_quantity)

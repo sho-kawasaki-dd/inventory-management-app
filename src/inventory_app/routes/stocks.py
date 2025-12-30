@@ -43,6 +43,16 @@ def update_stock(stock_id: int):
         return error("Stock not found", 404)
 
     payload = request.get_json(force=True)
+    
+    # Validate quantity if provided
+    if "quantity" in payload:
+        try:
+            qty = float(payload["quantity"])
+            if qty < 0:
+                return error("Quantity must be non-negative", 400)
+        except (ValueError, TypeError):
+            return error("Quantity must be a valid number", 400)
+    
     for field in ["quantity", "shelf_location", "shelf_location_note"]:
         if field in payload:
             setattr(st, field, payload[field])
