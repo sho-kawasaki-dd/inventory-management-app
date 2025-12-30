@@ -44,6 +44,8 @@ This repo includes an initial Alembic setup.
 alembic upgrade head
 ```
 
+> Note: The migration automatically enables the `pgcrypto` extension for UUID support with `gen_random_uuid()`.
+
 If you need to initialize Alembic from scratch (normally not required):
 
 ```bash

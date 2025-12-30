@@ -22,7 +22,7 @@ def list_stocks():
         data.append(
             {
                 "id": st.id,
-                "item_id": it.id,
+                "item_id": str(it.id),
                 "sku": it.sku,
                 "name": it.name,
                 "unit": it.unit,

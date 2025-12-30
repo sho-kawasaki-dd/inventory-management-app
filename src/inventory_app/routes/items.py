@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from flask import Blueprint, request
 from sqlalchemy import select
 
@@ -36,8 +38,8 @@ def create_item():
     return ok(ItemOut.from_orm(item).model_dump(), 201)
 
 
-@bp.get("/items/<int:item_id>")
-def get_item(item_id: int):
+@bp.get("/items/<uuid:item_id>")
+def get_item(item_id: UUID):
     s = get_session()
     item = s.get(Item, item_id)
     if not item:

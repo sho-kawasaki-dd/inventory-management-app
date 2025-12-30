@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from flask import Blueprint, redirect, render_template, url_for
 
 bp = Blueprint("ui", __name__)
@@ -31,6 +33,6 @@ def stocktakes():
     return render_template("stocktakes.html")
 
 
-@bp.get("/stocktakes/<int:stocktake_id>")
-def stocktake_detail(stocktake_id: int):
+@bp.get("/stocktakes/<uuid:stocktake_id>")
+def stocktake_detail(stocktake_id: UUID):
     return render_template("stocktake_detail.html", stocktake_id=stocktake_id)

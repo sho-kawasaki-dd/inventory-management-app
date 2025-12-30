@@ -22,4 +22,4 @@ def suggestions():
         .scalars()
         .all()
     )
-    return ok([{"id": i.id, "name": i.name, "sku": i.sku} for i in rows])
+    return ok([{"id": str(i.id), "name": i.name, "sku": i.sku} for i in rows])

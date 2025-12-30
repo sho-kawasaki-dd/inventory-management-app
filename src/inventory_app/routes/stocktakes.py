@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from flask import Blueprint, request
 from sqlalchemy import and_, func, select
 
@@ -51,7 +53,7 @@ def list_stocktakes():
     for r in rows:
         data.append(
             {
-                "id": r.id,
+                "id": str(r.id),
                 "title": r.title,
                 "started_at": r.started_at.isoformat() if r.started_at else None,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
@@ -87,11 +89,11 @@ def create_stocktake():
         s.add(line)
 
     s.commit()
-    return ok({"id": st.id}, 201)
+    return ok({"id": str(st.id)}, 201)
 
 
-@bp.get("/stocktakes/<int:stocktake_id>")
-def get_stocktake(stocktake_id: int):
+@bp.get("/stocktakes/<uuid:stocktake_id>")
+def get_stocktake(stocktake_id: UUID):
     s = get_session()
     st = s.get(Stocktake, stocktake_id)
     if not st:
@@ -117,7 +119,7 @@ def get_stocktake(stocktake_id: int):
         line_data.append(
             {
                 "id": line.id,
-                "item_id": item.id,
+                "item_id": str(item.id),
                 "sku": item.sku,
                 "name": item.name,
                 "unit": item.unit,
@@ -132,7 +134,7 @@ def get_stocktake(stocktake_id: int):
 
     return ok(
         {
-            "id": st.id,
+            "id": str(st.id),
             "title": st.title,
             "started_at": st.started_at.isoformat() if st.started_at else None,
             "completed_at": st.completed_at.isoformat() if st.completed_at else None,
@@ -160,8 +162,8 @@ def update_stocktake_line(line_id: int):
     return ok({"status": "ok"})
 
 
-@bp.post("/stocktakes/<int:stocktake_id>/confirm")
-def confirm_stocktake(stocktake_id: int):
+@bp.post("/stocktakes/<uuid:stocktake_id>/confirm")
+def confirm_stocktake(stocktake_id: UUID):
     """Apply counted quantities to stocks."""
     s = get_session()
     st = s.get(Stocktake, stocktake_id)

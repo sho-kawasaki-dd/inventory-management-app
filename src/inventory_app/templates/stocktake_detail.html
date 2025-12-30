@@ -26,6 +26,6 @@
 {% block scripts %}
 <script src="/static/stocktake.js"></script>
 <script>
-  window.StocktakePage.init({{ stocktake_id }});
+  window.StocktakePage.init('{{ stocktake_id }}');
 </script>
 {% endblock %}

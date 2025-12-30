@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,7 +14,7 @@ class ItemCreate(BaseModel):
 class ItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     sku: str | None
     name: str
     unit: str

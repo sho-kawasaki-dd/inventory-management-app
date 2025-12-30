@@ -1,11 +1,13 @@
 window.InventoryApp = (() => {
+  const API_BASE = window.API_CONFIG.api_base;
+
   async function api(url, opts = {}) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
     return fetch(url, Object.assign({}, opts, { headers }));
   }
 
   async function loadItems() {
-    const res = await api('/api/items');
+    const res = await api(`${API_BASE}/items`);
     const items = await res.json();
     const tbody = document.querySelector('#items-table tbody');
     if (!tbody) return;
@@ -18,7 +20,7 @@ window.InventoryApp = (() => {
   }
 
   async function loadStocks() {
-    const res = await api('/api/stocks');
+    const res = await api(`${API_BASE}/stocks`);
     const rows = await res.json();
     const tbody = document.querySelector('#stocks-table tbody');
     if (!tbody) return;
@@ -39,7 +41,7 @@ window.InventoryApp = (() => {
 
   // Stocktake list includes confirm button + diff_count
   async function loadStocktakes() {
-    const res = await api('/api/stocktakes');
+    const res = await api(`${API_BASE}/stocktakes`);
     const rows = await res.json();
     const tbody = document.querySelector('#stocktakes-table tbody');
     if (!tbody) return;
@@ -64,7 +66,7 @@ window.InventoryApp = (() => {
       btn.disabled = !!st.completed_at;
       btn.addEventListener('click', async () => {
         if (!confirm(`Confirm stocktake #${st.id}? This applies counted quantities. Diffs: ${st.diff_count}`)) return;
-        await api(`/api/stocktakes/${st.id}/confirm`, { method: 'POST' });
+        await api(`${API_BASE}/stocktakes/${st.id}/confirm`, { method: 'POST' });
         await loadStocktakes();
       });
       td.appendChild(btn);

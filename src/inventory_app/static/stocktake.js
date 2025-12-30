@@ -1,4 +1,6 @@
 window.StocktakePage = (() => {
+  const API_BASE = window.API_CONFIG.api_base;
+
   function shelfKey(s) {
     // natural-ish order by splitting into alpha+numeric chunks
     const str = (s || '').trim();
@@ -9,7 +11,7 @@ window.StocktakePage = (() => {
   }
 
   async function load(stocktakeId) {
-    const res = await window.InventoryApp.api(`/api/stocktakes/${stocktakeId}`);
+    const res = await window.InventoryApp.api(`${API_BASE}/stocktakes/${stocktakeId}`);
     const data = await res.json();
 
     document.getElementById('meta').textContent = `Lines: ${data.lines_count}, Diffs: ${data.diff_count}`;
@@ -51,7 +53,7 @@ window.StocktakePage = (() => {
         const lineId = e.target.getAttribute('data-line-id');
         const v = e.target.value;
         const payload = { counted_quantity: v === '' ? null : Number(v) };
-        await window.InventoryApp.api(`/api/stocktakes/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+        await window.InventoryApp.api(`${API_BASE}/stocktakes/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(payload) });
         // refresh meta/diff highlighting
         await load(stocktakeId);
       });
@@ -61,13 +63,13 @@ window.StocktakePage = (() => {
       el.addEventListener('change', async (e) => {
         const lineId = e.target.getAttribute('data-line-id');
         const payload = { note: e.target.value };
-        await window.InventoryApp.api(`/api/stocktakes/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+        await window.InventoryApp.api(`${API_BASE}/stocktakes/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(payload) });
       });
     });
 
     document.getElementById('confirm-btn').onclick = async () => {
       if (!confirm(`Confirm stocktake #${stocktakeId}? This applies counted quantities. Diffs: ${data.diff_count}`)) return;
-      await window.InventoryApp.api(`/api/stocktakes/${stocktakeId}/confirm`, { method: 'POST' });
+      await window.InventoryApp.api(`${API_BASE}/stocktakes/${stocktakeId}/confirm`, { method: 'POST' });
       await load(stocktakeId);
     };
   }
