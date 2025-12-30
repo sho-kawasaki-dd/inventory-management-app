@@ -50,5 +50,5 @@ def get_item(item_id: UUID):
     s = get_session()
     item = s.get(Item, item_id)
     if not item:
-        return error("Item not found", 404)
+        return error("商品が見つかりません", 404)
     return ok(ItemOut.from_orm(item).model_dump())

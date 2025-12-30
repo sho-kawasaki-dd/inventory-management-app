@@ -14,7 +14,7 @@ window.StocktakePage = (() => {
     const res = await window.InventoryApp.api(`${API_BASE}/stocktakes/${stocktakeId}`);
     const data = await res.json();
 
-    document.getElementById('meta').textContent = `Lines: ${data.lines_count}, Diffs: ${data.diff_count}`;
+    document.getElementById('meta').textContent = `行数: ${data.lines_count}, 差異数: ${data.diff_count}`;
 
     const tbody = document.querySelector('#stocktake-lines-table tbody');
     tbody.innerHTML = '';
@@ -54,13 +54,13 @@ window.StocktakePage = (() => {
         const v = e.target.value;
         // Don't allow empty value - require a number
         if (v === '' || v === null) {
-          alert('Counted quantity is required');
+          alert('カウント数量は必須です');
           await load(stocktakeId);
           return;
         }
         const numValue = Number(v);
         if (numValue < 0) {
-          alert('Counted quantity must be non-negative');
+          alert('カウント数量は0以上である必要があります');
           await load(stocktakeId);
           return;
         }
@@ -80,7 +80,7 @@ window.StocktakePage = (() => {
     });
 
     document.getElementById('confirm-btn').onclick = async () => {
-      if (!confirm(`Confirm stocktake #${stocktakeId}? This applies counted quantities. Diffs: ${data.diff_count}`)) return;
+      if (!confirm(`棚卸 #${stocktakeId} を確定しますか？これによりカウント数量が適用されます。差異数: ${data.diff_count}`)) return;
       await window.InventoryApp.api(`${API_BASE}/stocktakes/${stocktakeId}/confirm`, { method: 'POST' });
       await load(stocktakeId);
     };

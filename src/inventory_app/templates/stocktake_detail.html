@@ -1,23 +1,23 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Stocktake #{{ stocktake_id }}</h1>
+<h1>棚卸 #{{ stocktake_id }}</h1>
 <p>
-  <a class="btn" href="/stocktakes">Back</a>
-  <button class="btn danger" id="confirm-btn" type="button">Confirm (apply counted quantities)</button>
+  <a class="btn" href="/stocktakes">戻る</a>
+  <button class="btn danger" id="confirm-btn" type="button">確定（カウント数量を適用）</button>
   <span class="muted" id="meta"></span>
 </p>
 
 <table id="stocktake-lines-table">
   <thead>
     <tr>
-      <th data-sort="shelf">Shelf</th>
-      <th>Item</th>
+      <th data-sort="shelf">棚</th>
+      <th>商品名</th>
       <th>SKU</th>
-      <th>Expected</th>
-      <th>Counted</th>
-      <th>Unit</th>
-      <th>Shelf note</th>
-      <th>Note</th>
+      <th>期待値</th>
+      <th>カウント</th>
+      <th>単位</th>
+      <th>棚備考</th>
+      <th>備考</th>
     </tr>
   </thead>
   <tbody></tbody>

@@ -3,9 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory</title>
+    <title>在庫管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+      body { font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", system-ui, sans-serif; margin: 16px; }
       nav a { margin-right: 12px; }
       table { border-collapse: collapse; width: 100%; }
       th, td { border: 1px solid #ddd; padding: 8px; }
@@ -21,10 +24,10 @@
   </head>
   <body>
     <nav>
-      <a href="/stocks">Stocks</a>
-      <a href="/items">Items</a>
-      <a href="/stocktakes">Stocktakes</a>
-      <span class="muted">(scaffold)</span>
+      <a href="/stocks">在庫</a>
+      <a href="/items">商品</a>
+      <a href="/stocktakes">棚卸</a>
+      <span class="muted">(開発中)</span>
     </nav>
     <hr />
     {% block content %}{% endblock %}

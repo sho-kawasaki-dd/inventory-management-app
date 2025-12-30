@@ -49,7 +49,7 @@ window.InventoryApp = (() => {
 
     for (const st of rows) {
       const tr = document.createElement('tr');
-      const status = st.completed_at ? 'Completed' : 'Open';
+      const status = st.completed_at ? '完了' : '進行中';
       tr.innerHTML = `
         <td>${st.id}</td>
         <td><a href="/stocktakes/${st.id}">${st.title}</a></td>
@@ -62,10 +62,10 @@ window.InventoryApp = (() => {
       const td = tr.querySelector('td:last-child');
       const btn = document.createElement('button');
       btn.className = 'btn danger';
-      btn.textContent = 'Confirm';
+      btn.textContent = '確定';
       btn.disabled = !!st.completed_at;
       btn.addEventListener('click', async () => {
-        if (!confirm(`Confirm stocktake #${st.id}? This applies counted quantities. Diffs: ${st.diff_count}`)) return;
+        if (!confirm(`棚卸 #${st.id} を確定しますか？これによりカウント数量が適用されます。差異数: ${st.diff_count}`)) return;
         await api(`${API_BASE}/stocktakes/${st.id}/confirm`, { method: 'POST' });
         await loadStocktakes();
       });

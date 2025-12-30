@@ -1,27 +1,27 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Items</h1>
+<h1>商品</h1>
 <form id="new-item-form">
-  <input type="text" name="sku" placeholder="SKU (optional)" />
-  <input type="text" name="name" placeholder="Name" required />
-  <input type="text" name="unit" placeholder="Unit" value="pcs" />
-  <input type="text" name="category" placeholder="種目 (optional)" />
-  <input type="text" name="usage" placeholder="用途 (optional)" />
-  <input type="text" name="manufacturer" placeholder="メーカー (optional)" />
-  <button class="btn primary" type="submit">Add</button>
+  <input type="text" name="sku" placeholder="SKU（任意）" />
+  <input type="text" name="name" placeholder="名前" required />
+  <input type="text" name="unit" placeholder="単位" value="個" />
+  <input type="text" name="category" placeholder="種目（任意）" />
+  <input type="text" name="usage" placeholder="用途（任意）" />
+  <input type="text" name="manufacturer" placeholder="メーカー（任意）" />
+  <button class="btn primary" type="submit">追加</button>
 </form>
 
-<h2>List</h2>
+<h2>一覧</h2>
 <table id="items-table">
   <thead>
     <tr>
       <th>ID</th>
       <th>SKU</th>
-      <th>Name</th>
+      <th>名前</th>
       <th>種目</th>
       <th>用途</th>
       <th>メーカー</th>
-      <th>Unit</th>
+      <th>単位</th>
     </tr>
   </thead>
   <tbody></tbody>

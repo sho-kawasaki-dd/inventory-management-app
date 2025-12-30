@@ -97,7 +97,7 @@ def get_stocktake(stocktake_id: UUID):
     s = get_session()
     st = s.get(Stocktake, stocktake_id)
     if not st:
-        return error("Stocktake not found", 404)
+        return error("棚卸が見つかりません", 404)
 
     lines = s.execute(
         select(StocktakeLine, Item)
@@ -151,20 +151,20 @@ def update_stocktake_line(line_id: int):
     s = get_session()
     line = s.get(StocktakeLine, line_id)
     if not line:
-        return error("Line not found", 404)
+        return error("行が見つかりません", 404)
 
     payload = request.get_json(force=True)
     
     # Validate counted_quantity if provided
     if "counted_quantity" in payload:
         if payload["counted_quantity"] is None:
-            return error("Counted quantity cannot be null", 400)
+            return error("カウント数量はnullにできません", 400)
         try:
             qty = float(payload["counted_quantity"])
             if qty < 0:
-                return error("Counted quantity must be non-negative", 400)
+                return error("カウント数量は0以上である必要があります", 400)
         except (ValueError, TypeError):
-            return error("Counted quantity must be a valid number", 400)
+            return error("カウント数量は有効な数値である必要があります", 400)
     
     for field in ["counted_quantity", "note"]:
         if field in payload:
@@ -180,7 +180,7 @@ def confirm_stocktake(stocktake_id: UUID):
     s = get_session()
     st = s.get(Stocktake, stocktake_id)
     if not st:
-        return error("Stocktake not found", 404)
+        return error("棚卸が見つかりません", 404)
 
     lines = s.execute(
         select(StocktakeLine).where(StocktakeLine.stocktake_id == stocktake_id)
@@ -189,7 +189,7 @@ def confirm_stocktake(stocktake_id: UUID):
     # Validate and apply counted quantities using transaction-based approach
     for line in lines:
         if line.counted_quantity < 0:
-            return error("Counted quantities must be non-negative", 400)
+            return error("カウント数量は0以上である必要があります", 400)
         
         # Get current stock quantity (or treat as 0 if no stock record)
         stock = s.execute(select(Stock).where(Stock.item_id == line.item_id)).scalar_one_or_none()

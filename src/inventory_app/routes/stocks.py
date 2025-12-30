@@ -40,13 +40,13 @@ def update_stock(stock_id: int):
     s = get_session()
     st = s.get(Stock, stock_id)
     if not st:
-        return error("Stock not found", 404)
+        return error("在庫が見つかりません", 404)
 
     payload = request.get_json(force=True)
     
     # Disallow direct modification of quantity
     if "quantity" in payload:
-        return error("Direct modification of quantity is not allowed. Use transaction endpoints instead.", 400)
+        return error("数量の直接変更は許可されていません。代わりに取引エンドポイントを使用してください。", 400)
     
     # Allow only metadata updates
     for field in ["shelf_location", "shelf_location_note"]:
