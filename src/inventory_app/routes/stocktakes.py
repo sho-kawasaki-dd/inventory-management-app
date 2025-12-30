@@ -185,14 +185,11 @@ def confirm_stocktake(stocktake_id: UUID):
         select(StocktakeLine).where(StocktakeLine.stocktake_id == stocktake_id)
     ).scalars().all()
 
-    # Validate all counted_quantity values are non-negative and not null
+    # Validate and apply counted quantities
     for line in lines:
-        if line.counted_quantity is None:
-            return error("All lines must have counted_quantity set", 400)
         if line.counted_quantity < 0:
             return error("Counted quantities must be non-negative", 400)
-
-    for line in lines:
+        
         stock = s.execute(select(Stock).where(Stock.item_id == line.item_id)).scalar_one_or_none()
         if not stock:
             stock = Stock(item_id=line.item_id, quantity=line.counted_quantity)
