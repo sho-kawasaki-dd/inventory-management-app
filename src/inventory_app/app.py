@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask
 
-from inventory_app.db import init_db
+from inventory_app.db import SessionLocal, init_db
 from inventory_app.routes.items import bp as items_bp
 from inventory_app.routes.stocks import bp as stocks_bp
 from inventory_app.routes.stocktakes import bp as stocktakes_bp
@@ -22,6 +22,9 @@ def create_app() -> Flask:
     app.config["TEMPLATES_AUTO_RELOAD"] = os.getenv("TEMPLATES_AUTO_RELOAD", "0") == "1"
 
     init_db()
+
+    # Ensure SQLAlchemy sessions are cleaned up after each request
+    app.teardown_appcontext(lambda exc: SessionLocal.remove())
 
     app.register_blueprint(ui_bp)
 
