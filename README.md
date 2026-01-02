@@ -33,7 +33,8 @@ Edit `DATABASE_URL` as needed.
 Example (local):
 
 ```bash
-createdb inventory_app
+# デフォルトのPostgreSQLユーザーがpostgresの場合
+createdb -U postgres inventory_app
 ```
 
 ### 4) Run migrations (Alembic)

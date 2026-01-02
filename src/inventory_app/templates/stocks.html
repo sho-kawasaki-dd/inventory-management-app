@@ -1,19 +1,78 @@
 {% extends "layout.html" %}
 {% block content %}
 <h1>在庫</h1>
-<table id="stocks-table">
-  <thead>
-    <tr>
-      <th>商品名</th>
-      <th>SKU</th>
-      <th>数量</th>
-      <th>単位</th>
-      <th>棚</th>
-      <th>備考</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
+<div class="flex">
+  <div style="flex: 1 1 55%">
+    <table id="stocks-table">
+      <thead>
+        <tr>
+          <th>備品名</th>
+          <th>SKU</th>
+          <th>数量</th>
+          <th>単位</th>
+          <th>棚</th>
+          <th>備考</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div style="flex: 1 1 45%">
+    <div id="transaction-panel" class="card hidden">
+      <h2 style="margin-top: 0">入出庫・調整</h2>
+      <p id="selected-item-title" class="muted" style="margin: 0"></p>
+      <p class="muted" style="margin: 4px 0 12px 0">
+        SKU: <span id="selected-item-sku">-</span> / 現在庫: <span id="selected-item-qty">-</span>
+      </p>
+
+      <form id="transaction-form" style="margin-bottom: 12px">
+        <div style="margin-bottom: 8px">
+          <label class="muted-label">種別</label><br />
+          <select id="transaction-type">
+            <option value="receipt">入庫 (+)</option>
+            <option value="issue">出庫 (-)</option>
+            <option value="adjust">調整 (±)</option>
+          </select>
+        </div>
+
+        <div style="margin-bottom: 8px">
+          <label class="muted-label">数量 (調整数は±で入力)</label><br />
+          <input type="number" step="1" id="transaction-qty" required />
+        </div>
+
+        <div style="margin-bottom: 8px">
+          <label class="muted-label">理由 (任意)</label><br />
+          <input type="text" id="transaction-reason" placeholder="例: 購入, 配布, 在庫差異" />
+        </div>
+
+        <div style="display: flex; gap: 8px">
+          <button type="submit" class="btn primary">登録</button>
+          <button type="button" id="transaction-cancel" class="btn">キャンセル</button>
+        </div>
+      </form>
+
+      <div id="transaction-message" class="muted" style="min-height: 20px"></div>
+
+      <h3 style="margin-bottom: 4px">最近の取引</h3>
+      <table id="transaction-history">
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>種別</th>
+            <th>数量</th>
+            <th>理由</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="transaction-placeholder" class="card">
+      <p class="muted" style="margin: 0">左の在庫表から備品を選択すると入出庫や調整を登録できます。</p>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>

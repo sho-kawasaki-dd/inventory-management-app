@@ -20,13 +20,19 @@
       .btn.primary { border-color: #36c; }
       .btn.danger { border-color: #c33; }
       input[type="text"], input[type="number"] { padding: 6px; }
+      tr.selected { background: #eef4ff; }
+      .card { border: 1px solid #ddd; padding: 12px; border-radius: 6px; background: #fafafa; }
+      .flex { display: flex; gap: 16px; align-items: flex-start; }
+      .hidden { display: none; }
+      .muted-label { font-size: 13px; color: #666; }
     </style>
   </head>
   <body>
     <nav>
-      <a href="/stocks">在庫</a>
-      <a href="/items">商品</a>
+      <a href="/stocks">在庫表</a>
+      <a href="/item-transactions">入出庫履歴一覧</a>
       <a href="/stocktakes">棚卸</a>
+      <a href="/items">備品マスタ</a>
       <span class="muted">(開発中)</span>
     </nav>
     <hr />
