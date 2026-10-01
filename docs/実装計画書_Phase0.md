@@ -129,8 +129,8 @@ def probe(value):
     return value
 ```
 
-- [ ] リポジトリの公開設定・GitHub プラン・管理権限を確認し、branch protection で必須チェックを設定できるか確認する。利用不可の場合は代替運用と完了条件を利用者と合意し、本計画書へ反映する(未合意のまま完了扱いにしない)
-- [ ] ブランチを push して PR を作成し、Windows/Linux 両方の CI が成功する(Linux の OS パッケージは必要に応じて調整)
+- [ ] リポジトリの公開設定・GitHub プラン・管理権限を確認し、branch protection で必須チェックを設定できるか確認する。利用不可の場合は代替運用と完了条件を利用者と合意し、本計画書へ反映する(未合意のまま完了扱いにしない)。公開設定は public、`main` の branch protection は未設定。プラン・管理権限は未確認
+- [ ] ブランチを push して PR を作成し、Windows/Linux 両方の CI が成功する(Linux の OS パッケージは必要に応じて調整)。`feature/phase0-foundation` は push 済み。PR 作成と CI 成功確認は GitHub 認証後
 - [ ] マージ後、GitHub の branch protection で `test (windows-latest)`・`test (ubuntu-latest)` を必須チェックに設定する(手動作業。利用不可の場合は事前に合意した代替運用を適用する)
 - [ ] 本計画書のチェックボックスをすべて埋める
 
