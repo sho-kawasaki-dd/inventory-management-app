@@ -62,11 +62,10 @@
   - [ ] pyright: pythonVersion = 3.13、include = `src`・`tests`、typeCheckingMode = `standard`、strict = `src/inventory_manager_mini/core`・`src/inventory_manager_mini/db`
   - [ ] pytest: testpaths = `tests`、`qt_api = "pyside6"`、addopts = `-ra --strict-markers --strict-config`
   - [ ] coverage: source = `inventory_manager_mini`(行カバレッジのみ)
-- [ ] `uv sync` で `uv.lock` を生成する(コミット対象)
 - [ ] `.gitignore` を作成する(`.venv/`、`__pycache__/`、各種キャッシュ、`.coverage`、`htmlcov/`、`build/`、`dist/`、`*.db*`、`.idea/`、`.vscode/`)。`uv.lock` を除外しないよう `*.lock` は指定しない
 - [ ] `.gitattributes` を作成する(`* text=auto eol=lf`、`*.png`・`*.ico`・`*.db` は binary)
 
-### B. 空パッケージ(A に依存)
+### B. 空パッケージ・依存同期(A に依存)
 
 - [ ] `src/inventory_manager_mini/__init__.py`: `__version__` を `importlib.metadata` から取得して定義する
 - [ ] `src/inventory_manager_mini/__main__.py`: `app.main()` を呼び、戻り値で終了する
@@ -74,6 +73,7 @@
 - [ ] `src/inventory_manager_mini/config.py`: `APP_NAME = "inventory-manager-mini"`
 - [ ] `core/__init__.py`・`db/__init__.py`・`ui/__init__.py` を空で作成する(strict/standard の適用先を実在させる)
 - [ ] `tests/__init__.py`・`tests/conftest.py`(共通フィクスチャの置き場。現時点は空)を作成する
+- [ ] 上記ファイルの作成後に `uv sync` を実行し、自プロジェクトの editable インストールと依存同期を行って `uv.lock` を生成する(コミット対象)。ソースが存在しない段階では実行しない
 
 ### C. テスト(B に依存)
 
@@ -84,6 +84,8 @@
 - [ ] `tests/test_qt_smoke.py`
   - [ ] `qtbot` で `QWidget` を生成できる
   - [ ] `PySide6.QtCharts`(`QChartView`)と `PySide6.QtPrintSupport`(`QPrinter`)を import できる
+  - [ ] `QApplication` 下でデータ系列を持つ最小の `QChart`・`QChartView` を生成し、描画した結果を `tmp_path` に画像として保存できる(画像が空でなく、チャートが描画されていることを確認する)
+  - [ ] `QPrinter` を PDF 出力に設定し、`QPainter` で最小の描画を行って `tmp_path` に空でない PDF を生成できる(実プリンタは使用しない。実用紙での確認は Phase 7)
 - [ ] `tests/test_dependency_rules.py`: src を AST 解析して次の規則を検査する(相対 import は絶対モジュール名へ解決する)
   - [ ] 規則 1: `core/`・`db/` は PySide6 を import しない
   - [ ] 規則 2: `db/` から import してよい `core` は `core.models`・`core.errors` のみ(`core.services`・`core.reports`・`ui` は禁止)
@@ -102,22 +104,34 @@
   - [ ] uv の導入は `astral-sh/setup-uv`(キャッシュ有効)。各 Action は実装時に最新の安定メジャー版を確認して固定する
   - [ ] Linux のみ Qt 用 OS パッケージを apt で導入し、`QT_QPA_PLATFORM=offscreen` を設定する
     - 候補: `libegl1`、`libgl1`、`libxkbcommon0`、`libdbus-1-3`、`libfontconfig1`、`libxcb-cursor0`
-    - QtCharts・QtPrintSupport の import が通る最小構成を初回 CI の結果で確定する
+    - Qt スモークテストの import・チャート描画・PDF 出力がすべて通る最小構成を初回 CI の結果で確定する
   - [ ] ステップ: `uv sync --locked` → `uv run ruff check` → `uv run ruff format --check` → `uv run pyright` → `uv run pytest --cov`
 
 ### E. README(A・B と並行可)
 
 - [ ] 概要・対象 OS を記載する
 - [ ] `uv sync` と 5 コマンド、アプリ起動のコマンド一覧を記載する
-- [ ] Linux の起動手順(`uv sync` → `uv run python -m inventory_manager_mini`、Qt 用 OS パッケージ、`QT_QPA_PLATFORM=offscreen`)を記載する
+- [ ] Linux の通常起動手順(`uv sync` → `uv run python -m inventory_manager_mini`、Qt 用 OS パッケージ)を記載する。通常起動には `QT_QPA_PLATFORM=offscreen` を設定しない
+- [ ] Linux のヘッドレステスト手順を通常起動と分離し、`QT_QPA_PLATFORM=offscreen uv run pytest --cov` を記載する
+- [ ] Phase 0 の起動コマンドは終了コード 0 で正常終了するだけで画面を表示せず、画面の起動は Phase 2 で実装する旨を記載する
 - [ ] ディレクトリ構成、開発ルール(ブランチ・Conventional Commits)、開発計画書へのリンクを記載する
 
 ### F. 検証・完了処理(A〜E に依存)
 
 - [ ] ローカル(Windows)で 5 コマンドがすべて成功する
-- [ ] `core/` に型注釈のない関数を一時的に置き、pyright strict で失敗することを確認して戻す
+- [ ] 下記の未注釈・既定値なしの引数を持つ関数を検証専用ファイルとして `core/`・`db/` にそれぞれ一時配置し、`uv run pyright` が非ゼロ終了し、`reportUnknownParameterType`・`reportMissingParameterType` を報告することを確認する。戻り値だけが未注釈の関数は推論で通るため検証例にしない
+- [ ] 同じ検証例を `ui/` に一時配置し、standard では上記の診断が出ず `uv run pyright` が成功することを確認する。各確認後に検証専用ファイルを削除し、最終状態で型検査が成功することを確認する
+
+検証例:
+
+```python
+def probe(value):
+    return value
+```
+
+- [ ] リポジトリの公開設定・GitHub プラン・管理権限を確認し、branch protection で必須チェックを設定できるか確認する。利用不可の場合は代替運用と完了条件を利用者と合意し、本計画書へ反映する(未合意のまま完了扱いにしない)
 - [ ] ブランチを push して PR を作成し、Windows/Linux 両方の CI が成功する(Linux の OS パッケージは必要に応じて調整)
-- [ ] マージ後、GitHub の branch protection で `test (windows-latest)`・`test (ubuntu-latest)` を必須チェックに設定する(手動作業)
+- [ ] マージ後、GitHub の branch protection で `test (windows-latest)`・`test (ubuntu-latest)` を必須チェックに設定する(手動作業。利用不可の場合は事前に合意した代替運用を適用する)
 - [ ] 本計画書のチェックボックスをすべて埋める
 
 ## 4. 成果物一覧
@@ -134,4 +148,4 @@
 
 - 上記タスクのチェックボックスがすべて埋まっている
 - ローカル(Windows)と CI(Windows/Linux)で 5 コマンドがすべて成功する
-- `main` ブランチで CI が必須チェックとして設定されている
+- `main` ブランチで CI が必須チェックとして設定されている。設定機能を利用できない場合は、事前に利用者と合意して本計画書に反映した代替運用・完了条件を満たしている
