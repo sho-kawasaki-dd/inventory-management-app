@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "inventory-manager-mini"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "PySide6",
+    "platformdirs",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-qt",
+    "pytest-cov",
+    "ruff",
+    "pyright",
+    "pyinstaller",
+    "tzdata",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inventory_manager_mini"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+strict = [
+    "src/inventory_manager_mini/core",
+    "src/inventory_manager_mini/db",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+addopts = "-ra --strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["inventory_manager_mini"]
+branch = false

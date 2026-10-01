@@ -52,18 +52,18 @@
 
 ### A. プロジェクト設定
 
-- [ ] `.python-version` に `3.13` を記載する
-- [ ] `pyproject.toml` を作成する
-  - [ ] `[project]`: name = `inventory-manager-mini`、version = `0.1.0`、`requires-python = ">=3.13"`、license 未設定
-  - [ ] 依存: PySide6、platformdirs
-  - [ ] ビルドバックエンド: hatchling。wheel の対象は `src/inventory_manager_mini`
-  - [ ] `[dependency-groups] dev`: pytest、pytest-qt、pytest-cov、ruff、pyright、pyinstaller、tzdata
-  - [ ] ruff: line-length = 100、target = py313、select = `E,W,F,I,UP,B,SIM`
-  - [ ] pyright: pythonVersion = 3.13、include = `src`・`tests`、typeCheckingMode = `standard`、strict = `src/inventory_manager_mini/core`・`src/inventory_manager_mini/db`
-  - [ ] pytest: testpaths = `tests`、`qt_api = "pyside6"`、addopts = `-ra --strict-markers --strict-config`
-  - [ ] coverage: source = `inventory_manager_mini`(行カバレッジのみ)
-- [ ] `.gitignore` を作成する(`.venv/`、`__pycache__/`、各種キャッシュ、`.coverage`、`htmlcov/`、`build/`、`dist/`、`*.db*`、`.idea/`、`.vscode/`)。`uv.lock` を除外しないよう `*.lock` は指定しない
-- [ ] `.gitattributes` を作成する(`* text=auto eol=lf`、`*.png`・`*.ico`・`*.db` は binary)
+- [x] `.python-version` に `3.13` を記載する
+- [x] `pyproject.toml` を作成する
+  - [x] `[project]`: name = `inventory-manager-mini`、version = `0.1.0`、`requires-python = ">=3.13"`、license 未設定
+  - [x] 依存: PySide6、platformdirs
+  - [x] ビルドバックエンド: hatchling。wheel の対象は `src/inventory_manager_mini`
+  - [x] `[dependency-groups] dev`: pytest、pytest-qt、pytest-cov、ruff、pyright、pyinstaller、tzdata
+  - [x] ruff: line-length = 100、target = py313、select = `E,W,F,I,UP,B,SIM`
+  - [x] pyright: pythonVersion = 3.13、include = `src`・`tests`、typeCheckingMode = `standard`、strict = `src/inventory_manager_mini/core`・`src/inventory_manager_mini/db`
+  - [x] pytest: testpaths = `tests`、`qt_api = "pyside6"`、addopts = `-ra --strict-markers --strict-config`
+  - [x] coverage: source = `inventory_manager_mini`(行カバレッジのみ)
+- [x] `.gitignore` を作成する(`.venv/`、`__pycache__/`、各種キャッシュ、`.coverage`、`htmlcov/`、`build/`、`dist/`、`*.db*`、`.idea/`、`.vscode/`)。`uv.lock` を除外しないよう `*.lock` は指定しない
+- [x] `.gitattributes` を作成する(`* text=auto eol=lf`、`*.png`・`*.ico`・`*.db` は binary)
 
 ### B. 空パッケージ・依存同期(A に依存)
 
