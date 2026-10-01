@@ -97,15 +97,15 @@
 
 ### D. CI(A・B・C に依存)
 
-- [ ] `.github/workflows/ci.yml` を作成する
-  - [ ] トリガー: `push`(main)と `pull_request`
-  - [ ] `permissions: contents: read`、`concurrency` で同一ブランチの旧実行をキャンセルする
-  - [ ] matrix: `windows-latest`・`ubuntu-latest`、`fail-fast: false`、ジョブ名は `test (<os>)`
-  - [ ] uv の導入は `astral-sh/setup-uv`(キャッシュ有効)。各 Action は実装時に最新の安定メジャー版を確認して固定する
-  - [ ] Linux のみ Qt 用 OS パッケージを apt で導入し、`QT_QPA_PLATFORM=offscreen` を設定する
+- [x] `.github/workflows/ci.yml` を作成する
+  - [x] トリガー: `push`(main)と `pull_request`
+  - [x] `permissions: contents: read`、`concurrency` で同一ブランチの旧実行をキャンセルする
+  - [x] matrix: `windows-latest`・`ubuntu-latest`、`fail-fast: false`、ジョブ名は `test (<os>)`
+  - [x] uv の導入は `astral-sh/setup-uv`(キャッシュ有効)。各 Action は実装時に最新の安定メジャー版を確認して固定する
+  - [x] Linux のみ Qt 用 OS パッケージを apt で導入し、`QT_QPA_PLATFORM=offscreen` を設定する
     - 候補: `libegl1`、`libgl1`、`libxkbcommon0`、`libdbus-1-3`、`libfontconfig1`、`libxcb-cursor0`
     - Qt スモークテストの import・チャート描画・PDF 出力がすべて通る最小構成を初回 CI の結果で確定する
-  - [ ] ステップ: `uv sync --locked` → `uv run ruff check` → `uv run ruff format --check` → `uv run pyright` → `uv run pytest --cov`
+  - [x] ステップ: `uv sync --locked` → `uv run ruff check` → `uv run ruff format --check` → `uv run pyright` → `uv run pytest --cov`
 
 ### E. README(A・B と並行可)
 
