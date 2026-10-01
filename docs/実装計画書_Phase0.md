@@ -109,12 +109,12 @@
 
 ### E. README(A・B と並行可)
 
-- [ ] 概要・対象 OS を記載する
-- [ ] `uv sync` と 5 コマンド、アプリ起動のコマンド一覧を記載する
-- [ ] Linux の通常起動手順(`uv sync` → `uv run python -m inventory_manager_mini`、Qt 用 OS パッケージ)を記載する。通常起動には `QT_QPA_PLATFORM=offscreen` を設定しない
-- [ ] Linux のヘッドレステスト手順を通常起動と分離し、`QT_QPA_PLATFORM=offscreen uv run pytest --cov` を記載する
-- [ ] Phase 0 の起動コマンドは終了コード 0 で正常終了するだけで画面を表示せず、画面の起動は Phase 2 で実装する旨を記載する
-- [ ] ディレクトリ構成、開発ルール(ブランチ・Conventional Commits)、開発計画書へのリンクを記載する
+- [x] 概要・対象 OS を記載する
+- [x] `uv sync` と 5 コマンド、アプリ起動のコマンド一覧を記載する
+- [x] Linux の通常起動手順(`uv sync` → `uv run python -m inventory_manager_mini`、Qt 用 OS パッケージ)を記載する。通常起動には `QT_QPA_PLATFORM=offscreen` を設定しない
+- [x] Linux のヘッドレステスト手順を通常起動と分離し、`QT_QPA_PLATFORM=offscreen uv run pytest --cov` を記載する
+- [x] Phase 0 の起動コマンドは終了コード 0 で正常終了するだけで画面を表示せず、画面の起動は Phase 2 で実装する旨を記載する
+- [x] ディレクトリ構成、開発ルール(ブランチ・Conventional Commits)、開発計画書へのリンクを記載する
 
 ### F. 検証・完了処理(A〜E に依存)
 
