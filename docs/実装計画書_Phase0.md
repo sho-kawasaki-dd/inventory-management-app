@@ -77,23 +77,23 @@
 
 ### C. テスト(B に依存)
 
-- [ ] `tests/test_smoke.py`
-  - [ ] パッケージを import でき、`__version__` が `pyproject.toml` の version と一致する
-  - [ ] `main()` が 0 を返す
-  - [ ] `python -m inventory_manager_mini` をサブプロセスで実行し、終了コード 0 になる
-- [ ] `tests/test_qt_smoke.py`
-  - [ ] `qtbot` で `QWidget` を生成できる
-  - [ ] `PySide6.QtCharts`(`QChartView`)と `PySide6.QtPrintSupport`(`QPrinter`)を import できる
-  - [ ] `QApplication` 下でデータ系列を持つ最小の `QChart`・`QChartView` を生成し、描画した結果を `tmp_path` に画像として保存できる(画像が空でなく、チャートが描画されていることを確認する)
-  - [ ] `QPrinter` を PDF 出力に設定し、`QPainter` で最小の描画を行って `tmp_path` に空でない PDF を生成できる(実プリンタは使用しない。実用紙での確認は Phase 7)
-- [ ] `tests/test_dependency_rules.py`: src を AST 解析して次の規則を検査する(相対 import は絶対モジュール名へ解決する)
-  - [ ] 規則 1: `core/`・`db/` は PySide6 を import しない
-  - [ ] 規則 2: `db/` から import してよい `core` は `core.models`・`core.errors` のみ(`core.services`・`core.reports`・`ui` は禁止)
-  - [ ] 規則 3: `core/models.py`・`core/errors.py` は `db`・`core.services`・`core.reports`・`ui` を import しない
-  - [ ] 規則 4: `core/` は `ui` を import しない
-  - [ ] 規則 5: `ui/` は `sqlite3`・`inventory_manager_mini.db` を import しない
-  - [ ] 規則 6: `core/timeutil.py` 以外で `datetime.now`・`utcnow`・`today`、`date.today`、文字列 `'localtime'` を使わない(`.py` と `.sql` が対象)
-- [ ] 規則ごとに自己検証テストを書く。`tmp_path` に違反コードを置き「違反を検出する」と「適合なら通る」の両方を確認する(空パッケージで検査が空振りしないようにするため)
+- [x] `tests/test_smoke.py`
+  - [x] パッケージを import でき、`__version__` が `pyproject.toml` の version と一致する
+  - [x] `main()` が 0 を返す
+  - [x] `python -m inventory_manager_mini` をサブプロセスで実行し、終了コード 0 になる
+- [x] `tests/test_qt_smoke.py`
+  - [x] `qtbot` で `QWidget` を生成できる
+  - [x] `PySide6.QtCharts`(`QChartView`)と `PySide6.QtPrintSupport`(`QPrinter`)を import できる
+  - [x] `QApplication` 下でデータ系列を持つ最小の `QChart`・`QChartView` を生成し、描画した結果を `tmp_path` に画像として保存できる(画像が空でなく、チャートが描画されていることを確認する)
+  - [x] `QPrinter` を PDF 出力に設定し、`QPainter` で最小の描画を行って `tmp_path` に空でない PDF を生成できる(実プリンタは使用しない。実用紙での確認は Phase 7)
+- [x] `tests/test_dependency_rules.py`: src を AST 解析して次の規則を検査する(相対 import は絶対モジュール名へ解決する)
+  - [x] 規則 1: `core/`・`db/` は PySide6 を import しない
+  - [x] 規則 2: `db/` から import してよい `core` は `core.models`・`core.errors` のみ(`core.services`・`core.reports`・`ui` は禁止)
+  - [x] 規則 3: `core/models.py`・`core/errors.py` は `db`・`core.services`・`core.reports`・`ui` を import しない
+  - [x] 規則 4: `core/` は `ui` を import しない
+  - [x] 規則 5: `ui/` は `sqlite3`・`inventory_manager_mini.db` を import しない
+  - [x] 規則 6: `core/timeutil.py` 以外で `datetime.now`・`utcnow`・`today`、`date.today`、文字列 `'localtime'` を使わない(`.py` と `.sql` が対象)
+- [x] 規則ごとに自己検証テストを書く。`tmp_path` に違反コードを置き「違反を検出する」と「適合なら通る」の両方を確認する(空パッケージで検査が空振りしないようにするため)
 
 ### D. CI(A・B・C に依存)
 
