@@ -67,13 +67,13 @@
 
 ### B. 空パッケージ・依存同期(A に依存)
 
-- [ ] `src/inventory_manager_mini/__init__.py`: `__version__` を `importlib.metadata` から取得して定義する
-- [ ] `src/inventory_manager_mini/__main__.py`: `app.main()` を呼び、戻り値で終了する
-- [ ] `src/inventory_manager_mini/app.py`: `main() -> int`(0 を返すスタブ)
-- [ ] `src/inventory_manager_mini/config.py`: `APP_NAME = "inventory-manager-mini"`
-- [ ] `core/__init__.py`・`db/__init__.py`・`ui/__init__.py` を空で作成する(strict/standard の適用先を実在させる)
-- [ ] `tests/__init__.py`・`tests/conftest.py`(共通フィクスチャの置き場。現時点は空)を作成する
-- [ ] 上記ファイルの作成後に `uv sync` を実行し、自プロジェクトの editable インストールと依存同期を行って `uv.lock` を生成する(コミット対象)。ソースが存在しない段階では実行しない
+- [x] `src/inventory_manager_mini/__init__.py`: `__version__` を `importlib.metadata` から取得して定義する
+- [x] `src/inventory_manager_mini/__main__.py`: `app.main()` を呼び、戻り値で終了する
+- [x] `src/inventory_manager_mini/app.py`: `main() -> int`(0 を返すスタブ)
+- [x] `src/inventory_manager_mini/config.py`: `APP_NAME = "inventory-manager-mini"`
+- [x] `core/__init__.py`・`db/__init__.py`・`ui/__init__.py` を空で作成する(strict/standard の適用先を実在させる)
+- [x] `tests/__init__.py`・`tests/conftest.py`(共通フィクスチャの置き場。現時点は空)を作成する
+- [x] 上記ファイルの作成後に `uv sync` を実行し、自プロジェクトの editable インストールと依存同期を行って `uv.lock` を生成する(コミット対象)。ソースが存在しない段階では実行しない
 
 ### C. テスト(B に依存)
 
