@@ -118,9 +118,9 @@
 
 ### F. 検証・完了処理(A〜E に依存)
 
-- [ ] ローカル(Windows)で 5 コマンドがすべて成功する
-- [ ] 下記の未注釈・既定値なしの引数を持つ関数を検証専用ファイルとして `core/`・`db/` にそれぞれ一時配置し、`uv run pyright` が非ゼロ終了し、`reportUnknownParameterType`・`reportMissingParameterType` を報告することを確認する。戻り値だけが未注釈の関数は推論で通るため検証例にしない
-- [ ] 同じ検証例を `ui/` に一時配置し、standard では上記の診断が出ず `uv run pyright` が成功することを確認する。各確認後に検証専用ファイルを削除し、最終状態で型検査が成功することを確認する
+- [x] ローカル(Windows)で 5 コマンドがすべて成功する
+- [x] 下記の未注釈・既定値なしの引数を持つ関数を検証専用ファイルとして `core/`・`db/` にそれぞれ一時配置し、`uv run pyright` が非ゼロ終了し、`reportUnknownParameterType`・`reportMissingParameterType` を報告することを確認する。戻り値だけが未注釈の関数は推論で通るため検証例にしない
+- [x] 同じ検証例を `ui/` に一時配置し、standard では上記の診断が出ず `uv run pyright` が成功することを確認する。各確認後に検証専用ファイルを削除し、最終状態で型検査が成功することを確認する
 
 検証例:
 
