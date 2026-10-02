@@ -118,9 +118,9 @@
 
 ### F. 検証・完了処理(A〜E に依存)
 
-- [ ] ローカル(Windows)で 5 コマンドがすべて成功する
-- [ ] 下記の未注釈・既定値なしの引数を持つ関数を検証専用ファイルとして `core/`・`db/` にそれぞれ一時配置し、`uv run pyright` が非ゼロ終了し、`reportUnknownParameterType`・`reportMissingParameterType` を報告することを確認する。戻り値だけが未注釈の関数は推論で通るため検証例にしない
-- [ ] 同じ検証例を `ui/` に一時配置し、standard では上記の診断が出ず `uv run pyright` が成功することを確認する。各確認後に検証専用ファイルを削除し、最終状態で型検査が成功することを確認する
+- [x] ローカル(Windows)で 5 コマンドがすべて成功する
+- [x] 下記の未注釈・既定値なしの引数を持つ関数を検証専用ファイルとして `core/`・`db/` にそれぞれ一時配置し、`uv run pyright` が非ゼロ終了し、`reportUnknownParameterType`・`reportMissingParameterType` を報告することを確認する。戻り値だけが未注釈の関数は推論で通るため検証例にしない
+- [x] 同じ検証例を `ui/` に一時配置し、standard では上記の診断が出ず `uv run pyright` が成功することを確認する。各確認後に検証専用ファイルを削除し、最終状態で型検査が成功することを確認する
 
 検証例:
 
@@ -129,8 +129,8 @@ def probe(value):
     return value
 ```
 
-- [ ] リポジトリの公開設定・GitHub プラン・管理権限を確認し、branch protection で必須チェックを設定できるか確認する。利用不可の場合は代替運用と完了条件を利用者と合意し、本計画書へ反映する(未合意のまま完了扱いにしない)
-- [ ] ブランチを push して PR を作成し、Windows/Linux 両方の CI が成功する(Linux の OS パッケージは必要に応じて調整)
+- [ ] リポジトリの公開設定・GitHub プラン・管理権限を確認し、branch protection で必須チェックを設定できるか確認する。利用不可の場合は代替運用と完了条件を利用者と合意し、本計画書へ反映する(未合意のまま完了扱いにしない)。公開設定は public、`main` の branch protection は未設定。プラン・管理権限は未確認
+- [ ] ブランチを push して PR を作成し、Windows/Linux 両方の CI が成功する(Linux の OS パッケージは必要に応じて調整)。`feature/phase0-foundation` は push 済み。PR 作成と CI 成功確認は GitHub 認証後
 - [ ] マージ後、GitHub の branch protection で `test (windows-latest)`・`test (ubuntu-latest)` を必須チェックに設定する(手動作業。利用不可の場合は事前に合意した代替運用を適用する)
 - [ ] 本計画書のチェックボックスをすべて埋める
 
