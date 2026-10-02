@@ -66,6 +66,9 @@
 
 ## 開発ルール
 - `main` は常にテスト成功状態を保ち、作業は `feature/<フェーズ>-<内容>` ブランチで行い PR でマージします。
+- `main` には GitHub のリポジトリルールがあり、直接 push は `GH013`(必須ステータスチェック `test (windows-latest)`・`test (ubuntu-latest)` 未達)で拒否されます。`main` へ push せず、feature ブランチを push して PR を作成し、CI 成功後にマージします。
+- `main` 上にコミットしてしまった場合は、`git switch -c <ブランチ名>` でブランチへ移した後、`git branch -f main origin/main` でローカル `main` を戻します。
+- CI のジョブ名(`test (<os>)`)を変更するときは、リポジトリルールの必須チェック名も同時に更新します。
 
 ## コマンド体系（uv）
 開発作業・テスト・静的検査はすべて `uv` 経由で実行します。
