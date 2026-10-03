@@ -27,6 +27,7 @@ uv run ruff check
 uv run ruff format --check
 uv run pyright
 uv run pytest --cov
+uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
 ```
 
 ## アプリの起動
@@ -56,6 +57,7 @@ GUI を表示できない環境でテストする場合は、通常起動とは�
 
 ```sh
 QT_QPA_PLATFORM=offscreen uv run pytest --cov
+uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
 ```
 
 ## ディレクトリ構成

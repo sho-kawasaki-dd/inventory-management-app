@@ -62,3 +62,6 @@ jobs:
 
       - name: Test
         run: uv run pytest --cov
+
+      - name: Check core and database coverage
+        run: uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
