@@ -143,7 +143,7 @@
   - [x] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
   - [x] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
   - [x] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
-- [ ] 2a の PR を作成し、CI 成功後にマージする
+- [x] 2a の PR を作成し、CI 成功後にマージする
 
 ### 2b. MainWindow・品目 CRUD(`feature/phase2-main-window`)
 
