@@ -202,7 +202,7 @@
 - [x] `.github/workflows/ci.yml` の `pytest --cov` の後に、カバレッジ閾値のステップを追加する
 - [x] README のコマンド一覧にカバレッジ閾値のコマンドを追記する
 - [x] ローカルで全コマンドが成功する
-- [ ] PR を作成し、Windows/Linux の CI 成功後にマージする
+- [x] PR を作成し、Windows/Linux の CI 成功後にマージする
 
 ### 1b. Repository・Service(`feature/phase1-services`。1a に依存)
 
