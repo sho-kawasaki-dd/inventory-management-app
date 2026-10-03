@@ -67,141 +67,141 @@
 
 #### A. 時刻ユーティリティ `core/timeutil.py`
 
-- [ ] 定数 `DB_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"` を定義する
-- [ ] `utc_now() -> datetime`: UTC の tz 付き現在時刻を返す。Service の既定 `clock` に使い、現在時刻の取得を集約する
-- [ ] `utc_now_str(now: datetime | None = None) -> str`: `now` は tz 付きのみ許可し(naive は `ValueError`)、UTC に変換して DB 形式で返す。`None` なら `utc_now()` を使う
-- [ ] `parse_utc(utc_str) -> datetime`: DB 形式を UTC の tz 付き `datetime` に変換する(形式不正は `ValueError`)
-- [ ] `to_local(utc_str, tz=None)`: tz 付きローカル `datetime` を返す。`tz=None` は OS のローカルタイムゾーン(`astimezone()`)
-- [ ] `format_local(utc_str, tz=None) -> str`: ローカルの `'YYYY-MM-DD HH:MM:SS'` を返す
-- [ ] `local_date(utc_str, tz=None) -> date`
-- [ ] `local_range_to_utc(start: date, end: date, tz=None) -> tuple[str, str]`: ローカル暦の `[start 00:00, end 00:00)` を UTC 文字列の組に変換する(`start >= end` は `ValueError`)
-  - [ ] `tz=None` は開始日・終了日から作った naive なローカル午前 0 時をそれぞれ UTC に変換する。現在時点の固定オフセットを使い回さず、各境界日の OS の DST 規則を適用する
-- [ ] `local_today(now=None, tz=None) -> date`: 現在年度の既定値の算出に使う
-- [ ] `local_timestamp_for_filename(now=None, tz=None) -> str`: `YYYYMMDD_HHMMSS`(ローカル時刻。バックアップのファイル名用)
-- [ ] `tests/test_timeutil.py`
-  - [ ] UTC ⇔ ローカルの往復(`ZoneInfo("Asia/Tokyo")`)
-  - [ ] 日付またぎ: UTC `2026-03-31 15:00:00` が JST `2026-04-01` になる
-  - [ ] サマータイム開始月・終了月の月境界(`America/New_York`、`Europe/London`)。開始・終了を含む月の区間長が 1 時間短い/長いことを確認する
-  - [ ] 月初・年度初の境界、`start >= end` の拒否、naive な `now` の拒否、形式不正な文字列の拒否
-  - [ ] `utc_now()` が UTC の tz 付き `datetime` を返し、`utc_now_str()` がその取得関数を利用する
-  - [ ] `tz=None` で OS ローカルの表示・期間境界が正しく変換されることを Windows/Linux で確認する
-  - [ ] Linux の隔離サブプロセスで `TZ` と `time.tzset()` を使い、`tz=None` でも DST 開始月・終了月の UTC 境界と区間長が正しいことを確認する。親プロセスのタイムゾーン設定は変更しない
+- [x] 定数 `DB_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"` を定義する
+- [x] `utc_now() -> datetime`: UTC の tz 付き現在時刻を返す。Service の既定 `clock` に使い、現在時刻の取得を集約する
+- [x] `utc_now_str(now: datetime | None = None) -> str`: `now` は tz 付きのみ許可し(naive は `ValueError`)、UTC に変換して DB 形式で返す。`None` なら `utc_now()` を使う
+- [x] `parse_utc(utc_str) -> datetime`: DB 形式を UTC の tz 付き `datetime` に変換する(形式不正は `ValueError`)
+- [x] `to_local(utc_str, tz=None)`: tz 付きローカル `datetime` を返す。`tz=None` は OS のローカルタイムゾーン(`astimezone()`)
+- [x] `format_local(utc_str, tz=None) -> str`: ローカルの `'YYYY-MM-DD HH:MM:SS'` を返す
+- [x] `local_date(utc_str, tz=None) -> date`
+- [x] `local_range_to_utc(start: date, end: date, tz=None) -> tuple[str, str]`: ローカル暦の `[start 00:00, end 00:00)` を UTC 文字列の組に変換する(`start >= end` は `ValueError`)
+  - [x] `tz=None` は開始日・終了日から作った naive なローカル午前 0 時をそれぞれ UTC に変換する。現在時点の固定オフセットを使い回さず、各境界日の OS の DST 規則を適用する
+- [x] `local_today(now=None, tz=None) -> date`: 現在年度の既定値の算出に使う
+- [x] `local_timestamp_for_filename(now=None, tz=None) -> str`: `YYYYMMDD_HHMMSS`(ローカル時刻。バックアップのファイル名用)
+- [x] `tests/test_timeutil.py`
+  - [x] UTC ⇔ ローカルの往復(`ZoneInfo("Asia/Tokyo")`)
+  - [x] 日付またぎ: UTC `2026-03-31 15:00:00` が JST `2026-04-01` になる
+  - [x] サマータイム開始月・終了月の月境界(`America/New_York`、`Europe/London`)。開始・終了を含む月の区間長が 1 時間短い/長いことを確認する
+  - [x] 月初・年度初の境界、`start >= end` の拒否、naive な `now` の拒否、形式不正な文字列の拒否
+  - [x] `utc_now()` が UTC の tz 付き `datetime` を返し、`utc_now_str()` がその取得関数を利用する
+  - [x] `tz=None` で OS ローカルの表示・期間境界が正しく変換されることを Windows/Linux で確認する
+  - [x] Linux の隔離サブプロセスで `TZ` と `time.tzset()` を使い、`tz=None` でも DST 開始月・終了月の UTC 境界と区間長が正しいことを確認する。親プロセスのタイムゾーン設定は変更しない
 
 #### B. 業務例外 `core/errors.py`
 
-- [ ] `DomainError(Exception)` を基底とし、`message` 属性(日本語)を持たせる
-- [ ] 3.3 の 11 クラスを定義する: `ValidationError`、`NegativeStockError`、`InactiveItemError`、`InactiveMasterError`、`AlreadyReversedError`、`ReversalNotAllowedError`、`CategoryCycleError`、`PrefixLockedError`、`MasterInUseError`、`SchemaTooNewError`、`InvalidBackupError`
-- [ ] 追加の 3 クラスを定義する
-  - [ ] `UnsupportedSchemaError`: 既存 DB の版数 0、未対応の旧版、スキーマ不一致、マイグレーション経路の欠落
-  - [ ] `MigrationError`: マイグレーション失敗。`backup_path: Path | None` を保持する
-  - [ ] `RestoreError`: 復元の失敗。`stage`(`"pre_backup"` / `"overwrite"` / `"recovery"`)、`recovered: bool`、`backup_path: Path | None` を保持する
-- [ ] `InvalidBackupError` は不合格理由の一覧 `reasons: tuple[str, ...]` を保持する
-- [ ] 開発計画書 3.3 の表に追加の 3 クラスを追記する
+- [x] `DomainError(Exception)` を基底とし、`message` 属性(日本語)を持たせる
+- [x] 3.3 の 11 クラスを定義する: `ValidationError`、`NegativeStockError`、`InactiveItemError`、`InactiveMasterError`、`AlreadyReversedError`、`ReversalNotAllowedError`、`CategoryCycleError`、`PrefixLockedError`、`MasterInUseError`、`SchemaTooNewError`、`InvalidBackupError`
+- [x] 追加の 3 クラスを定義する
+  - [x] `UnsupportedSchemaError`: 既存 DB の版数 0、未対応の旧版、スキーマ不一致、マイグレーション経路の欠落
+  - [x] `MigrationError`: マイグレーション失敗。`backup_path: Path | None` を保持する
+  - [x] `RestoreError`: 復元の失敗。`stage`(`"pre_backup"` / `"overwrite"` / `"recovery"`)、`recovered: bool`、`backup_path: Path | None` を保持する
+- [x] `InvalidBackupError` は不合格理由の一覧 `reasons: tuple[str, ...]` を保持する
+- [x] 開発計画書 3.3 の表に追加の 3 クラスを追記する
 
 #### C. モデル `core/models.py`
 
-- [ ] `Reason(StrEnum)`: `IN="in"`、`OUT="out"`、`RETURN="return"`、`DISPOSE="dispose"`、`ADJUST="adjust"`
-- [ ] マスタ: `Client`、`Purchaser`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
-- [ ] `Item`: `items` の全列
-- [ ] `StockMovement`: `stock_movements` の全列
-- [ ] 入力用: `NewItem`(登録項目と `initial_quantity`・`initial_staff_id`)、`ItemUpdate`(管理番号・数量・単位以外の編集可能項目)
-- [ ] `PurchaseInfo`: `last_purchased_at: str | None`(UTC)、`lot_quantity: int | None`
-- [ ] 表示用: `ItemRow`(`Item` にクライアント名・発注主体名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・クライアント名・発注主体名・担当者名・`is_reversed` を加える)
-- [ ] `ItemFilter`: `text`、`client_id`、`purchaser_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
-- [ ] `PeriodKind(StrEnum)`: `ANNUAL`、`MONTHLY`
-- [ ] `GroupBy(StrEnum)`: `NONE`、`CLIENT`、`PURCHASER`、`CLIENT_PURCHASER`(ダッシュボードの内訳軸)
-- [ ] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`client_id`・`client_name`、`purchaser_id`・`purchaser_name`(内訳軸で畳み込んだ項目は `None`)、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
+- [x] `Reason(StrEnum)`: `IN="in"`、`OUT="out"`、`RETURN="return"`、`DISPOSE="dispose"`、`ADJUST="adjust"`
+- [x] マスタ: `Client`、`Purchaser`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
+- [x] `Item`: `items` の全列
+- [x] `StockMovement`: `stock_movements` の全列
+- [x] 入力用: `NewItem`(登録項目と `initial_quantity`・`initial_staff_id`)、`ItemUpdate`(管理番号・数量・単位以外の編集可能項目)
+- [x] `PurchaseInfo`: `last_purchased_at: str | None`(UTC)、`lot_quantity: int | None`
+- [x] 表示用: `ItemRow`(`Item` にクライアント名・発注主体名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・クライアント名・発注主体名・担当者名・`is_reversed` を加える)
+- [x] `ItemFilter`: `text`、`client_id`、`purchaser_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
+- [x] `PeriodKind(StrEnum)`: `ANNUAL`、`MONTHLY`
+- [x] `GroupBy(StrEnum)`: `NONE`、`CLIENT`、`PURCHASER`、`CLIENT_PURCHASER`(ダッシュボードの内訳軸)
+- [x] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`client_id`・`client_name`、`purchaser_id`・`purchaser_name`(内訳軸で畳み込んだ項目は `None`)、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
 
 #### D. 接続 `db/connection.py`
 
-- [ ] `connect(path: Path) -> sqlite3.Connection`: `autocommit=True` で開き、`foreign_keys`・`journal_mode = WAL`・`busy_timeout = 5000` を設定する。`journal_mode` の戻り値が `wal` でなければ接続を閉じて例外とする
-- [ ] `connect_readonly(path: Path)`: `path.resolve().as_uri() + "?mode=ro"` と `uri=True` で開き、`foreign_keys`・`busy_timeout` のみを設定する(ジャーナルモードは変更しない)。ファイルが存在しない場合は接続前に `FileNotFoundError`
-- [ ] `connect_memory()`: `":memory:"`、`foreign_keys`・`busy_timeout` を設定する
-- [ ] `transaction(conn)`(`contextmanager`)
-  - [ ] 開始時に `conn.in_transaction` なら `RuntimeError`(ネスト禁止)
-  - [ ] `BEGIN IMMEDIATE` → 正常終了で `COMMIT`
-  - [ ] 本体で例外が起きたら、トランザクションが残っていれば `ROLLBACK` して再送出する
-  - [ ] `COMMIT` に失敗したら、トランザクションが残っていれば `ROLLBACK` して再送出する
-- [ ] `read_transaction(conn)`(`contextmanager`): 複数クエリを同一スナップショットで読む集計・検査用
-  - [ ] 既存トランザクションがあれば参加するだけとし、開始・COMMIT・ROLLBACK は呼び出し元に任せる
-  - [ ] 既存トランザクションがなければ `BEGIN` → 正常終了で `COMMIT`、例外・COMMIT 失敗時は残っていれば `ROLLBACK`。`BEGIN IMMEDIATE` は使わない
-- [ ] `tests/test_connection.py`
-  - [ ] 通常接続で `foreign_keys = 1`・`journal_mode = wal`・`busy_timeout = 5000`(`tmp_path`)
-  - [ ] 読み取り専用接続で書き込みが失敗し、DELETE モードの DB のジャーナルモードが変わらない
-  - [ ] 日本語や空白を含むパスでも読み取り専用接続できる
-  - [ ] メモリ DB で `foreign_keys = 1`
-  - [ ] `transaction()` の成功時 COMMIT、例外時 ROLLBACK、ネスト時の `RuntimeError`
-  - [ ] COMMIT 失敗時の ROLLBACK(`execute` で `COMMIT` を失敗させる `sqlite3.Connection` サブクラスを `factory=` で作る)
-  - [ ] `read_transaction()` の成功・例外時の終了処理、既存トランザクションへの参加時に呼び出し元の境界を変更しないこと、読み取り専用接続での使用を確認する
+- [x] `connect(path: Path) -> sqlite3.Connection`: `autocommit=True` で開き、`foreign_keys`・`journal_mode = WAL`・`busy_timeout = 5000` を設定する。`journal_mode` の戻り値が `wal` でなければ接続を閉じて例外とする
+- [x] `connect_readonly(path: Path)`: `path.resolve().as_uri() + "?mode=ro"` と `uri=True` で開き、`foreign_keys`・`busy_timeout` のみを設定する(ジャーナルモードは変更しない)。ファイルが存在しない場合は接続前に `FileNotFoundError`
+- [x] `connect_memory()`: `":memory:"`、`foreign_keys`・`busy_timeout` を設定する
+- [x] `transaction(conn)`(`contextmanager`)
+  - [x] 開始時に `conn.in_transaction` なら `RuntimeError`(ネスト禁止)
+  - [x] `BEGIN IMMEDIATE` → 正常終了で `COMMIT`
+  - [x] 本体で例外が起きたら、トランザクションが残っていれば `ROLLBACK` して再送出する
+  - [x] `COMMIT` に失敗したら、トランザクションが残っていれば `ROLLBACK` して再送出する
+- [x] `read_transaction(conn)`(`contextmanager`): 複数クエリを同一スナップショットで読む集計・検査用
+  - [x] 既存トランザクションがあれば参加するだけとし、開始・COMMIT・ROLLBACK は呼び出し元に任せる
+  - [x] 既存トランザクションがなければ `BEGIN` → 正常終了で `COMMIT`、例外・COMMIT 失敗時は残っていれば `ROLLBACK`。`BEGIN IMMEDIATE` は使わない
+- [x] `tests/test_connection.py`
+  - [x] 通常接続で `foreign_keys = 1`・`journal_mode = wal`・`busy_timeout = 5000`(`tmp_path`)
+  - [x] 読み取り専用接続で書き込みが失敗し、DELETE モードの DB のジャーナルモードが変わらない
+  - [x] 日本語や空白を含むパスでも読み取り専用接続できる
+  - [x] メモリ DB で `foreign_keys = 1`
+  - [x] `transaction()` の成功時 COMMIT、例外時 ROLLBACK、ネスト時の `RuntimeError`
+  - [x] COMMIT 失敗時の ROLLBACK(`execute` で `COMMIT` を失敗させる `sqlite3.Connection` サブクラスを `factory=` で作る)
+  - [x] `read_transaction()` の成功・例外時・COMMIT 失敗時の終了処理、既存トランザクションへの参加時に呼び出し元の境界を変更しないこと、読み取り専用接続での使用を確認する
 
 #### E. DB バックアップ基盤 `db/backup.py`
 
-- [ ] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
-  - [ ] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
-  - [ ] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
-  - [ ] Service・UI を import しない(依存ルールのテストで担保する)
-- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1a では `copy_database` の単体検証)
-  - [ ] バックアップに WAL 内の未チェックポイントの確定データが含まれる
-  - [ ] 保存先ファイルの排他的新規作成、既存同名ファイルの拒否(`FileExistsError`)、書き込み不可ディレクトリでのエラー
-  - [ ] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する(`RuntimeError`)
-  - [ ] 保存先の確保・コピー失敗時に自身が作成した未完成ファイルのみ削除し、既存ファイルを変更・削除しない
+- [x] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
+  - [x] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
+  - [x] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
+  - [x] Service・UI を import しない(依存ルールのテストで担保する)
+- [x] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1a では `copy_database` の単体検証)
+  - [x] バックアップに WAL 内の未チェックポイントの確定データが含まれる
+  - [x] 保存先ファイルの排他的新規作成、既存同名ファイルの拒否(`FileExistsError`)、書き込み不可ディレクトリでのエラー
+  - [x] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する(`RuntimeError`)
+  - [x] 保存先の確保・コピー失敗時に自身が作成した未完成ファイルのみ削除し、既存ファイルを変更・削除しない
 
 #### F. スキーマ `src/inventory_manager_mini/db/schema.sql`
 
-- [ ] 開発計画書 4.2 の DDL を記述する(`settings` の初期行を含む)
-- [ ] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
-- [ ] `tests/test_schema_constraints.py`(`:memory:`)
-  - [ ] CHECK: `is_active`、`code_prefix`(長さ・使用文字)、`unit = '個'`、`quantity >= 0`、`reorder_threshold >= 0`、`reorder_quantity > 0`、`reference_price >= 0`、`unit_price >= 0`、`reason` の値域、`reason` と `delta` の符号(取り消し行は除外)
-  - [ ] UNIQUE: クライアント名・発注主体名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
-  - [ ] FOREIGN KEY: 存在しないクライアント・発注主体・カテゴリ・品目・元行の参照を拒否する
-  - [ ] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
-  - [ ] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
+- [x] 開発計画書 4.2 の DDL を記述する(`settings` の初期行を含む)
+- [x] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
+- [x] `tests/test_schema_constraints.py`(`:memory:`)
+  - [x] CHECK: `is_active`、`code_prefix`(長さ・使用文字)、`unit = '個'`、`quantity >= 0`、`reorder_threshold >= 0`、`reorder_quantity > 0`、`reference_price >= 0`、`unit_price >= 0`、`reason` の値域、`reason` と `delta` の符号(取り消し行は除外)
+  - [x] UNIQUE: クライアント名・発注主体名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
+  - [x] FOREIGN KEY: 存在しないクライアント・発注主体・カテゴリ・品目・元行の参照を拒否する
+  - [x] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
+  - [x] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
 
 #### G. マイグレーション `db/migrations.py`
 
-- [ ] 定数: `SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`、`MIGRATIONS: dict[int, str] = {}`(キーは「その版へ上げる SQL」)
-- [ ] 検査定義の dataclass: `ColumnSpec`(名前・型・NOT NULL・既定値・主キー順位)、`ForeignKeySpec`、`IndexSpec`(名前・テーブル・UNIQUE・列/式・完全な CREATE INDEX 文)、`TriggerSpec`(名前・テーブル・完全な CREATE TRIGGER 文)、`TableSpec`(列・外部キー・CHECK/UNIQUE を含む完全な CREATE TABLE 文)、`SchemaSpec`
-- [ ] `SCHEMA_SPECS: dict[int, SchemaSpec]` に版 1 の定義を書く
-- [ ] `normalize_sql(sql) -> str`: SQLite の引用・エスケープ規則に沿ってトークン化し、文字列リテラル・引用識別子を保持する。コメントを除去し、それ以外のトークンの大小文字・空白を正規化する。単純な SQL 全体の小文字化や正規表現だけのコメント除去は行わない
-  - [ ] アプリ自身が生成する版別 DDL の表記差に対応する範囲とし、任意の意味的に同等な DDL の受け入れは目的としない
-- [ ] `inspect_schema(conn, version, specs=SCHEMA_SPECS) -> list[str]`: 不一致を日本語の理由一覧で返す(空なら合格)
-  - [ ] テーブルの集合が一致する(`sqlite_` で始まる内部テーブルを除く)
-  - [ ] 列の集合と各属性が一致する(`PRAGMA table_xinfo`)
-  - [ ] 外部キーが一致する(`PRAGMA foreign_key_list`)
-  - [ ] インデックス・トリガーの集合と定義が一致する(自動インデックスを除く。`PRAGMA index_list`・`index_xinfo`、`sqlite_master`)
-  - [ ] テーブル・明示インデックス・トリガーの完全な `sqlite_master.sql` を版別の DDL と正規化後に比較し、CHECK/UNIQUE・式・トリガー本体の改変を拒否する。コメント内に残った断片や弱められた制約を存在の証明としない
-- [ ] `check_migration_path(from_version, to_version, migrations) -> None`: 途中の版の SQL が欠けていれば `UnsupportedSchemaError`
-- [ ] `create_schema(conn, ...)`: 1 トランザクションで DDL 適用 → 検査 → `PRAGMA user_version` 設定を行う
-- [ ] `open_database(path, backup_dir, *, backup_timestamp: Callable[[], str], schema_version=..., min_supported=..., migrations=..., specs=...) -> sqlite3.Connection`
-  - [ ] 上位層が `timeutil.local_timestamp_for_filename()` を利用した日時コールバックを渡す。戻り値は `YYYYMMDD_HHMMSS`。DB 層では現在時刻取得・タイムゾーン変換・`core.timeutil` の import を行わない
-  - [ ] 接続前に `path.exists()` を確認する
-  - [ ] ファイルがなければ新規作成する。失敗時は接続を閉じ、作成した DB と `-wal`・`-shm` を削除して例外を再送出する
-  - [ ] 既存 DB で版数 > `schema_version` なら `SchemaTooNewError`
-  - [ ] 版数 0、または版数 < `min_supported` なら `UnsupportedSchemaError`
-  - [ ] その版の検査定義で検査し、不一致なら `UnsupportedSchemaError`
-  - [ ] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `copy_database()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
-  - [ ] 移行前バックアップは書き込みトランザクション外で `copy_database()` により保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
-  - [ ] 失敗時は開いた接続を必ず閉じる
-- [ ] `tests/test_migrations.py`(`tmp_path` 上の実ファイル DB)
-  - [ ] 新規作成: `user_version = 1`、検査に合格、再接続後も永続化されている、WAL で動作する
-  - [ ] 新規作成の途中失敗(壊れた DDL を注入)で、DDL・`user_version` が残らずファイルも削除される
-  - [ ] 版数 0 の既存ファイル(空ファイルを含む)を `UnsupportedSchemaError` で拒否し、新規作成と区別する
-  - [ ] 新版(`user_version = 2`)を `SchemaTooNewError` で拒否する
-  - [ ] 同名テーブルで列・CHECK・UNIQUE・FK・インデックス・トリガーのいずれかが欠けた DB を拒否する(項目ごとにパラメータ化する)
-  - [ ] 接頭辞の GLOB パターンを `'*[^A-Z0-9]*'` から `'*[^a-z0-9]*'` へ変更した DB、必須制約をコメント内にだけ残した DB、`OR 1` で制約を弱めた DB を拒否する
-  - [ ] SQL 正規化がリテラル内の大小文字・空白・コメント記号・エスケープを保持し、リテラル外のコメント・表記差だけを正規化する
-  - [ ] 試験用の v2(列追加の SQL・v2 の検査定義)を注入し、v1 → v2 の移行が成功し、`pre-migrate_v1_*.db` が作成される
-  - [ ] 注入した日時がファイル名に使われる。固定日時と既存の同名バックアップで `MigrationError` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
-  - [ ] 試験用の v2 で SQL を途中失敗させ、DDL・データ・`user_version` がロールバックされ、`MigrationError.backup_path` のバックアップが残る
-  - [ ] 適用後の検査が不合格の場合もロールバックされる
-  - [ ] 未対応の旧版(`min_supported = 2` を注入)と経路の欠落を拒否する
-  - [ ] 依存ルール R2・R6 が成功し、DB 層に日時処理のための禁止 import・現在時刻取得がない
+- [x] 定数: `SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`、`MIGRATIONS: dict[int, str] = {}`(キーは「その版へ上げる SQL」)
+- [x] 検査定義の dataclass: `ColumnSpec`(名前・型・NOT NULL・既定値・主キー順位)、`ForeignKeySpec`、`IndexSpec`(名前・テーブル・UNIQUE・列/式・完全な CREATE INDEX 文)、`TriggerSpec`(名前・テーブル・完全な CREATE TRIGGER 文)、`TableSpec`(列・外部キー・CHECK/UNIQUE を含む完全な CREATE TABLE 文)、`SchemaSpec`
+- [x] `SCHEMA_SPECS: dict[int, SchemaSpec]` に版 1 の定義を書く
+- [x] `normalize_sql(sql) -> str`: SQLite の引用・エスケープ規則に沿ってトークン化し、文字列リテラル・引用識別子を保持する。コメントを除去し、それ以外のトークンの大小文字・空白を正規化する。単純な SQL 全体の小文字化や正規表現だけのコメント除去は行わない
+  - [x] アプリ自身が生成する版別 DDL の表記差に対応する範囲とし、任意の意味的に同等な DDL の受け入れは目的としない
+- [x] `inspect_schema(conn, version, specs=SCHEMA_SPECS) -> list[str]`: 不一致を日本語の理由一覧で返す(空なら合格)
+  - [x] テーブルの集合が一致する(`sqlite_` で始まる内部テーブルを除く)
+  - [x] 列の集合と各属性が一致する(`PRAGMA table_xinfo`)
+  - [x] 外部キーが一致する(`PRAGMA foreign_key_list`)
+  - [x] インデックス・トリガーの集合と定義が一致する(自動インデックスを除く。`PRAGMA index_list`・`index_xinfo`、`sqlite_master`)
+  - [x] テーブル・明示インデックス・トリガーの完全な `sqlite_master.sql` を版別の DDL と正規化後に比較し、CHECK/UNIQUE・式・トリガー本体の改変を拒否する。コメント内に残った断片や弱められた制約を存在の証明としない
+- [x] `check_migration_path(from_version, to_version, migrations) -> None`: 途中の版の SQL が欠けていれば `UnsupportedSchemaError`
+- [x] `create_schema(conn, ...)`: 1 トランザクションで DDL 適用 → 検査 → `PRAGMA user_version` 設定を行う
+- [x] `open_database(path, backup_dir, *, backup_timestamp: Callable[[], str], schema_version=..., min_supported=..., migrations=..., specs=...) -> sqlite3.Connection`
+  - [x] 上位層が `timeutil.local_timestamp_for_filename()` を利用した日時コールバックを渡す。戻り値は `YYYYMMDD_HHMMSS`。DB 層では現在時刻取得・タイムゾーン変換・`core.timeutil` の import を行わない
+  - [x] 接続前に `path.exists()` を確認する
+  - [x] ファイルがなければ新規作成する。失敗時は接続を閉じ、作成した DB と `-wal`・`-shm` を削除して例外を再送出する
+  - [x] 既存 DB で版数 > `schema_version` なら `SchemaTooNewError`
+  - [x] 版数 0、または版数 < `min_supported` なら `UnsupportedSchemaError`
+  - [x] その版の検査定義で検査し、不一致なら `UnsupportedSchemaError`
+  - [x] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `copy_database()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
+  - [x] 移行前バックアップは書き込みトランザクション外で `copy_database()` により保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
+  - [x] 失敗時は開いた接続を必ず閉じる
+- [x] `tests/test_migrations.py`(`tmp_path` 上の実ファイル DB)
+  - [x] 新規作成: `user_version = 1`、検査に合格、再接続後も永続化されている、WAL で動作する
+  - [x] 新規作成の途中失敗(壊れた DDL を注入)で、DDL・`user_version` が残らずファイルも削除される
+  - [x] 版数 0 の既存ファイル(空ファイルを含む)を `UnsupportedSchemaError` で拒否し、新規作成と区別する
+  - [x] 新版(`user_version = 2`)を `SchemaTooNewError` で拒否する
+  - [x] 同名テーブルで列・CHECK・UNIQUE・FK・インデックス・トリガーのいずれかが欠けた DB を拒否する(項目ごとにパラメータ化する)
+  - [x] 接頭辞の GLOB パターンを `'*[^A-Z0-9]*'` から `'*[^a-z0-9]*'` へ変更した DB、必須制約をコメント内にだけ残した DB、`OR 1` で制約を弱めた DB を拒否する
+  - [x] SQL 正規化がリテラル内の大小文字・空白・コメント記号・エスケープを保持し、リテラル外のコメント・表記差だけを正規化する
+  - [x] 試験用の v2(列追加の SQL・v2 の検査定義)を注入し、v1 → v2 の移行が成功し、`pre-migrate_v1_*.db` が作成される
+  - [x] 注入した日時がファイル名に使われる。固定日時と既存の同名バックアップで `MigrationError` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
+  - [x] 試験用の v2 で SQL を途中失敗させ、DDL・データ・`user_version` がロールバックされ、`MigrationError.backup_path` のバックアップが残る
+  - [x] 適用後の検査が不合格の場合もロールバックされる
+  - [x] 未対応の旧版(`min_supported = 2` を注入)と経路の欠落を拒否する
+  - [x] 依存ルール R2・R6 が成功し、DB 層に日時処理のための禁止 import・現在時刻取得がない
 
 #### H. CI・文書(1a の最後)
 
-- [ ] `.github/workflows/ci.yml` の `pytest --cov` の後に、カバレッジ閾値のステップを追加する
-- [ ] README のコマンド一覧にカバレッジ閾値のコマンドを追記する
-- [ ] ローカルで全コマンドが成功する
+- [x] `.github/workflows/ci.yml` の `pytest --cov` の後に、カバレッジ閾値のステップを追加する
+- [x] README のコマンド一覧にカバレッジ閾値のコマンドを追記する
+- [x] ローカルで全コマンドが成功する
 - [ ] PR を作成し、Windows/Linux の CI 成功後にマージする
 
 ### 1b. Repository・Service(`feature/phase1-services`。1a に依存)
