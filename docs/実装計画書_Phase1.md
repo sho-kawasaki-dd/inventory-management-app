@@ -202,96 +202,97 @@
 - [x] `.github/workflows/ci.yml` の `pytest --cov` の後に、カバレッジ閾値のステップを追加する
 - [x] README のコマンド一覧にカバレッジ閾値のコマンドを追記する
 - [x] ローカルで全コマンドが成功する
-- [ ] PR を作成し、Windows/Linux の CI 成功後にマージする
+- [x] PR を作成し、Windows/Linux の CI 成功後にマージする
 
 ### 1b. Repository・Service(`feature/phase1-services`。1a に依存)
 
 #### I. Repository `db/repositories.py`
 
-- [ ] 共通: すべての SQL をプレースホルダでパラメータ化する。行を dataclass に変換する関数を持つ
-- [ ] `IntegrityError` の変換: `sqlite_errorname`(`SQLITE_CONSTRAINT_UNIQUE`・`_CHECK`・`_FOREIGNKEY`・`_NOTNULL`)とメッセージ中の対象列で判定し、呼び出し箇所ごとの対応表で業務例外に変換する。対応外の制約違反は `ValidationError` とし、元の例外を `from` で連結する
-  - [ ] マスタ名・接頭辞の重複 → `ValidationError`
-  - [ ] `reversal_of` の重複 → `AlreadyReversedError`
-  - [ ] `quantity >= 0` 違反 → `NegativeStockError`
-  - [ ] 削除時の外部キー違反 → `MasterInUseError`
-- [ ] `ItemRepository`
-  - [ ] `allocate_code(category_id) -> str`: `UPDATE categories SET next_seq = next_seq + 1 WHERE id = ? RETURNING code_prefix, next_seq - 1` で連番を確保し、`接頭辞-%04d` を生成する
-  - [ ] `insert`、`update`(数量・単位・管理番号は対象外)、`get`、`set_active`
-  - [ ] `add_quantity(item_id, delta)`: `UPDATE items SET quantity = quantity + ? WHERE id = ?`
-  - [ ] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
-  - [ ] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
-  - [ ] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
-  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
-- [ ] `MovementRepository`
-  - [ ] `insert`、`get`、`is_reversed(movement_id)`
-  - [ ] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
-  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
-- [ ] `MasterRepository`
-  - [ ] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
-  - [ ] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
-  - [ ] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
-- [ ] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
+- [x] 共通: すべての SQL をプレースホルダでパラメータ化する。行を dataclass に変換する関数を持つ
+- [x] `IntegrityError` の変換: `sqlite_errorname`(`SQLITE_CONSTRAINT_UNIQUE`・`_CHECK`・`_FOREIGNKEY`・`_NOTNULL`)とメッセージ中の対象列で判定し、呼び出し箇所ごとの対応表で業務例外に変換する。対応外の制約違反は `ValidationError` とし、元の例外を `from` で連結する
+  - [x] マスタ名・接頭辞の重複 → `ValidationError`
+  - [x] `reversal_of` の重複 → `AlreadyReversedError`
+  - [x] `quantity >= 0` 違反 → `NegativeStockError`
+  - [x] 削除時の外部キー違反 → `MasterInUseError`
+- [x] `ItemRepository`
+  - [x] `allocate_code(category_id) -> str`: `UPDATE categories SET next_seq = next_seq + 1 WHERE id = ? RETURNING code_prefix, next_seq - 1` で連番を確保し、`接頭辞-%04d` を生成する
+  - [x] `insert`、`update`(数量・単位・管理番号は対象外)、`get`、`set_active`
+  - [x] `add_quantity(item_id, delta)`: `UPDATE items SET quantity = quantity + ? WHERE id = ?`
+  - [x] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
+  - [x] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
+  - [x] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
+  - [x] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
+- [x] `MovementRepository`
+  - [x] `insert`、`get`、`is_reversed(movement_id)`
+  - [x] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
+  - [x] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
+- [x] `MasterRepository`
+  - [x] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
+  - [x] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
+  - [x] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
+- [x] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
 
 #### J. Service `core/services.py`
 
-- [ ] 共通の補助
-  - [ ] `validate_purchase_url(url: str | None) -> str | None`: 前後の空白を除去し、空なら `None`。`urllib.parse.urlsplit` でスキームが `http`/`https` かつホスト名ありの場合のみ許可し、それ以外は `ValidationError`(UI が `openUrl` の前に再利用する)
-  - [ ] 任意文字列の正規化(前後の空白を除去し、空文字は `None`)と必須文字列の検証
-  - [ ] 整数の検証(`bool` を拒否し、下限を確認する)
-  - [ ] 接頭辞の検証(`^[A-Z0-9]{2,5}$`)
-- [ ] 更新操作の業務検証は `transaction(conn)` の内側(`BEGIN IMMEDIATE` 後)で最新の行を読んで行う。更新系公開メソッド同士を呼んでトランザクションを二重に開始しない
-- [ ] 読み取り専用の取得・一覧・検査メソッドはトランザクションを開始せず、既存トランザクション内でも利用可能とする。複数クエリの一貫性が必要な最上位の集計・検査だけ `read_transaction(conn)` を使う
-- [ ] `InventoryService(conn, clock=...)`
-  - [ ] `create_item(new: NewItem) -> Item`: クライアント・発注主体が有効(発注主体の未指定は `ValidationError`、無効は `InactiveMasterError`)、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
-  - [ ] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。クライアント・発注主体の変更先は有効なもののみ(発注主体を空にはできない)。無効化済みの現在の値を維持する編集は許可する。廃止品目の編集も許可する
-  - [ ] `deactivate_item`・`reactivate_item`(在庫残があっても廃止可能)
-  - [ ] `get_item`、`list_items(filter)`、`list_low_stock()`、`get_purchase_info(item_id)`
-  - [ ] 在庫操作 5 種: `receive(item_id, staff_id, quantity, unit_price, update_reference_price, note)`、`issue(item_id, staff_id, quantity, used_for, note)`、`return_to_supplier(...)`、`dispose(...)`、`stocktake(item_id, staff_id, actual_quantity, note)`
-    - [ ] 共通: 品目が有効(違反は `InactiveItemError`)、担当者が有効(違反は `InactiveMasterError`)、数量は 1 以上(棚卸の実数は 0 以上)
-    - [ ] 出庫は使用先が必須
-    - [ ] 減少後の在庫が負なら `NegativeStockError`
-    - [ ] `client_id`・`purchaser_id` は品目の現在の値をコピーする(無効化済みでも拒否しない)
-    - [ ] `unit_price`: 入庫は入力値(`None` の場合は参考価格)、それ以外は操作時点の参考価格
-    - [ ] 入庫で `update_reference_price=True` かつ実単価が参考価格と異なる場合は、同一トランザクションで `reference_price` を更新する
-    - [ ] 棚卸は差分 0 でも記録する
-    - [ ] 処理順: 検証 → 履歴 INSERT → 数量 UPDATE。`moved_at = utc_now_str(clock())`
-  - [ ] `reverse(movement_id, staff_id, note) -> StockMovement`
-    - [ ] 取り消し操作者は有効な担当者が必須
-    - [ ] 元行が取り消し行 → `ReversalNotAllowedError`、取り消し済み → `AlreadyReversedError`、差分 0 の棚卸 → `ReversalNotAllowedError`、品目が廃止 → `InactiveItemError`、取り消し後の在庫が負 → `NegativeStockError`
-    - [ ] `reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
-  - [ ] `list_history(item_id)`、`list_all_history()`
-  - [ ] `reversal_block_reason(movement_id) -> str | None`: 取り消し不可の理由(UI のツールチップ用。担当者の条件を除く)
-- [ ] `MasterService(conn)`
-  - [ ] クライアント・発注主体・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
-  - [ ] カテゴリ: 追加(親・名称・接頭辞)・名称変更・親変更(自身または子孫なら `CategoryCycleError`)・接頭辞変更(`next_seq > 1` なら `PrefixLockedError`)・削除(品目参照・子カテゴリ・`next_seq > 1` のいずれかで `MasterInUseError`)
-  - [ ] 保管場所: 追加・名称変更・削除(使用中なら `MasterInUseError`)
-  - [ ] 一覧(無効化を含むか指定)、使用中・削除可否の判定(UI の活性制御用)
-- [ ] `SettingsService(conn)`
-  - [ ] `get_fiscal_year_start_month() -> int`: 読み取り専用とし、トランザクションを開始しない
-  - [ ] `set_fiscal_year_start_month(month)`: `transaction(conn)` 内で検証・更新する(1〜12 以外は `ValidationError`)
-  - [ ] `validate_all() -> list[str]`: 必須キーの存在、値が正規の整数表記で 1〜12、未知のキーがないことを検査し、不合格の理由一覧を返す。読み取り専用とし、トランザクションを開始しない
+- [x] 共通の補助
+  - [x] `validate_purchase_url(url: str | None) -> str | None`: 前後の空白を除去し、空なら `None`。`urllib.parse.urlsplit` でスキームが `http`/`https` かつホスト名ありの場合のみ許可し、それ以外は `ValidationError`(UI が `openUrl` の前に再利用する)
+  - [x] 任意文字列の正規化(前後の空白を除去し、空文字は `None`)と必須文字列の検証
+  - [x] 整数の検証(`bool` を拒否し、下限を確認する)
+  - [x] 接頭辞の検証(`^[A-Z0-9]{2,5}$`)
+- [x] 更新操作の業務検証は `transaction(conn)` の内側(`BEGIN IMMEDIATE` 後)で最新の行を読んで行う。更新系公開メソッド同士を呼んでトランザクションを二重に開始しない
+- [x] 読み取り専用の取得・一覧・検査メソッドはトランザクションを開始せず、既存トランザクション内でも利用可能とする。複数クエリの一貫性が必要な最上位の集計・検査だけ `read_transaction(conn)` を使う
+- [x] `InventoryService(conn, clock=...)`
+  - [x] `create_item(new: NewItem) -> Item`: クライアント・発注主体が有効(発注主体の未指定は `ValidationError`、無効は `InactiveMasterError`)、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
+  - [x] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。クライアント・発注主体の変更先は有効なもののみ(発注主体を空にはできない)。無効化済みの現在の値を維持する編集は許可する。廃止品目の編集も許可する
+  - [x] `deactivate_item`・`reactivate_item`(在庫残があっても廃止可能)
+  - [x] `get_item`、`list_items(filter)`、`list_low_stock()`、`get_purchase_info(item_id)`
+  - [x] 在庫操作 5 種: `receive(item_id, staff_id, quantity, unit_price, update_reference_price, note)`、`issue(item_id, staff_id, quantity, used_for, note)`、`return_to_supplier(...)`、`dispose(...)`、`stocktake(item_id, staff_id, actual_quantity, note)`
+    - [x] 共通: 品目が有効(違反は `InactiveItemError`)、担当者が有効(違反は `InactiveMasterError`)、数量は 1 以上(棚卸の実数は 0 以上)
+    - [x] 出庫は使用先が必須
+    - [x] 減少後の在庫が負なら `NegativeStockError`
+    - [x] `client_id`・`purchaser_id` は品目の現在の値をコピーする(無効化済みでも拒否しない)
+    - [x] `unit_price`: 入庫は入力値(`None` の場合は参考価格)、それ以外は操作時点の参考価格
+    - [x] 入庫で `update_reference_price=True` かつ実単価が参考価格と異なる場合は、同一トランザクションで `reference_price` を更新する
+    - [x] 棚卸は差分 0 でも記録する
+    - [x] 処理順: 検証 → 履歴 INSERT → 数量 UPDATE。`moved_at = utc_now_str(clock())`
+  - [x] `reverse(movement_id, staff_id, note) -> StockMovement`
+    - [x] 取り消し操作者は有効な担当者が必須
+    - [x] 元行が取り消し行 → `ReversalNotAllowedError`、取り消し済み → `AlreadyReversedError`、差分 0 の棚卸 → `ReversalNotAllowedError`、品目が廃止 → `InactiveItemError`、取り消し後の在庫が負 → `NegativeStockError`
+    - [x] `reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
+  - [x] `list_history(item_id)`、`list_all_history()`
+  - [x] `reversal_block_reason(movement_id) -> str | None`: 取り消し不可の理由(UI のツールチップ用。担当者の条件を除く)
+- [x] `MasterService(conn)`
+  - [x] クライアント・発注主体・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
+  - [x] カテゴリ: 追加(親・名称・接頭辞)・名称変更・親変更(自身または子孫なら `CategoryCycleError`)・接頭辞変更(`next_seq > 1` なら `PrefixLockedError`)・削除(品目参照・子カテゴリ・`next_seq > 1` のいずれかで `MasterInUseError`)
+  - [x] 保管場所: 追加・名称変更・削除(使用中なら `MasterInUseError`)
+  - [x] 一覧(無効化を含むか指定)、使用中・削除可否の判定(UI の活性制御用)
+- [x] `SettingsService(conn)`
+  - [x] `get_fiscal_year_start_month() -> int`: 読み取り専用とし、トランザクションを開始しない
+  - [x] `set_fiscal_year_start_month(month)`: `transaction(conn)` 内で検証・更新する(1〜12 以外は `ValidationError`)
+  - [x] `validate_all() -> list[str]`: 必須キーの存在、値が正規の整数表記で 1〜12、未知のキーがないことを検査し、不合格の理由一覧を返す。読み取り専用とし、トランザクションを開始しない
 
 #### K. テスト(1b)
 
-- [ ] `tests/conftest.py` に共通フィクスチャを置く
-  - [ ] `memory_conn`: `connect_memory()` と `create_schema()` で作成する
-  - [ ] `seeded_conn`: 有効なクライアント 2・無効なクライアント 1、有効な発注主体 2・無効な発注主体 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
-  - [ ] `fixed_clock`: 時刻を任意に進められる `clock`
-  - [ ] Service 群(`inventory`・`master`・`settings`)
-- [ ] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換、業務整合性検査用クエリの単体検証(`find_quantity_mismatches()` の一致・不一致・履歴なし、`find_invalid_reversals()` の正常行・元行不在・取り消し行の取り消し・差分 0 棚卸・品目不一致・delta 符号不正・属性不一致の各パターン)
-- [ ] `tests/test_inventory_service.py`
-  - [ ] 品目の登録: 単位の固定、初期数量の adjust と担当者の記録、初期数量が正で担当者が未指定/無効の場合に品目・履歴・連番がいずれも変わらない
-  - [ ] 採番: 品目登録 → 別カテゴリへ変更 → 元カテゴリの削除を拒否 → 元カテゴリで追加登録し、連番が継続する
-  - [ ] 品目の編集: 数量・単位・管理番号が変わらない、無効化済みクライアント・発注主体の維持は可、無効なクライアント・発注主体への変更は拒否、発注主体の未指定・登録時の無効な発注主体を拒否、過去の履歴の `client_id`・`purchaser_id` は不変
-  - [ ] URL の検証: `http`/`https` かつホストありのみ許可(`javascript:`・`file:`・`ftp:`・ホストなしを拒否)
-  - [ ] 在庫操作 5 種の `reason`・`delta`・`unit_price`・`used_for` と数量の更新、負の在庫の拒否、廃止品目・無効な担当者の拒否、無効化済みクライアント・発注主体の品目への通常操作の許可
-  - [ ] 入庫で参考価格を更新した後にその入庫を取り消しても参考価格が戻らず、取り消し行の単価が元行と一致する。入庫後に参考価格を再変更した場合も最新値が維持される
-  - [ ] 取り消しの全不可条件、初期数量の adjust の取り消し、元行のクライアント・発注主体・担当者が無効化済みでも取り消せる、クライアント・発注主体変更後の取り消しで元行の `client_id`・`purchaser_id` がコピーされる
-  - [ ] トランザクション: 成功時の永続化。履歴 INSERT 後・数量 UPDATE 前の失敗(`add_quantity` を monkeypatch で例外にする)で、履歴と数量の両方が元に戻る。COMMIT 失敗(`factory=` で作った Connection サブクラス)で両方が元に戻る
-- [ ] `tests/test_master_service.py`: 5.4 の表の全パターン(未使用は物理削除、使用中は無効化のみ/削除不可)、循環参照の拒否(自身・子・孫)、接頭辞の形式とロック、同一親での名称重複の拒否、名称変更
-- [ ] `tests/test_settings_service.py`: 取得・設定・範囲外の拒否、`validate_all()` の各不合格パターン
-  - [ ] 取得・検査メソッドが既存トランザクション内でも成功し、呼び出し元のトランザクションを終了しない
-- [ ] ローカルで全コマンドが成功し、PR の CI 成功後にマージする
+- [x] `tests/conftest.py` に共通フィクスチャを置く
+  - [x] `memory_conn`: `connect_memory()` と `create_schema()` で作成する
+  - [x] `seeded_conn`: 有効なクライアント 2・無効なクライアント 1、有効な発注主体 2・無効な発注主体 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
+  - [x] `fixed_clock`: 時刻を任意に進められる `clock`
+  - [x] Service 群(`inventory`・`master`・`settings`)
+- [x] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換、業務整合性検査用クエリの単体検証(`find_quantity_mismatches()` の一致・不一致・履歴なし、`find_invalid_reversals()` の正常行・元行不在・取り消し行の取り消し・差分 0 棚卸・品目不一致・delta 符号不正・属性不一致の各パターン)
+- [x] `tests/test_inventory_service.py`
+  - [x] 品目の登録: 単位の固定、初期数量の adjust と担当者の記録、初期数量が正で担当者が未指定/無効の場合に品目・履歴・連番がいずれも変わらない
+  - [x] 採番: 品目登録 → 別カテゴリへ変更 → 元カテゴリの削除を拒否 → 元カテゴリで追加登録し、連番が継続する
+  - [x] 品目の編集: 数量・単位・管理番号が変わらない、無効化済みクライアント・発注主体の維持は可、無効なクライアント・発注主体への変更は拒否、発注主体の未指定・登録時の無効な発注主体を拒否、過去の履歴の `client_id`・`purchaser_id` は不変
+  - [x] URL の検証: `http`/`https` かつホストありのみ許可(`javascript:`・`file:`・`ftp:`・ホストなしを拒否)
+  - [x] 在庫操作 5 種の `reason`・`delta`・`unit_price`・`used_for` と数量の更新、負の在庫の拒否、廃止品目・無効な担当者の拒否、無効化済みクライアント・発注主体の品目への通常操作の許可
+  - [x] 入庫で参考価格を更新した後にその入庫を取り消しても参考価格が戻らず、取り消し行の単価が元行と一致する。入庫後に参考価格を再変更した場合も最新値が維持される
+  - [x] 取り消しの全不可条件、初期数量の adjust の取り消し、元行のクライアント・発注主体・担当者が無効化済みでも取り消せる、クライアント・発注主体変更後の取り消しで元行の `client_id`・`purchaser_id` がコピーされる
+  - [x] トランザクション: 成功時の永続化。履歴 INSERT 後・数量 UPDATE 前の失敗(`add_quantity` を monkeypatch で例外にする)で、履歴と数量の両方が元に戻る。COMMIT 失敗(`factory=` で作った Connection サブクラス)で両方が元に戻る
+- [x] `tests/test_master_service.py`: 5.4 の表の全パターン(未使用は物理削除、使用中は無効化のみ/削除不可)、循環参照の拒否(自身・子・孫)、接頭辞の形式とロック、同一親での名称重複の拒否、名称変更
+- [x] `tests/test_settings_service.py`: 取得・設定・範囲外の拒否、`validate_all()` の各不合格パターン
+  - [x] 取得・検査メソッドが既存トランザクション内でも成功し、呼び出し元のトランザクションを終了しない
+- [x] ローカルで全コマンドが成功する
+- [ ] PR の CI 成功後にマージする
 
 ### 1c. 集計・CSV・バックアップ・ダミーデータ(`feature/phase1-reports-backup`。1b に依存)
 
