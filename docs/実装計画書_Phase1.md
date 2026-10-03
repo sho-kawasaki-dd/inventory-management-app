@@ -159,43 +159,43 @@
 
 #### G. マイグレーション `db/migrations.py`
 
-- [ ] 定数: `SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`、`MIGRATIONS: dict[int, str] = {}`(キーは「その版へ上げる SQL」)
-- [ ] 検査定義の dataclass: `ColumnSpec`(名前・型・NOT NULL・既定値・主キー順位)、`ForeignKeySpec`、`IndexSpec`(名前・テーブル・UNIQUE・列/式・完全な CREATE INDEX 文)、`TriggerSpec`(名前・テーブル・完全な CREATE TRIGGER 文)、`TableSpec`(列・外部キー・CHECK/UNIQUE を含む完全な CREATE TABLE 文)、`SchemaSpec`
-- [ ] `SCHEMA_SPECS: dict[int, SchemaSpec]` に版 1 の定義を書く
-- [ ] `normalize_sql(sql) -> str`: SQLite の引用・エスケープ規則に沿ってトークン化し、文字列リテラル・引用識別子を保持する。コメントを除去し、それ以外のトークンの大小文字・空白を正規化する。単純な SQL 全体の小文字化や正規表現だけのコメント除去は行わない
-  - [ ] アプリ自身が生成する版別 DDL の表記差に対応する範囲とし、任意の意味的に同等な DDL の受け入れは目的としない
-- [ ] `inspect_schema(conn, version, specs=SCHEMA_SPECS) -> list[str]`: 不一致を日本語の理由一覧で返す(空なら合格)
-  - [ ] テーブルの集合が一致する(`sqlite_` で始まる内部テーブルを除く)
-  - [ ] 列の集合と各属性が一致する(`PRAGMA table_xinfo`)
-  - [ ] 外部キーが一致する(`PRAGMA foreign_key_list`)
-  - [ ] インデックス・トリガーの集合と定義が一致する(自動インデックスを除く。`PRAGMA index_list`・`index_xinfo`、`sqlite_master`)
-  - [ ] テーブル・明示インデックス・トリガーの完全な `sqlite_master.sql` を版別の DDL と正規化後に比較し、CHECK/UNIQUE・式・トリガー本体の改変を拒否する。コメント内に残った断片や弱められた制約を存在の証明としない
-- [ ] `check_migration_path(from_version, to_version, migrations) -> None`: 途中の版の SQL が欠けていれば `UnsupportedSchemaError`
-- [ ] `create_schema(conn, ...)`: 1 トランザクションで DDL 適用 → 検査 → `PRAGMA user_version` 設定を行う
-- [ ] `open_database(path, backup_dir, *, backup_timestamp: Callable[[], str], schema_version=..., min_supported=..., migrations=..., specs=...) -> sqlite3.Connection`
-  - [ ] 上位層が `timeutil.local_timestamp_for_filename()` を利用した日時コールバックを渡す。戻り値は `YYYYMMDD_HHMMSS`。DB 層では現在時刻取得・タイムゾーン変換・`core.timeutil` の import を行わない
-  - [ ] 接続前に `path.exists()` を確認する
-  - [ ] ファイルがなければ新規作成する。失敗時は接続を閉じ、作成した DB と `-wal`・`-shm` を削除して例外を再送出する
-  - [ ] 既存 DB で版数 > `schema_version` なら `SchemaTooNewError`
-  - [ ] 版数 0、または版数 < `min_supported` なら `UnsupportedSchemaError`
-  - [ ] その版の検査定義で検査し、不一致なら `UnsupportedSchemaError`
-  - [ ] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `copy_database()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
-  - [ ] 移行前バックアップは書き込みトランザクション外で `copy_database()` により保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
-  - [ ] 失敗時は開いた接続を必ず閉じる
-- [ ] `tests/test_migrations.py`(`tmp_path` 上の実ファイル DB)
-  - [ ] 新規作成: `user_version = 1`、検査に合格、再接続後も永続化されている、WAL で動作する
-  - [ ] 新規作成の途中失敗(壊れた DDL を注入)で、DDL・`user_version` が残らずファイルも削除される
-  - [ ] 版数 0 の既存ファイル(空ファイルを含む)を `UnsupportedSchemaError` で拒否し、新規作成と区別する
-  - [ ] 新版(`user_version = 2`)を `SchemaTooNewError` で拒否する
-  - [ ] 同名テーブルで列・CHECK・UNIQUE・FK・インデックス・トリガーのいずれかが欠けた DB を拒否する(項目ごとにパラメータ化する)
-  - [ ] 接頭辞の GLOB パターンを `'*[^A-Z0-9]*'` から `'*[^a-z0-9]*'` へ変更した DB、必須制約をコメント内にだけ残した DB、`OR 1` で制約を弱めた DB を拒否する
-  - [ ] SQL 正規化がリテラル内の大小文字・空白・コメント記号・エスケープを保持し、リテラル外のコメント・表記差だけを正規化する
-  - [ ] 試験用の v2(列追加の SQL・v2 の検査定義)を注入し、v1 → v2 の移行が成功し、`pre-migrate_v1_*.db` が作成される
-  - [ ] 注入した日時がファイル名に使われる。固定日時と既存の同名バックアップで `MigrationError` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
-  - [ ] 試験用の v2 で SQL を途中失敗させ、DDL・データ・`user_version` がロールバックされ、`MigrationError.backup_path` のバックアップが残る
-  - [ ] 適用後の検査が不合格の場合もロールバックされる
-  - [ ] 未対応の旧版(`min_supported = 2` を注入)と経路の欠落を拒否する
-  - [ ] 依存ルール R2・R6 が成功し、DB 層に日時処理のための禁止 import・現在時刻取得がない
+- [x] 定数: `SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`、`MIGRATIONS: dict[int, str] = {}`(キーは「その版へ上げる SQL」)
+- [x] 検査定義の dataclass: `ColumnSpec`(名前・型・NOT NULL・既定値・主キー順位)、`ForeignKeySpec`、`IndexSpec`(名前・テーブル・UNIQUE・列/式・完全な CREATE INDEX 文)、`TriggerSpec`(名前・テーブル・完全な CREATE TRIGGER 文)、`TableSpec`(列・外部キー・CHECK/UNIQUE を含む完全な CREATE TABLE 文)、`SchemaSpec`
+- [x] `SCHEMA_SPECS: dict[int, SchemaSpec]` に版 1 の定義を書く
+- [x] `normalize_sql(sql) -> str`: SQLite の引用・エスケープ規則に沿ってトークン化し、文字列リテラル・引用識別子を保持する。コメントを除去し、それ以外のトークンの大小文字・空白を正規化する。単純な SQL 全体の小文字化や正規表現だけのコメント除去は行わない
+  - [x] アプリ自身が生成する版別 DDL の表記差に対応する範囲とし、任意の意味的に同等な DDL の受け入れは目的としない
+- [x] `inspect_schema(conn, version, specs=SCHEMA_SPECS) -> list[str]`: 不一致を日本語の理由一覧で返す(空なら合格)
+  - [x] テーブルの集合が一致する(`sqlite_` で始まる内部テーブルを除く)
+  - [x] 列の集合と各属性が一致する(`PRAGMA table_xinfo`)
+  - [x] 外部キーが一致する(`PRAGMA foreign_key_list`)
+  - [x] インデックス・トリガーの集合と定義が一致する(自動インデックスを除く。`PRAGMA index_list`・`index_xinfo`、`sqlite_master`)
+  - [x] テーブル・明示インデックス・トリガーの完全な `sqlite_master.sql` を版別の DDL と正規化後に比較し、CHECK/UNIQUE・式・トリガー本体の改変を拒否する。コメント内に残った断片や弱められた制約を存在の証明としない
+- [x] `check_migration_path(from_version, to_version, migrations) -> None`: 途中の版の SQL が欠けていれば `UnsupportedSchemaError`
+- [x] `create_schema(conn, ...)`: 1 トランザクションで DDL 適用 → 検査 → `PRAGMA user_version` 設定を行う
+- [x] `open_database(path, backup_dir, *, backup_timestamp: Callable[[], str], schema_version=..., min_supported=..., migrations=..., specs=...) -> sqlite3.Connection`
+  - [x] 上位層が `timeutil.local_timestamp_for_filename()` を利用した日時コールバックを渡す。戻り値は `YYYYMMDD_HHMMSS`。DB 層では現在時刻取得・タイムゾーン変換・`core.timeutil` の import を行わない
+  - [x] 接続前に `path.exists()` を確認する
+  - [x] ファイルがなければ新規作成する。失敗時は接続を閉じ、作成した DB と `-wal`・`-shm` を削除して例外を再送出する
+  - [x] 既存 DB で版数 > `schema_version` なら `SchemaTooNewError`
+  - [x] 版数 0、または版数 < `min_supported` なら `UnsupportedSchemaError`
+  - [x] その版の検査定義で検査し、不一致なら `UnsupportedSchemaError`
+  - [x] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `copy_database()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
+  - [x] 移行前バックアップは書き込みトランザクション外で `copy_database()` により保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
+  - [x] 失敗時は開いた接続を必ず閉じる
+- [x] `tests/test_migrations.py`(`tmp_path` 上の実ファイル DB)
+  - [x] 新規作成: `user_version = 1`、検査に合格、再接続後も永続化されている、WAL で動作する
+  - [x] 新規作成の途中失敗(壊れた DDL を注入)で、DDL・`user_version` が残らずファイルも削除される
+  - [x] 版数 0 の既存ファイル(空ファイルを含む)を `UnsupportedSchemaError` で拒否し、新規作成と区別する
+  - [x] 新版(`user_version = 2`)を `SchemaTooNewError` で拒否する
+  - [x] 同名テーブルで列・CHECK・UNIQUE・FK・インデックス・トリガーのいずれかが欠けた DB を拒否する(項目ごとにパラメータ化する)
+  - [x] 接頭辞の GLOB パターンを `'*[^A-Z0-9]*'` から `'*[^a-z0-9]*'` へ変更した DB、必須制約をコメント内にだけ残した DB、`OR 1` で制約を弱めた DB を拒否する
+  - [x] SQL 正規化がリテラル内の大小文字・空白・コメント記号・エスケープを保持し、リテラル外のコメント・表記差だけを正規化する
+  - [x] 試験用の v2(列追加の SQL・v2 の検査定義)を注入し、v1 → v2 の移行が成功し、`pre-migrate_v1_*.db` が作成される
+  - [x] 注入した日時がファイル名に使われる。固定日時と既存の同名バックアップで `MigrationError` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
+  - [x] 試験用の v2 で SQL を途中失敗させ、DDL・データ・`user_version` がロールバックされ、`MigrationError.backup_path` のバックアップが残る
+  - [x] 適用後の検査が不合格の場合もロールバックされる
+  - [x] 未対応の旧版(`min_supported = 2` を注入)と経路の欠落を拒否する
+  - [x] 依存ルール R2・R6 が成功し、DB 層に日時処理のための禁止 import・現在時刻取得がない
 
 #### H. CI・文書(1a の最後)
 
