@@ -118,31 +118,31 @@
 
 #### D. 起動シーケンス `app.py`
 
-- [ ] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
-- [ ] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
-- [ ] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数(`importlib.metadata.version("inventory-manager-mini")`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)を設定する
-- [ ] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
-- [ ] `main(paths: AppPaths | None = None) -> int`
-  - [ ] `QApplication.instance()` があれば再利用し、なければ生成する(アプリ名を設定)
-  - [ ] `paths` 未指定なら `resolve_paths()`。`ensure_dirs()` を実行する
-  - [ ] `SingleInstanceLock(paths.lock_path).try_acquire()` に失敗したら「既に起動しています」を表示して 0 を返す(DB・ログには触れない)
-  - [ ] `setup_logging()`・`install_excepthook()` を実行し、起動ログ(アプリ版・DB パス)を出力する
-  - [ ] `open_database(paths.db_path, paths.backup_dir, backup_timestamp=local_timestamp_for_filename)` で DB を開く
-  - [ ] `SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError` はエラーダイアログを表示して 1 を返す(`MigrationError.backup_path` があれば表示)。その他の例外はログ出力と汎用ダイアログの上で 1 を返す
-  - [ ] MainWindow を生成・表示し、`show_startup_notifications()` を呼んでから `exec()` する
-  - [ ] `finally` で DB 接続を閉じ、ロックを解放する
-- [ ] `__main__.py` は現状(`raise SystemExit(main())`)を維持する
-- [ ] `tests/test_app.py`(保存先はすべて `tmp_path`。`exec()` と `QMessageBox` は `monkeypatch` で差し替える)
-  - [ ] 正常起動で DB・ログファイルが作成され、MainWindow が表示され、終了後にロックが解放される
-  - [ ] ロックを別プロセスが保持中は「既に起動しています」を表示して 0 を返し、DB ファイルを作成しない
-  - [ ] 新版 DB(`user_version` を `SCHEMA_VERSION + 1` にした DB)で `SchemaTooNewError` のダイアログを表示して 1 を返し、ロックが解放される
-  - [ ] `user_version = 0` の既存 DB で `UnsupportedSchemaError` のダイアログを表示して 1 を返す
-  - [ ] `open_database` が `MigrationError(backup_path=...)` を送出した場合、バックアップのパスを表示する
-  - [ ] `setup_logging` を 2 回呼んでもハンドラが重複しない
-- [ ] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
-  - [ ] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
-  - [ ] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
-  - [ ] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
+- [x] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
+- [x] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
+- [x] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数(`importlib.metadata.version("inventory-manager-mini")`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)を設定する
+- [x] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
+- [x] `main(paths: AppPaths | None = None) -> int`
+  - [x] `QApplication.instance()` があれば再利用し、なければ生成する(アプリ名を設定)
+  - [x] `paths` 未指定なら `resolve_paths()`。`ensure_dirs()` を実行する
+  - [x] `SingleInstanceLock(paths.lock_path).try_acquire()` に失敗したら「既に起動しています」を表示して 0 を返す(DB・ログには触れない)
+  - [x] `setup_logging()`・`install_excepthook()` を実行し、起動ログ(アプリ版・DB パス)を出力する
+  - [x] `open_database(paths.db_path, paths.backup_dir, backup_timestamp=local_timestamp_for_filename)` で DB を開く
+  - [x] `SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError` はエラーダイアログを表示して 1 を返す(`MigrationError.backup_path` があれば表示)。その他の例外はログ出力と汎用ダイアログの上で 1 を返す
+  - [x] MainWindow を生成・表示し、`show_startup_notifications()` を呼んでから `exec()` する
+  - [x] `finally` で DB 接続を閉じ、ロックを解放する
+- [x] `__main__.py` は現状(`raise SystemExit(main())`)を維持する
+- [x] `tests/test_app.py`(保存先はすべて `tmp_path`。`exec()` と `QMessageBox` は `monkeypatch` で差し替える)
+  - [x] 正常起動で DB・ログファイルが作成され、MainWindow が表示され、終了後にロックが解放される
+  - [x] ロックを別プロセスが保持中は「既に起動しています」を表示して 0 を返し、DB ファイルを作成しない
+  - [x] 新版 DB(`user_version` を `SCHEMA_VERSION + 1` にした DB)で `SchemaTooNewError` のダイアログを表示して 1 を返し、ロックが解放される
+  - [x] `user_version = 0` の既存 DB で `UnsupportedSchemaError` のダイアログを表示して 1 を返す
+  - [x] `open_database` が `MigrationError(backup_path=...)` を送出した場合、バックアップのパスを表示する
+  - [x] `setup_logging` を 2 回呼んでもハンドラが重複しない
+- [x] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
+  - [x] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
+  - [x] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
+  - [x] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
 - [ ] 2a の PR を作成し、CI 成功後にマージする
 
 ### 2b. MainWindow・品目 CRUD(`feature/phase2-main-window`)
