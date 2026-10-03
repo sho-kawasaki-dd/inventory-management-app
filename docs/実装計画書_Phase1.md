@@ -136,15 +136,15 @@
 
 #### E. DB バックアップ基盤 `db/backup.py`
 
-- [ ] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
-  - [ ] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
-  - [ ] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
-  - [ ] Service・UI を import しない(依存ルールのテストで担保する)
-- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1a では `copy_database` の単体検証)
-  - [ ] バックアップに WAL 内の未チェックポイントの確定データが含まれる
-  - [ ] 保存先ファイルの排他的新規作成、既存同名ファイルの拒否(`FileExistsError`)、書き込み不可ディレクトリでのエラー
-  - [ ] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する(`RuntimeError`)
-  - [ ] 保存先の確保・コピー失敗時に自身が作成した未完成ファイルのみ削除し、既存ファイルを変更・削除しない
+- [x] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
+  - [x] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
+  - [x] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
+  - [x] Service・UI を import しない(依存ルールのテストで担保する)
+- [x] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1a では `copy_database` の単体検証)
+  - [x] バックアップに WAL 内の未チェックポイントの確定データが含まれる
+  - [x] 保存先ファイルの排他的新規作成、既存同名ファイルの拒否(`FileExistsError`)、書き込み不可ディレクトリでのエラー
+  - [x] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する(`RuntimeError`)
+  - [x] 保存先の確保・コピー失敗時に自身が作成した未完成ファイルのみ削除し、既存ファイルを変更・削除しない
 
 #### F. スキーマ `src/inventory_manager_mini/db/schema.sql`
 
