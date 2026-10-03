@@ -14,3 +14,4 @@ dist/
 *.db*
 .idea/
 .vscode/
+*.log

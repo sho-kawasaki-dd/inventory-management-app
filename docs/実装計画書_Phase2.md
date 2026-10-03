@@ -78,72 +78,72 @@
 
 #### A. パス解決 `config.py`
 
-- [ ] 定数 `DATA_DIR_ENV = "INVENTORY_MANAGER_MINI_DATA_DIR"` を定義する
-- [ ] `AppPaths`(`frozen=True, slots=True` の dataclass): `data_dir`、`db_path`(`inventory.db`)、`backup_dir`(`backups/`)、`lock_path`(`inventory.lock`)、`log_dir`、`log_path`(`app.log`)
-- [ ] `AppPaths.from_dirs(data_dir: Path, log_dir: Path) -> AppPaths`
-- [ ] `resolve_paths(env: Mapping[str, str] = os.environ) -> AppPaths`
-  - [ ] 環境変数が空でなければ `data_dir = Path(値)`、`log_dir = data_dir / "logs"`
-  - [ ] 未設定時は `user_data_dir(APP_NAME, appauthor=False, roaming=True)`・`user_log_dir(APP_NAME, appauthor=False)`
-- [ ] `ensure_dirs(paths: AppPaths) -> None`: `data_dir`・`backup_dir`・`log_dir` を作成する(`parents=True, exist_ok=True`)
-- [ ] 開発計画書 3.5 に環境変数による保存先の上書き(テスト・検証用)を追記する
-- [ ] `tests/test_config.py`
-  - [ ] 環境変数指定時の各パス
-  - [ ] 未指定時に `platformdirs` へ `appauthor=False`・`roaming=True` が渡ること(`monkeypatch` で関数を差し替え、実フォルダを作らない)
-  - [ ] 空文字の環境変数は未設定として扱うこと
-  - [ ] `ensure_dirs` が `tmp_path` 配下にディレクトリを作成すること
+- [x] 定数 `DATA_DIR_ENV = "INVENTORY_MANAGER_MINI_DATA_DIR"` を定義する
+- [x] `AppPaths`(`frozen=True, slots=True` の dataclass): `data_dir`、`db_path`(`inventory.db`)、`backup_dir`(`backups/`)、`lock_path`(`inventory.lock`)、`log_dir`、`log_path`(`app.log`)
+- [x] `AppPaths.from_dirs(data_dir: Path, log_dir: Path) -> AppPaths`
+- [x] `resolve_paths(env: Mapping[str, str] = os.environ) -> AppPaths`
+  - [x] 環境変数が空でなければ `data_dir = Path(値)`、`log_dir = data_dir / "logs"`
+  - [x] 未設定時は `user_data_dir(APP_NAME, appauthor=False, roaming=True)`・`user_log_dir(APP_NAME, appauthor=False)`
+- [x] `ensure_dirs(paths: AppPaths) -> None`: `data_dir`・`backup_dir`・`log_dir` を作成する(`parents=True, exist_ok=True`)
+- [x] 開発計画書 3.5 に環境変数による保存先の上書き(テスト・検証用)を追記する
+- [x] `tests/test_config.py`
+  - [x] 環境変数指定時の各パス
+  - [x] 未指定時に `platformdirs` へ `appauthor=False`・`roaming=True` が渡ること(`monkeypatch` で関数を差し替え、実フォルダを作らない)
+  - [x] 空文字の環境変数は未設定として扱うこと
+  - [x] `ensure_dirs` が `tmp_path` 配下にディレクトリを作成すること
 
 #### B. 多重起動防止 `ui/single_instance.py`
 
-- [ ] `SingleInstanceLock(path: Path)`: 内部で `QLockFile` を生成し `setStaleLockTime(0)` を設定する
-- [ ] `try_acquire(timeout_ms: int = 100) -> bool`: `tryLock(timeout_ms)` の結果を返す
-- [ ] `release() -> None`: 取得済みの場合のみ `unlock()` する(複数回呼んでも安全)
-- [ ] `tests/test_single_instance.py`(`tmp_path` 上のロックファイル)
-  - [ ] 取得 → 解放 → 再取得できる
-  - [ ] 別プロセス(`sys.executable` で起動するヘルパー。ロック取得後に標準出力へ通知して待機)が保持中は取得できない
-  - [ ] ヘルパーが正常終了(解放)した後は取得できる
-  - [ ] ヘルパーを強制終了(`kill`)した後は、PID の生存確認によりロックを回収して取得できる(`setStaleLockTime(0)` でも回収されることを Windows/Linux で確認。回収されない場合は本書の方針を見直す)
-  - [ ] ヘルパーには環境変数でロックパスを渡し、実データの保存先を使わない
+- [x] `SingleInstanceLock(path: Path)`: 内部で `QLockFile` を生成し `setStaleLockTime(0)` を設定する
+- [x] `try_acquire(timeout_ms: int = 100) -> bool`: `tryLock(timeout_ms)` の結果を返す
+- [x] `release() -> None`: 取得済みの場合のみ `unlock()` する(複数回呼んでも安全)
+- [x] `tests/test_single_instance.py`(`tmp_path` 上のロックファイル)
+  - [x] 取得 → 解放 → 再取得できる
+  - [x] 別プロセス(`sys.executable` で起動するヘルパー。ロック取得後に標準出力へ通知して待機)が保持中は取得できない
+  - [x] ヘルパーが正常終了(解放)した後は取得できる
+  - [x] ヘルパーを強制終了(`kill`)した後は、PID の生存確認によりロックを回収して取得できる(`setStaleLockTime(0)` でも回収されることを Windows/Linux で確認。回収されない場合は本書の方針を見直す)
+  - [x] ヘルパーには環境変数でロックパスを渡し、実データの保存先を使わない
 
 #### C. UI 共通部品
 
-- [ ] `ui/context.py`: `AppContext` dataclass(`inventory: InventoryService`、`master: MasterService`、`settings: SettingsService`、`data_bus: DataBus`、`db_path: Path`、`schema_version: int`、`app_version: str`)
-- [ ] `ui/signals.py`: `DataBus(QObject)` に `data_changed = Signal()`
-- [ ] `ui/error_handling.py`
-  - [ ] `show_domain_error(parent, error: DomainError)`: 警告ダイアログで `error.message` を表示する
-  - [ ] `show_unexpected_error(parent, error: BaseException)`: `logger.exception` 相当で記録し、「予期しないエラーが発生しました。詳細はログを確認してください。」とログの場所を表示する
-  - [ ] `run_guarded(parent, func) -> tuple[bool, T | None]`(`T` は `func` の戻り値の型): `func()` を実行し、成功時は `(True, 戻り値)`、`DomainError` と その他の例外は上記で表示して `(False, None)` を返す。成功して `None` を返す場合も `(True, None)` とし、呼び出し側は成功フラグで判定する
-  - [ ] `install_excepthook(log_path: Path)`: 未捕捉例外をログ出力し、`QApplication` があれば汎用ダイアログを表示する
-- [ ] `tests/test_error_handling.py`: `DomainError`・その他の例外それぞれの表示とログ出力(`QMessageBox` は `monkeypatch` で差し替える)
-  - [ ] `run_guarded` が値を返す成功・`None` を返す成功・`DomainError`・その他の例外を区別して返すこと
+- [x] `ui/context.py`: `AppContext` dataclass(`inventory: InventoryService`、`master: MasterService`、`settings: SettingsService`、`data_bus: DataBus`、`db_path: Path`、`schema_version: int`、`app_version: str`)
+- [x] `ui/signals.py`: `DataBus(QObject)` に `data_changed = Signal()`
+- [x] `ui/error_handling.py`
+  - [x] `show_domain_error(parent, error: DomainError)`: 警告ダイアログで `error.message` を表示する
+  - [x] `show_unexpected_error(parent, error: BaseException)`: `logger.exception` 相当で記録し、「予期しないエラーが発生しました。詳細はログを確認してください。」とログの場所を表示する
+  - [x] `run_guarded(parent, func) -> tuple[bool, T | None]`(`T` は `func` の戻り値の型): `func()` を実行し、成功時は `(True, 戻り値)`、`DomainError` と その他の例外は上記で表示して `(False, None)` を返す。成功して `None` を返す場合も `(True, None)` とし、呼び出し側は成功フラグで判定する
+  - [x] `install_excepthook(log_path: Path)`: 未捕捉例外をログ出力し、`QApplication` があれば汎用ダイアログを表示する
+- [x] `tests/test_error_handling.py`: `DomainError`・その他の例外それぞれの表示とログ出力(`QMessageBox` は `monkeypatch` で差し替える)
+  - [x] `run_guarded` が値を返す成功・`None` を返す成功・`DomainError`・その他の例外を区別して返すこと
 
 #### D. 起動シーケンス `app.py`
 
-- [ ] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
-- [ ] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
-- [ ] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数(`importlib.metadata.version("inventory-manager-mini")`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)を設定する
-- [ ] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
-- [ ] `main(paths: AppPaths | None = None) -> int`
-  - [ ] `QApplication.instance()` があれば再利用し、なければ生成する(アプリ名を設定)
-  - [ ] `paths` 未指定なら `resolve_paths()`。`ensure_dirs()` を実行する
-  - [ ] `SingleInstanceLock(paths.lock_path).try_acquire()` に失敗したら「既に起動しています」を表示して 0 を返す(DB・ログには触れない)
-  - [ ] `setup_logging()`・`install_excepthook()` を実行し、起動ログ(アプリ版・DB パス)を出力する
-  - [ ] `open_database(paths.db_path, paths.backup_dir, backup_timestamp=local_timestamp_for_filename)` で DB を開く
-  - [ ] `SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError` はエラーダイアログを表示して 1 を返す(`MigrationError.backup_path` があれば表示)。その他の例外はログ出力と汎用ダイアログの上で 1 を返す
-  - [ ] MainWindow を生成・表示し、`show_startup_notifications()` を呼んでから `exec()` する
-  - [ ] `finally` で DB 接続を閉じ、ロックを解放する
-- [ ] `__main__.py` は現状(`raise SystemExit(main())`)を維持する
-- [ ] `tests/test_app.py`(保存先はすべて `tmp_path`。`exec()` と `QMessageBox` は `monkeypatch` で差し替える)
-  - [ ] 正常起動で DB・ログファイルが作成され、MainWindow が表示され、終了後にロックが解放される
-  - [ ] ロックを別プロセスが保持中は「既に起動しています」を表示して 0 を返し、DB ファイルを作成しない
-  - [ ] 新版 DB(`user_version` を `SCHEMA_VERSION + 1` にした DB)で `SchemaTooNewError` のダイアログを表示して 1 を返し、ロックが解放される
-  - [ ] `user_version = 0` の既存 DB で `UnsupportedSchemaError` のダイアログを表示して 1 を返す
-  - [ ] `open_database` が `MigrationError(backup_path=...)` を送出した場合、バックアップのパスを表示する
-  - [ ] `setup_logging` を 2 回呼んでもハンドラが重複しない
-- [ ] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
-  - [ ] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
-  - [ ] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
-  - [ ] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
-- [ ] 2a の PR を作成し、CI 成功後にマージする
+- [x] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
+- [x] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
+- [x] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数(`importlib.metadata.version("inventory-manager-mini")`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)を設定する
+- [x] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
+- [x] `main(paths: AppPaths | None = None) -> int`
+  - [x] `QApplication.instance()` があれば再利用し、なければ生成する(アプリ名を設定)
+  - [x] `paths` 未指定なら `resolve_paths()`。`ensure_dirs()` を実行する
+  - [x] `SingleInstanceLock(paths.lock_path).try_acquire()` に失敗したら「既に起動しています」を表示して 0 を返す(DB・ログには触れない)
+  - [x] `setup_logging()`・`install_excepthook()` を実行し、起動ログ(アプリ版・DB パス)を出力する
+  - [x] `open_database(paths.db_path, paths.backup_dir, backup_timestamp=local_timestamp_for_filename)` で DB を開く
+  - [x] `SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError` はエラーダイアログを表示して 1 を返す(`MigrationError.backup_path` があれば表示)。その他の例外はログ出力と汎用ダイアログの上で 1 を返す
+  - [x] MainWindow を生成・表示し、`show_startup_notifications()` を呼んでから `exec()` する
+  - [x] `finally` で DB 接続を閉じ、ロックを解放する
+- [x] `__main__.py` は現状(`raise SystemExit(main())`)を維持する
+- [x] `tests/test_app.py`(保存先はすべて `tmp_path`。`exec()` と `QMessageBox` は `monkeypatch` で差し替える)
+  - [x] 正常起動で DB・ログファイルが作成され、MainWindow が表示され、終了後にロックが解放される
+  - [x] ロックを別プロセスが保持中は「既に起動しています」を表示して 0 を返し、DB ファイルを作成しない
+  - [x] 新版 DB(`user_version` を `SCHEMA_VERSION + 1` にした DB)で `SchemaTooNewError` のダイアログを表示して 1 を返し、ロックが解放される
+  - [x] `user_version = 0` の既存 DB で `UnsupportedSchemaError` のダイアログを表示して 1 を返す
+  - [x] `open_database` が `MigrationError(backup_path=...)` を送出した場合、バックアップのパスを表示する
+  - [x] `setup_logging` を 2 回呼んでもハンドラが重複しない
+- [x] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
+  - [x] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
+  - [x] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
+  - [x] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
+- [x] 2a の PR を作成し、CI 成功後にマージする
 
 ### 2b. MainWindow・品目 CRUD(`feature/phase2-main-window`)
 
