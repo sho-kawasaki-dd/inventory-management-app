@@ -89,14 +89,14 @@
 
 #### B. 業務例外 `core/errors.py`
 
-- [ ] `DomainError(Exception)` を基底とし、`message` 属性(日本語)を持たせる
-- [ ] 3.3 の 11 クラスを定義する: `ValidationError`、`NegativeStockError`、`InactiveItemError`、`InactiveMasterError`、`AlreadyReversedError`、`ReversalNotAllowedError`、`CategoryCycleError`、`PrefixLockedError`、`MasterInUseError`、`SchemaTooNewError`、`InvalidBackupError`
-- [ ] 追加の 3 クラスを定義する
-  - [ ] `UnsupportedSchemaError`: 既存 DB の版数 0、未対応の旧版、スキーマ不一致、マイグレーション経路の欠落
-  - [ ] `MigrationError`: マイグレーション失敗。`backup_path: Path | None` を保持する
-  - [ ] `RestoreError`: 復元の失敗。`stage`(`"pre_backup"` / `"overwrite"` / `"recovery"`)、`recovered: bool`、`backup_path: Path | None` を保持する
-- [ ] `InvalidBackupError` は不合格理由の一覧 `reasons: tuple[str, ...]` を保持する
-- [ ] 開発計画書 3.3 の表に追加の 3 クラスを追記する
+- [x] `DomainError(Exception)` を基底とし、`message` 属性(日本語)を持たせる
+- [x] 3.3 の 11 クラスを定義する: `ValidationError`、`NegativeStockError`、`InactiveItemError`、`InactiveMasterError`、`AlreadyReversedError`、`ReversalNotAllowedError`、`CategoryCycleError`、`PrefixLockedError`、`MasterInUseError`、`SchemaTooNewError`、`InvalidBackupError`
+- [x] 追加の 3 クラスを定義する
+  - [x] `UnsupportedSchemaError`: 既存 DB の版数 0、未対応の旧版、スキーマ不一致、マイグレーション経路の欠落
+  - [x] `MigrationError`: マイグレーション失敗。`backup_path: Path | None` を保持する
+  - [x] `RestoreError`: 復元の失敗。`stage`(`"pre_backup"` / `"overwrite"` / `"recovery"`)、`recovered: bool`、`backup_path: Path | None` を保持する
+- [x] `InvalidBackupError` は不合格理由の一覧 `reasons: tuple[str, ...]` を保持する
+- [x] 開発計画書 3.3 の表に追加の 3 クラスを追記する
 
 #### C. モデル `core/models.py`
 
