@@ -67,25 +67,25 @@
 
 #### A. 時刻ユーティリティ `core/timeutil.py`
 
-- [ ] 定数 `DB_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"` を定義する
-- [ ] `utc_now() -> datetime`: UTC の tz 付き現在時刻を返す。Service の既定 `clock` に使い、現在時刻の取得を集約する
-- [ ] `utc_now_str(now: datetime | None = None) -> str`: `now` は tz 付きのみ許可し(naive は `ValueError`)、UTC に変換して DB 形式で返す。`None` なら `utc_now()` を使う
-- [ ] `parse_utc(utc_str) -> datetime`: DB 形式を UTC の tz 付き `datetime` に変換する(形式不正は `ValueError`)
-- [ ] `to_local(utc_str, tz=None)`: tz 付きローカル `datetime` を返す。`tz=None` は OS のローカルタイムゾーン(`astimezone()`)
-- [ ] `format_local(utc_str, tz=None) -> str`: ローカルの `'YYYY-MM-DD HH:MM:SS'` を返す
-- [ ] `local_date(utc_str, tz=None) -> date`
-- [ ] `local_range_to_utc(start: date, end: date, tz=None) -> tuple[str, str]`: ローカル暦の `[start 00:00, end 00:00)` を UTC 文字列の組に変換する(`start >= end` は `ValueError`)
-  - [ ] `tz=None` は開始日・終了日から作った naive なローカル午前 0 時をそれぞれ UTC に変換する。現在時点の固定オフセットを使い回さず、各境界日の OS の DST 規則を適用する
-- [ ] `local_today(now=None, tz=None) -> date`: 現在年度の既定値の算出に使う
-- [ ] `local_timestamp_for_filename(now=None, tz=None) -> str`: `YYYYMMDD_HHMMSS`(ローカル時刻。バックアップのファイル名用)
-- [ ] `tests/test_timeutil.py`
-  - [ ] UTC ⇔ ローカルの往復(`ZoneInfo("Asia/Tokyo")`)
-  - [ ] 日付またぎ: UTC `2026-03-31 15:00:00` が JST `2026-04-01` になる
-  - [ ] サマータイム開始月・終了月の月境界(`America/New_York`、`Europe/London`)。開始・終了を含む月の区間長が 1 時間短い/長いことを確認する
-  - [ ] 月初・年度初の境界、`start >= end` の拒否、naive な `now` の拒否、形式不正な文字列の拒否
-  - [ ] `utc_now()` が UTC の tz 付き `datetime` を返し、`utc_now_str()` がその取得関数を利用する
-  - [ ] `tz=None` で OS ローカルの表示・期間境界が正しく変換されることを Windows/Linux で確認する
-  - [ ] Linux の隔離サブプロセスで `TZ` と `time.tzset()` を使い、`tz=None` でも DST 開始月・終了月の UTC 境界と区間長が正しいことを確認する。親プロセスのタイムゾーン設定は変更しない
+- [x] 定数 `DB_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"` を定義する
+- [x] `utc_now() -> datetime`: UTC の tz 付き現在時刻を返す。Service の既定 `clock` に使い、現在時刻の取得を集約する
+- [x] `utc_now_str(now: datetime | None = None) -> str`: `now` は tz 付きのみ許可し(naive は `ValueError`)、UTC に変換して DB 形式で返す。`None` なら `utc_now()` を使う
+- [x] `parse_utc(utc_str) -> datetime`: DB 形式を UTC の tz 付き `datetime` に変換する(形式不正は `ValueError`)
+- [x] `to_local(utc_str, tz=None)`: tz 付きローカル `datetime` を返す。`tz=None` は OS のローカルタイムゾーン(`astimezone()`)
+- [x] `format_local(utc_str, tz=None) -> str`: ローカルの `'YYYY-MM-DD HH:MM:SS'` を返す
+- [x] `local_date(utc_str, tz=None) -> date`
+- [x] `local_range_to_utc(start: date, end: date, tz=None) -> tuple[str, str]`: ローカル暦の `[start 00:00, end 00:00)` を UTC 文字列の組に変換する(`start >= end` は `ValueError`)
+  - [x] `tz=None` は開始日・終了日から作った naive なローカル午前 0 時をそれぞれ UTC に変換する。現在時点の固定オフセットを使い回さず、各境界日の OS の DST 規則を適用する
+- [x] `local_today(now=None, tz=None) -> date`: 現在年度の既定値の算出に使う
+- [x] `local_timestamp_for_filename(now=None, tz=None) -> str`: `YYYYMMDD_HHMMSS`(ローカル時刻。バックアップのファイル名用)
+- [x] `tests/test_timeutil.py`
+  - [x] UTC ⇔ ローカルの往復(`ZoneInfo("Asia/Tokyo")`)
+  - [x] 日付またぎ: UTC `2026-03-31 15:00:00` が JST `2026-04-01` になる
+  - [x] サマータイム開始月・終了月の月境界(`America/New_York`、`Europe/London`)。開始・終了を含む月の区間長が 1 時間短い/長いことを確認する
+  - [x] 月初・年度初の境界、`start >= end` の拒否、naive な `now` の拒否、形式不正な文字列の拒否
+  - [x] `utc_now()` が UTC の tz 付き `datetime` を返し、`utc_now_str()` がその取得関数を利用する
+  - [x] `tz=None` で OS ローカルの表示・期間境界が正しく変換されることを Windows/Linux で確認する
+  - [x] Linux の隔離サブプロセスで `TZ` と `time.tzset()` を使い、`tz=None` でも DST 開始月・終了月の UTC 境界と区間長が正しいことを確認する。親プロセスのタイムゾーン設定は変更しない
 
 #### B. 業務例外 `core/errors.py`
 
