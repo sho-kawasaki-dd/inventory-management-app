@@ -160,14 +160,14 @@
 
 #### F. 品目一覧モデル `ui/models/item_table_model.py`
 
-- [ ] `ItemTableModel(QAbstractTableModel)`: `set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替える
-- [ ] 列: 管理番号、品名、メーカー型番、クライアント、発注主体、カテゴリ(フルパス)、保管場所、数量、単位、閾値、推奨発注数、参考価格、仕入先、最終購入日、状態(有効/廃止)。用途は表示しない
-- [ ] `DisplayRole`: 数値は 3 桁区切り、参考価格は「1,234円」、最終購入日は `timeutil.local_date` のローカル日付、`None` は空欄
-- [ ] `TextAlignmentRole`: 数値列(数量・閾値・推奨発注数・参考価格)は右寄せ
-- [ ] `ForegroundRole`: 廃止行はグレー
-- [ ] `UserRole`: ソート用の生の値。`row_at(row) -> ItemRow`、`row_of(item_id) -> int | None`
-- [ ] `ItemSortProxyModel(QSortFilterProxyModel)`: `sortRole = UserRole`、`None` を昇順で末尾にする `lessThan`
-- [ ] `tests/test_item_table_model.py`: 列見出し、表示書式、右寄せ、廃止行の色、ソート(数値・文字列・`None`)、`row_of`
+- [x] `ItemTableModel(QAbstractTableModel)`: `set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替える
+- [x] 列: 管理番号、品名、メーカー型番、クライアント、発注主体、カテゴリ(フルパス)、保管場所、数量、単位、閾値、推奨発注数、参考価格、仕入先、最終購入日、状態(有効/廃止)。用途は表示しない
+- [x] `DisplayRole`: 数値は 3 桁区切り、参考価格は「1,234円」、最終購入日は `timeutil.local_date` のローカル日付、`None` は空欄
+- [x] `TextAlignmentRole`: 数値列(数量・閾値・推奨発注数・参考価格)は右寄せ
+- [x] `ForegroundRole`: 廃止行はグレー
+- [x] `UserRole`: ソート用の生の値。`row_at(row) -> ItemRow`、`row_of(item_id) -> int | None`
+- [x] `ItemSortProxyModel(QSortFilterProxyModel)`: `sortRole = UserRole`、`None` を昇順で末尾にする `lessThan`
+- [x] `tests/test_item_table_model.py`: 列見出し、表示書式、右寄せ、廃止行の色、ソート(数値・文字列・`None`)、`row_of`
 
 #### G. MainWindow `ui/main_window.py`
 
