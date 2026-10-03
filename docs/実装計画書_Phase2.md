@@ -10,7 +10,7 @@
 ## 1. 目的
 
 - 起動シーケンス(多重起動チェック → ログ初期化 → DB オープン・マイグレーション → MainWindow 表示)を実装し、アプリとして起動・終了できる状態にする。
-- Phase 1 の Service API を UI から呼び出し、品目とマスタの登録・編集・廃止(無効化)・削除を画面から行えるようにする。
+- Phase 1 の Service API を UI から呼び出し、品目の登録・編集・廃止・再有効化、および各マスタの登録・編集・条件付き物理削除を画面から行えるようにする。クライアント・発注主体・担当者は無効化・再有効化も可能とし、品目の物理削除は行わない。
 - 品目 5,000 件規模で一覧表示・検索・絞り込みの性能目標を満たすことを計測で確認する。
 - PyInstaller の試験ビルドで、Qt プラグイン(QtCharts・印刷サポート)の同梱を早期に確認する(開発計画書 10 章)。
 
@@ -19,12 +19,12 @@
 ### 2.1 満たすべき仕様
 
 - 開発計画書 3.1(層構成・依存方向)、3.2(`app.py`・`config.py`・`ui/single_instance.py`・`ui/main_window.py`)、3.5(ファイル配置)、5.1(品目)、5.4(マスタ管理)、6 章(Phase 2 対象の画面)、7.1(多重起動防止)、7.3(ログ)、7.5(性能目標のうち一覧・検索・絞り込み)に従う。
-- 完了条件(開発計画書 9 章): 品目とマスタの登録・編集・廃止・削除が UI から可能。性能目標(一覧・絞り込み)を達成。
+- 完了条件(開発計画書 9 章): 品目の登録・編集・廃止・再有効化、および各マスタの登録・編集・条件付き物理削除が UI から可能。無効化・再有効化はクライアント・発注主体・担当者のみとし、品目の物理削除は行わない。性能目標(一覧・検索・絞り込み・ソート)を達成。
 - 開発計画書 8 章の `ui/` 観点のうち Phase 2 対象を自動テストで検証する。
   - 主要画面(MainWindow・ItemDialog・MasterDialog)の起動スモーク
   - 初期数量の記録担当者の必須制御
-  - 無効化済みクライアント・発注主体を維持した品目編集
-  - 発注主体マスタ 0 件時の ItemDialog(OK 不活性)
+  - 無効化済みクライアント・発注主体を維持した品目編集(有効マスタが 0 件の場合も含む)
+  - 新規 ItemDialog で有効な発注主体マスタが 0 件の場合の OK 不活性
   - ItemDialog への発注主体表示、単位の表示のみ
 - 多重起動防止の観点(同時起動の拒否(DB を開く前)、正常終了後の再取得、異常終了後のロック回収)を別プロセス + `tmp_path` で検証する。
 - 次のコマンドがローカル(Windows)と CI(Windows/Linux)で成功する。
@@ -40,24 +40,26 @@
 
 | 項目 | 決定 |
 | --- | --- |
-| PR 分割 | 2a(起動基盤: `config.py`・ログ・多重起動防止・`app.py`・UI 共通部品)→ 2b(MainWindow・一覧モデル・カテゴリのツリーコンボ・ItemDialog)→ 2c(MasterDialog・性能計測・試験ビルド・README)の 3 PR。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
+| PR 分割 | 2a(起動基盤: `config.py`・ログ・多重起動防止・`app.py`・UI 共通部品・最小 MainWindow・既存起動テストの改修)→ 2b(MainWindow の一覧・操作機能の追加、一覧モデル・カテゴリのツリーコンボ・ItemDialog)→ 2c(MasterDialog・性能計測・試験ビルド・README)の 3 PR。2a で起動・終了できる状態とし、後続 PR の未実装モジュールには依存しない。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
 | 後続フェーズのメニュー | 6.2 のメニュー・ツールバーのうち、Phase 2 で実装する項目のみ作成する。在庫操作・履歴・CSV・印刷・バックアップ・復元・アラートパネル・ダッシュボード・設定・販売ページを開く等は、各フェーズで追加する(不活性の仮項目は置かない) |
 | 起動時の低在庫通知 | Phase 4 で実装する。Phase 2 では `app.py` の起動シーケンスで MainWindow 表示後に呼ぶ関数 `show_startup_notifications()` を用意し、処理は空とする |
 | 一覧のダブルクリック | Phase 2 では何もしない。Phase 3 で履歴ビューに接続する |
 | 保存先の差し替え | 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` が設定されていれば、DB・バックアップ・ロックをその直下、ログを `logs/` 配下に置く。未設定時は `platformdirs` で解決する。`main(paths: AppPaths \| None = None)` でも注入できる。テスト・別プロセステストはこれらで `tmp_path` を指定する |
 | UI への依存注入 | `ui/` は `sqlite3`・`db/` を import できないため、`app.py` が接続と Service 群を構築し、`ui/context.py` の `AppContext` に格納して MainWindow に渡す。スキーマ版数・DB パス・アプリ版数も `AppContext` 経由で渡す |
 | データ変更通知 | `ui/signals.py` の `DataBus(QObject)` に `data_changed = Signal()` を 1 つ置く。Service 呼び出しが成功した画面が発火し、MainWindow がマスタ選択肢と一覧を再読込する(選択中の品目 ID を維持)。Phase 4 の低在庫再判定もこの通知に接続する |
-| 検索・絞り込み | 絞り込みは `InventoryService.list_items(ItemFilter)` の SQL で行い、`QSortFilterProxyModel` はソートのみを担う。検索欄は入力から 300ms のデバウンス後に再検索する。その他の絞り込み条件は変更時に即時再検索する |
+| 検索・絞り込み | 絞り込みは `InventoryService.list_items(ItemFilter)` の SQL で行い、`QSortFilterProxyModel` はソートのみを担う。検索欄は最終入力から 300ms のデバウンス後に再検索する。検索処理開始から再描画完了まで 0.3 秒以内、最終入力から再描画完了まで 0.6 秒以内とする。その他の絞り込み条件は変更時に即時再検索し、条件変更から再描画完了まで 0.3 秒以内とする |
 | ソート | 一覧モデルは `Qt.ItemDataRole.UserRole` で生の値(数値・文字列・`None`)を返し、プロキシの `sortRole` に設定する。`None` は昇順で末尾とする |
 | 行の表示 | 廃止行はグレー表示(`ForegroundRole`)。低在庫行の着色は Phase 4 |
 | カテゴリ選択 UI | `QComboBox` のポップアップを `QTreeView` にしたツリーコンボ `CategoryComboBox` を作成し、MainWindow の絞り込み(先頭「すべて」)、ItemDialog(先頭項目なし)、カテゴリの親変更(先頭「(最上位)」)で共用する |
 | 任意の数値入力 | 参考価格(0 以上)・推奨発注数(1 以上)は `QLineEdit` + `QIntValidator` とし、空欄を `None` とする(参考価格 0 円と未登録を区別するため)。初期数量・閾値は `QSpinBox`(0 以上) |
 | URL 検証 | ItemDialog は入力変更ごとに `core.services.validate_purchase_url` を呼び、`ValidationError` ならエラー表示と OK 不活性とする |
 | 例外の表示 | `ui/error_handling.py` に集約する。`DomainError` は `message` を警告ダイアログで表示し、ダイアログは開いたままにする。それ以外の例外は `logger.exception` で記録して汎用エラーダイアログを表示する。未捕捉例外は `sys.excepthook` で同様に扱う |
+| Service の成功判定 | `run_guarded` は成功フラグと戻り値の組を返す。成功して `None` を返す処理と失敗を区別し、成功時のみ変更通知・再読込・ダイアログ終了を行う |
+| マスタ変更後の ItemDialog | ItemDialog を閉じてから MainWindow のマスタメニューで MasterDialog を開き、変更後に ItemDialog を開き直す。選択肢は開くたびに再取得する。開いている ItemDialog の選択肢の自動更新や、ItemDialog からマスタ管理を開く導線は Phase 2 対象外 |
 | 起動時のエラー | 多重起動は「既に起動しています」を表示して終了コード 0。`SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError`(自動バックアップのパスがあれば表示)はエラーダイアログを表示して終了コード 1。その他の例外はログ出力・汎用ダイアログ表示の上で終了コード 1。いずれもロックを解放してから終了する |
 | 終了処理 | `QApplication.exec()` の終了後(例外時を含む)に DB 接続を閉じ、ロックを解放する(`try`/`finally`) |
 | ログ | `logging` のルートロガーに `RotatingFileHandler`(`app.log`、1 MB × 5 世代、UTF-8、INFO 以上)を設定する。時刻は `logging` の既定(OS ローカル) |
-| 性能計測 | `tests/test_performance.py` に計測テストを置き、`--run-perf` オプション指定時のみ実行する(既定はスキップ。CI では実行しない)。結果は本書 4 章に記録する |
+| 性能計測 | `tests/test_performance.py` に計測テストを置き、`--run-perf` オプション指定時のみ実行する(既定はスキップ。CI では実行しない)。起動は別プロセス起動要求から一覧の初回描画完了まで、検索・絞り込み・ソートは更新後の一覧の再描画完了までを測る。モデル更新だけで計測を終了しない。結果は本書 4 章に記録する |
 | 試験ビルド | 手動でローカル(Windows)ビルドし、成果物はコミットしない。`--specpath build` で spec を `build/` に出力する。正式な spec・リリースワークフローは Phase 8 |
 | バージョン情報 | ヘルプ → バージョン情報で、アプリ版(`importlib.metadata.version`)・スキーマ版・DB パスを表示する |
 
@@ -109,12 +111,14 @@
 - [ ] `ui/error_handling.py`
   - [ ] `show_domain_error(parent, error: DomainError)`: 警告ダイアログで `error.message` を表示する
   - [ ] `show_unexpected_error(parent, error: BaseException)`: `logger.exception` 相当で記録し、「予期しないエラーが発生しました。詳細はログを確認してください。」とログの場所を表示する
-  - [ ] `run_guarded(parent, func) -> 戻り値 | None`: `func()` を実行し、`DomainError` と その他の例外を上記で表示して `None` を返す
+  - [ ] `run_guarded(parent, func) -> tuple[bool, T | None]`(`T` は `func` の戻り値の型): `func()` を実行し、成功時は `(True, 戻り値)`、`DomainError` と その他の例外は上記で表示して `(False, None)` を返す。成功して `None` を返す場合も `(True, None)` とし、呼び出し側は成功フラグで判定する
   - [ ] `install_excepthook(log_path: Path)`: 未捕捉例外をログ出力し、`QApplication` があれば汎用ダイアログを表示する
 - [ ] `tests/test_error_handling.py`: `DomainError`・その他の例外それぞれの表示とログ出力(`QMessageBox` は `monkeypatch` で差し替える)
+  - [ ] `run_guarded` が値を返す成功・`None` を返す成功・`DomainError`・その他の例外を区別して返すこと
 
 #### D. 起動シーケンス `app.py`
 
+- [ ] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
 - [ ] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
 - [ ] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数を設定する
 - [ ] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
@@ -135,6 +139,10 @@
   - [ ] `user_version = 0` の既存 DB で `UnsupportedSchemaError` のダイアログを表示して 1 を返す
   - [ ] `open_database` が `MigrationError(backup_path=...)` を送出した場合、バックアップのパスを表示する
   - [ ] `setup_logging` を 2 回呼んでもハンドラが重複しない
+- [ ] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
+  - [ ] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
+  - [ ] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパーで `QApplication` と終了用 `QTimer` を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
+  - [ ] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
 - [ ] 2a の PR を作成し、CI 成功後にマージする
 
 ### 2b. MainWindow・品目 CRUD(`feature/phase2-main-window`)
@@ -163,7 +171,7 @@
 
 #### G. MainWindow `ui/main_window.py`
 
-- [ ] `MainWindow(context: AppContext)`: タイトル「Inventory Manager mini」、最小サイズは 1366×768 の画面に収まる値
+- [ ] 2a の `MainWindow(context: AppContext)` を拡張し、以下の一覧・操作機能を追加する。タイトルと画面内に収まるサイズの要件は維持する
 - [ ] 絞り込み欄
   - [ ] 検索欄(プレースホルダ「品名・管理番号・メーカー型番」)。`QTimer`(単発、300ms)でデバウンスして再検索する
   - [ ] クライアント・発注主体(先頭「すべて」。無効化済みも「(無効)」付きで含める)、カテゴリ(`CategoryComboBox`、先頭「すべて」)、保管場所(先頭「すべて」)
@@ -180,8 +188,8 @@
 - [ ] 「編集」「廃止/再有効化」は品目選択時のみ活性。選択品目の状態に応じてラベルを「廃止」/「再有効化」に切り替える
 - [ ] 廃止は確認ダイアログ(在庫が残っている場合は数量も表示)の上で `deactivate_item`、再有効化は確認なしで `reactivate_item`。成功時に `data_changed` を発火する
 - [ ] `data_changed` 受信時: マスタ選択肢(選択中の値を維持)と一覧を再読込し、選択中の品目 ID の行を再選択する。絞り込みで消えた場合は選択解除
-- [ ] Service 呼び出しは `run_guarded` を経由する
-- [ ] `app.py` から MainWindow を生成するよう接続する
+- [ ] Service 呼び出しは `run_guarded` を経由し、成功フラグで成否を判定する
+- [ ] 2a で接続済みの `app.py` から、機能追加後の MainWindow が起動することを確認する
 - [ ] `tests/test_main_window.py`(`seeded_conn` 相当の DB から `AppContext` を構築)
   - [ ] 起動スモーク、初期表示で廃止品目が非表示
   - [ ] 検索のデバウンス(`qtbot.waitUntil`)と、品名・管理番号・メーカー型番の部分一致
@@ -201,19 +209,22 @@
   - [ ] 担当者: 有効なもののみ
 - [ ] 入力検証と OK の活性制御(エラー内容はダイアログ下部に表示)
   - [ ] クライアント・品名(前後空白除去後)・カテゴリ・発注主体が必須
-  - [ ] 発注主体マスタ(有効)が 0 件なら発注主体未選択とし、「先に発注主体マスタを登録してください」を表示する。クライアント・カテゴリが 0 件の場合も同様に案内する
+  - [ ] 新規登録時、有効な発注主体マスタが 0 件なら発注主体未選択とし、「先に発注主体マスタを登録してください」を表示して OK を不活性にする。有効なクライアントが 0 件、またはカテゴリが 0 件の場合も同様に案内する
+  - [ ] 編集時は有効なクライアント・発注主体が 0 件でも、現在の無効化済みマスタを維持する保存を許可する。変更先は有効なもののみとする
   - [ ] 初期数量が 1 以上なら担当者必須。0 なら担当者欄を不活性化し、選択を解除する
   - [ ] 販売ページ URL を `validate_purchase_url` で検証する
   - [ ] 参考価格・推奨発注数の範囲(`QIntValidator`)と空欄 = `None`
-- [ ] OK 押下: 新規は `NewItem` で `create_item`、編集は `ItemUpdate` で `update_item`(空欄の任意文字列は `None`)。`DomainError` はダイアログを閉じずに表示する。成功時に `data_changed` を発火して `accept()` する
+- [ ] OK 押下: 新規は `NewItem` で `create_item`、編集は `ItemUpdate` で `update_item`(空欄の任意文字列は `None`)。`run_guarded` の成功フラグで判定し、成功時のみ `data_changed` を発火して `accept()` する。`DomainError` はダイアログを閉じずに表示する
 - [ ] 最終購入日は `timeutil.local_date` で表示し、`get_purchase_info` の結果がなければ「-」
 - [ ] MainWindow の新規・編集から開く。編集後は当該品目を選択状態にする
+- [ ] マスタ選択肢はダイアログを開くたびに再取得する。マスタを変更する場合は ItemDialog を閉じ、MasterDialog で変更後に ItemDialog を開き直す。開いている ItemDialog の選択肢は自動更新しない
 - [ ] `tests/test_item_dialog.py`
   - [ ] 新規・編集の起動スモーク。単位が「個」の表示のみで入力欄がないこと
   - [ ] 必須未入力・URL 不正(`javascript:`、ホストなし)で OK 不活性とエラー表示
   - [ ] 初期数量 0 で担当者欄不活性、1 以上で担当者未選択なら OK 不活性、選択後に活性。登録後に初期数量の履歴と担当者が記録される
-  - [ ] 発注主体マスタ 0 件で OK 不活性と案内表示
+  - [ ] 新規登録時、有効な発注主体マスタ 0 件で OK 不活性と案内表示。有効なクライアント 0 件、またはカテゴリ 0 件でも同様の案内表示
   - [ ] 無効化済みクライアント・発注主体を維持した編集が成功し、選択肢に他の無効化済みマスタが出ないこと
+  - [ ] 有効なクライアント・発注主体がそれぞれ 0 件の場合も、現在の無効化済みマスタを維持した編集が成功すること
   - [ ] 発注主体と販売ページ URL の表示、編集時の最終購入日・購入ロット数の表示
   - [ ] 参考価格 0 と空欄(`None`)の区別
   - [ ] Service の `DomainError`(例: 送信直前に担当者が無効化された)でダイアログが閉じず、メッセージが表示される
@@ -238,7 +249,7 @@
   - [ ] 接頭辞変更は `next_seq > 1` で不活性(「採番済みのため変更できません」)
   - [ ] 削除は `can_delete_category` が真の場合のみ活性
 - [ ] 保管場所タブ: 追加、名称変更、削除(`can_delete_location` で活性制御)
-- [ ] 各操作の成功時に `data_changed` を発火し、タブの一覧を再読込する(選択を維持)。Service 呼び出しは `run_guarded` を経由する
+- [ ] 各操作の成功時に `data_changed` を発火し、タブの一覧を再読込する(選択を維持)。Service 呼び出しは `run_guarded` を経由し、削除など戻り値が `None` の操作も成功フラグで判定する。失敗時には変更通知を発火しない
 - [ ] MainWindow のマスタメニュー 5 項目を追加し、該当タブで MasterDialog を開く
 - [ ] `tests/test_master_dialog.py`
   - [ ] 起動スモークと初期タブ
@@ -246,29 +257,33 @@
   - [ ] カテゴリの追加・子追加・親変更(循環はエラー表示)・接頭辞変更(採番済みで不活性)・削除(採番済み・子あり・使用中で不活性)
   - [ ] 保管場所の追加・名称変更・削除(使用中で不活性)
   - [ ] マスタ変更後に MainWindow の絞り込み選択肢と一覧の名称が更新される
-  - [ ] 発注主体 0 件 → MasterDialog で登録 → ItemDialog の OK が活性になる流れ
+  - [ ] 削除成功時には `data_changed` が発火して一覧が更新され、削除失敗時には発火しないこと
+  - [ ] 有効な発注主体 0 件で ItemDialog の OK が不活性 → ItemDialog を閉じる → MainWindow から MasterDialog を開いて発注主体を登録し、閉じる → ItemDialog を開き直す → 登録した発注主体が選択肢に表示され、他の必須項目を満たすと OK が活性になる流れ
 
 #### J. 性能計測 `tests/test_performance.py`
 
 - [ ] `tests/conftest.py` に `--run-perf` オプションと `perf` マーカーを追加し、未指定時は `perf` テストをスキップする(`pyproject.toml` の `markers` に登録)
-- [ ] `scripts/generate_dummy_data.py` の `generate_database()` で、`tmp_path` 上に品目 5,000・履歴 100,000 件の DB を生成するモジュールスコープのフィクスチャ
-- [ ] 起動から一覧表示: `open_database` → `AppContext` 構築 → MainWindow 生成・表示 → 一覧の初回描画完了までが 3 秒以内
-- [ ] 検索・絞り込み: 検索文字列、クライアント、カテゴリ(子孫含む)、低在庫のみ、廃止品目を含むの各変更で、`list_items` とモデル更新の合計が 0.3 秒以内(デバウンス時間は除く)
-- [ ] 一覧のソート(数量列・品名列)が 0.3 秒以内
+- [ ] モジュールスコープのフィクスチャで `tmp_path_factory.mktemp()` により一時ディレクトリを作成し、`scripts/generate_dummy_data.py` の `generate_database()` で品目 5,000・履歴 100,000 件の DB を生成する。関数スコープの `tmp_path` には依存せず、DB 生成時間は計測対象外とする
+- [ ] 起動から一覧表示: 一時保存先を環境変数で渡し、親プロセスが別プロセスの起動を要求する直前から、初期データを設定した一覧の初回描画完了通知を受信するまでが 3 秒以内。Python・Qt の読み込み、`QApplication` 初期化・ロック・ログ・DB オープン・AppContext 構築・MainWindow 表示を含む。テスト用ラッパーは描画完了を標準出力へ通知して正常終了し、親は `timeout` を設定して子プロセスを回収する
+- [ ] 検索: 検索処理開始から再描画完了までが 0.3 秒以内、最終入力から再描画完了までが 300ms のデバウンスを含め 0.6 秒以内。それぞれを計測・検証する
+- [ ] その他の絞り込み: クライアント・発注主体・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含むの各条件変更から再描画完了までが 0.3 秒以内
+- [ ] 一覧のソート(数量列・品名列): ソート条件変更から再描画完了までが 0.3 秒以内
+- [ ] 計測の終了条件は、対象のモデル更新後の `QTableView` の viewport の描画完了とする。`show()`・モデル更新・ソート処理の終了だけでは計測を終了しない
 - [ ] 計測値を出力し、ローカル(Windows)で実行して本書 4.1 に記録する
 - [ ] 未達の場合は `ItemRepository.list` の SQL(最終購入日の相関サブクエリ等)・インデックスを見直し、スキーマ変更が必要ならマイグレーション規約に従う
 
 #### K. 試験ビルド(手動)
 
-- [ ] `uv run pyinstaller --noconfirm --onedir --windowed --name inventory-manager-mini --specpath build --hidden-import PySide6.QtCharts --hidden-import PySide6.QtPrintSupport src/inventory_manager_mini/__main__.py` を実行する
+- [ ] `uv run pyinstaller --noconfirm --onedir --windowed --name inventory-manager-mini --specpath build --hidden-import PySide6.QtCharts --hidden-import PySide6.QtPrintSupport --collect-data inventory_manager_mini.db --copy-metadata inventory-manager-mini src/inventory_manager_mini/__main__.py` を実行する
 - [ ] `dist/inventory-manager-mini/` に QtCharts の DLL と印刷サポートのプラグイン(`printsupport`)が含まれることを確認する
-- [ ] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で一時フォルダを指定して exe を起動し、DB 作成・品目登録・多重起動拒否を確認する
+- [ ] DB 初期化用の `inventory_manager_mini/db/schema.sql` とアプリ版数取得用の配布メタデータ(`inventory-manager-mini` の dist-info)が同梱されていることを確認する
+- [ ] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で空の一時フォルダを指定して exe を起動し、新規 DB 作成・品目登録・多重起動拒否・バージョン情報(アプリ版・スキーマ版・DB パス)の表示を確認する
 - [ ] 結果(PyInstaller 版・問題点・対処)を本書 4.2 に記録する。成果物(`build/`・`dist/`)はコミットしない
 
 #### L. ドキュメント・仕上げ
 
 - [ ] README に起動手順(Windows/Linux)、環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR`、性能テストの実行方法(`uv run pytest --run-perf tests/test_performance.py`)を追記する
-- [ ] 手動確認(Windows): 一時フォルダを指定して起動し、品目・全マスタの登録・編集・廃止(無効化)・削除、二重起動の拒否、1366×768 での全ダイアログの表示を確認する
+- [ ] 手動確認(Windows): 一時フォルダを指定して起動し、品目の登録・編集・廃止・再有効化、全マスタの登録・編集・条件付き物理削除、クライアント・発注主体・担当者の無効化・再有効化、マスタ変更後に ItemDialog を開き直した際の選択肢更新、二重起動の拒否、1366×768 での全ダイアログの表示を確認する
 - [ ] 2c の PR を作成し、CI 成功後にマージする
 - [ ] 本書のステータスを更新する
 
@@ -278,9 +293,11 @@
 
 | 項目 | 目標 | 結果 | 実行環境 |
 | --- | --- | --- | --- |
-| 起動から一覧表示 | 3 秒以内 | | |
-| 検索・絞り込み(最大) | 0.3 秒以内 | | |
-| ソート(最大) | 0.3 秒以内 | | |
+| 別プロセス起動要求から一覧の初回描画完了 | 3 秒以内 | | |
+| 検索処理開始から再描画完了(最大) | 0.3 秒以内 | | |
+| 検索の最終入力から再描画完了(デバウンス込み、最大) | 0.6 秒以内 | | |
+| その他の絞り込み条件変更から再描画完了(最大) | 0.3 秒以内 | | |
+| ソート条件変更から再描画完了(最大) | 0.3 秒以内 | | |
 
 ### 4.2 試験ビルド
 
@@ -288,5 +305,8 @@
 | --- | --- | --- |
 | QtCharts の同梱 | | |
 | 印刷サポートプラグインの同梱 | | |
+| DB 初期化用 SQL の同梱 | | |
+| アプリの配布メタデータの同梱 | | |
 | exe の起動・DB 作成・品目登録 | | |
+| exe のバージョン情報表示 | | |
 | 多重起動の拒否 | | |
