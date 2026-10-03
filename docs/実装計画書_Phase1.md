@@ -148,14 +148,14 @@
 
 #### F. スキーマ `src/inventory_manager_mini/db/schema.sql`
 
-- [ ] 開発計画書 4.2 の DDL を記述する(`settings` の初期行を含む)
-- [ ] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
-- [ ] `tests/test_schema_constraints.py`(`:memory:`)
-  - [ ] CHECK: `is_active`、`code_prefix`(長さ・使用文字)、`unit = '個'`、`quantity >= 0`、`reorder_threshold >= 0`、`reorder_quantity > 0`、`reference_price >= 0`、`unit_price >= 0`、`reason` の値域、`reason` と `delta` の符号(取り消し行は除外)
-  - [ ] UNIQUE: クライアント名・発注主体名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
-  - [ ] FOREIGN KEY: 存在しないクライアント・発注主体・カテゴリ・品目・元行の参照を拒否する
-  - [ ] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
-  - [ ] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
+- [x] 開発計画書 4.2 の DDL を記述する(`settings` の初期行を含む)
+- [x] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
+- [x] `tests/test_schema_constraints.py`(`:memory:`)
+  - [x] CHECK: `is_active`、`code_prefix`(長さ・使用文字)、`unit = '個'`、`quantity >= 0`、`reorder_threshold >= 0`、`reorder_quantity > 0`、`reference_price >= 0`、`unit_price >= 0`、`reason` の値域、`reason` と `delta` の符号(取り消し行は除外)
+  - [x] UNIQUE: クライアント名・発注主体名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
+  - [x] FOREIGN KEY: 存在しないクライアント・発注主体・カテゴリ・品目・元行の参照を拒否する
+  - [x] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
+  - [x] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
 
 #### G. マイグレーション `db/migrations.py`
 
