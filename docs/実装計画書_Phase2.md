@@ -1,7 +1,7 @@
 # Phase 2 実装計画書(MainWindow・品目 CRUD・マスタ管理・多重起動防止)
 
 - 作成日: 2026-10-04
-- ステータス: 案
+- ステータス: 承認済
 - 作業ブランチ: `feature/phase2-app-foundation`(2a)→ `feature/phase2-main-window`(2b)→ `feature/phase2-master-dialog`(2c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3.1・3.2・3.5・5.1・5.4・6 章・7.1・7.3・7.5・8・9・10 章)
 
@@ -59,9 +59,9 @@
 | 起動時のエラー | 多重起動は「既に起動しています」を表示して終了コード 0。`SchemaTooNewError`・`UnsupportedSchemaError`・`MigrationError`(自動バックアップのパスがあれば表示)はエラーダイアログを表示して終了コード 1。その他の例外はログ出力・汎用ダイアログ表示の上で終了コード 1。いずれもロックを解放してから終了する |
 | 終了処理 | `QApplication.exec()` の終了後(例外時を含む)に DB 接続を閉じ、ロックを解放する(`try`/`finally`) |
 | ログ | `logging` のルートロガーに `RotatingFileHandler`(`app.log`、1 MB × 5 世代、UTF-8、INFO 以上)を設定する。時刻は `logging` の既定(OS ローカル) |
-| 性能計測 | `tests/test_performance.py` に計測テストを置き、`--run-perf` オプション指定時のみ実行する(既定はスキップ。CI では実行しない)。起動は別プロセス起動要求から一覧の初回描画完了まで、検索・絞り込み・ソートは更新後の一覧の再描画完了までを測る。モデル更新だけで計測を終了しない。結果は本書 4 章に記録する |
+| 性能計測 | `tests/test_performance.py` に計測テストを置き、`--run-perf` オプション指定時のみ実行する(既定はスキップ。CI では実行しない)。起動は別プロセス起動要求から一覧の初回描画完了まで、検索・絞り込み・ソートは更新後の一覧の再描画完了(保留中イベントの消化・ペイント完了)までを測る。モデル更新だけで計測を終了しない。結果は本書 4 章に記録する |
 | 試験ビルド | 手動でローカル(Windows)ビルドし、成果物はコミットしない。`--specpath build` で spec を `build/` に出力する。正式な spec・リリースワークフローは Phase 8 |
-| バージョン情報 | ヘルプ → バージョン情報で、アプリ版(`importlib.metadata.version`)・スキーマ版・DB パスを表示する |
+| バージョン情報 | ヘルプ → バージョン情報で、アプリ版(`importlib.metadata.version`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)・スキーマ版・DB パスを表示する |
 
 ### 2.3 対象外
 
@@ -120,7 +120,7 @@
 
 - [ ] `ui/main_window.py` に `MainWindow(context: AppContext)` の最小実装を作成する。タイトル「Inventory Manager mini」・1366×768 の作業領域に収まる初期サイズと最小サイズ・ウィンドウを閉じる終了操作のみを備える。一覧・メニュー等は 2b で追加する
 - [ ] `setup_logging(log_path: Path) -> None`: ルートロガーに `RotatingFileHandler(maxBytes=1_000_000, backupCount=5, encoding="utf-8")` を INFO で設定する。二重登録しない
-- [ ] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数を設定する
+- [ ] `build_context(conn, paths) -> AppContext`: Service 群・`DataBus`・スキーマ版数(`SCHEMA_VERSION`)・アプリ版数(`importlib.metadata.version("inventory-manager-mini")`、`PackageNotFoundError` 時は `inventory_manager_mini.__version__` にフォールバック)を設定する
 - [ ] `show_startup_notifications(context, window) -> None`: Phase 4 で低在庫通知を実装する差し込み口(処理なし)
 - [ ] `main(paths: AppPaths | None = None) -> int`
   - [ ] `QApplication.instance()` があれば再利用し、なければ生成する(アプリ名を設定)
@@ -141,7 +141,7 @@
   - [ ] `setup_logging` を 2 回呼んでもハンドラが重複しない
 - [ ] 既存の `tests/test_smoke.py` を、GUI 起動後は終了待ちになる仕様に合わせて改修する
   - [ ] `main()` のテストは `tmp_path` から構築した `AppPaths` を注入し、イベントループをテスト側で終了させる
-  - [ ] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパーで `QApplication` と終了用 `QTimer` を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
+  - [ ] モジュール起動テストは子プロセスに環境変数で一時保存先を渡し、テスト用ラッパー(subprocess 経由で実行する Python スクリプト/インラインコード)で `QApplication` と終了用 `QTimer`(例: 50ms 後に `quit()`)を用意してから `runpy.run_module("inventory_manager_mini", run_name="__main__")` を実行する。本番コードにテスト専用の終了オプションは追加しない
   - [ ] 子プロセスに `timeout` を設定し、終了コードと一時保存先への DB 作成を確認する。タイムアウトや途中失敗時も子プロセスを終了・回収する
 - [ ] 2a の PR を作成し、CI 成功後にマージする
 
@@ -211,7 +211,7 @@
   - [ ] クライアント・品名(前後空白除去後)・カテゴリ・発注主体が必須
   - [ ] 新規登録時、有効な発注主体マスタが 0 件なら発注主体未選択とし、「先に発注主体マスタを登録してください」を表示して OK を不活性にする。有効なクライアントが 0 件、またはカテゴリが 0 件の場合も同様に案内する
   - [ ] 編集時は有効なクライアント・発注主体が 0 件でも、現在の無効化済みマスタを維持する保存を許可する。変更先は有効なもののみとする
-  - [ ] 初期数量が 1 以上なら担当者必須。0 なら担当者欄を不活性化し、選択を解除する
+  - [ ] 新規登録のダイアログ初期化時に初期数量 0(既定値)に応じた担当者欄の非活性・選択解除を確実に適用する。初期数量が 1 以上なら担当者必須、0 なら担当者欄を不活性化し選択を解除する
   - [ ] 販売ページ URL を `validate_purchase_url` で検証する
   - [ ] 参考価格・推奨発注数の範囲(`QIntValidator`)と空欄 = `None`
 - [ ] OK 押下: 新規は `NewItem` で `create_item`、編集は `ItemUpdate` で `update_item`(空欄の任意文字列は `None`)。`run_guarded` の成功フラグで判定し、成功時のみ `data_changed` を発火して `accept()` する。`DomainError` はダイアログを閉じずに表示する
@@ -268,7 +268,7 @@
 - [ ] 検索: 検索処理開始から再描画完了までが 0.3 秒以内、最終入力から再描画完了までが 300ms のデバウンスを含め 0.6 秒以内。それぞれを計測・検証する
 - [ ] その他の絞り込み: クライアント・発注主体・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含むの各条件変更から再描画完了までが 0.3 秒以内
 - [ ] 一覧のソート(数量列・品名列): ソート条件変更から再描画完了までが 0.3 秒以内
-- [ ] 計測の終了条件は、対象のモデル更新後の `QTableView` の viewport の描画完了とする。`show()`・モデル更新・ソート処理の終了だけでは計測を終了しない
+- [ ] 計測の終了条件は、対象のモデル更新後の `QTableView` の viewport の描画完了とする。`show()`・モデル更新・ソート処理の呼び出し直後で終了とせず、`QApplication.processEvents()` で保留中の描画イベントを消化するか、`qtbot.waitUntil()` や `viewport().repaint()` を組み合わせて確実にペイント完了時点までを計測する
 - [ ] 計測値を出力し、ローカル(Windows)で実行して本書 4.1 に記録する
 - [ ] 未達の場合は `ItemRepository.list` の SQL(最終購入日の相関サブクエリ等)・インデックスを見直し、スキーマ変更が必要ならマイグレーション規約に従う
 
