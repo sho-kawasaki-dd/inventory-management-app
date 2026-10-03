@@ -1,7 +1,7 @@
 # Phase 1 実装計画書(スキーマ・リポジトリ・サービス層)
 
 - 作成日: 2026-10-02
-- ステータス: 案(レビュー待ち)
+- ステータス: 承認済
 - 作業ブランチ: `feature/phase1-db-foundation`(1a)→ `feature/phase1-services`(1b)→ `feature/phase1-reports-backup`(1c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3・4・5・7.2・7.4・8・9 章)
 
@@ -33,7 +33,8 @@
 
 | 項目 | 決定 |
 | --- | --- |
-| PR 分割 | 1a(DB 基盤)→ 1b(Repository・Service)→ 1c(集計・CSV・バックアップ・ダミーデータ)の 3 PR。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
+| PR 分割 | 1a(DB 基盤: 接続・スキーマ・マイグレーション・DB コピー)→ 1b(Repository・Service)→ 1c(集計・CSV・バックアップサービス・ダミーデータ)の 3 PR。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
+| DB コピー基盤の配置 | 1a の `open_database()` における移行前バックアップで排他制御・WAL 含有・失敗時クリーンアップを確実に保証するため、`copy_database` を 1a の `db/backup.py` に前倒しで実装・単体テストする。1c では SQLite 整合性検査 `check_sqlite_integrity` を追加する |
 | 版別スキーマ検査 | 宣言的な `SchemaSpec` を `migrations.py` に保持し、PRAGMA の結果と照合する。列(型・NOT NULL・既定値・主キー)、外部キー、インデックス、トリガーは厳密に照合する。CHECK/UNIQUE 制約・式インデックス・トリガーを含む完全な DDL を、文字列リテラルを保持しコメントを除去した正規化 SQL で版別の定義と比較する。必須断片の包含だけでは判定しない |
 | カバレッジ 90% | `pytest --cov` の後に CI で `coverage report --include=<core,db> --fail-under=90` を実行する。`ui/` の計測は継続し、閾値は課さない |
 | ダミーデータ生成 | `scripts/generate_dummy_data.py` が SQL で一括投入する(過去日付の `moved_at` を設定するため Service を経由しない)。生成後に 7.2 の業務整合性検査で合格を確認する |
@@ -133,7 +134,19 @@
   - [ ] COMMIT 失敗時の ROLLBACK(`execute` で `COMMIT` を失敗させる `sqlite3.Connection` サブクラスを `factory=` で作る)
   - [ ] `read_transaction()` の成功・例外時の終了処理、既存トランザクションへの参加時に呼び出し元の境界を変更しないこと、読み取り専用接続での使用を確認する
 
-#### E. スキーマ `db/schema.sql`
+#### E. DB バックアップ基盤 `db/backup.py`
+
+- [ ] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
+  - [ ] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
+  - [ ] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
+  - [ ] Service・UI を import しない(依存ルールのテストで担保する)
+- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1a では `copy_database` の単体検証)
+  - [ ] バックアップに WAL 内の未チェックポイントの確定データが含まれる
+  - [ ] 保存先ファイルの排他的新規作成、既存同名ファイルの拒否(`FileExistsError`)、書き込み不可ディレクトリでのエラー
+  - [ ] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する(`RuntimeError`)
+  - [ ] 保存先の確保・コピー失敗時に自身が作成した未完成ファイルのみ削除し、既存ファイルを変更・削除しない
+
+#### F. スキーマ `src/inventory_manager_mini/db/schema.sql`
 
 - [ ] 開発計画書 4.2 の DDL を記述する(`settings` の初期行を含む)
 - [ ] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
@@ -144,7 +157,7 @@
   - [ ] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
   - [ ] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
 
-#### F. マイグレーション `db/migrations.py`
+#### G. マイグレーション `db/migrations.py`
 
 - [ ] 定数: `SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`、`MIGRATIONS: dict[int, str] = {}`(キーは「その版へ上げる SQL」)
 - [ ] 検査定義の dataclass: `ColumnSpec`(名前・型・NOT NULL・既定値・主キー順位)、`ForeignKeySpec`、`IndexSpec`(名前・テーブル・UNIQUE・列/式・完全な CREATE INDEX 文)、`TriggerSpec`(名前・テーブル・完全な CREATE TRIGGER 文)、`TableSpec`(列・外部キー・CHECK/UNIQUE を含む完全な CREATE TABLE 文)、`SchemaSpec`
@@ -166,8 +179,8 @@
   - [ ] 既存 DB で版数 > `schema_version` なら `SchemaTooNewError`
   - [ ] 版数 0、または版数 < `min_supported` なら `UnsupportedSchemaError`
   - [ ] その版の検査定義で検査し、不一致なら `UnsupportedSchemaError`
-  - [ ] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `backup()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
-  - [ ] 移行前バックアップは書き込みトランザクション外で保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
+  - [ ] 旧版の場合は経路を検査し、`backup_dir/pre-migrate_v{N}_{ローカル日時}.db` を `copy_database()` で作成してから、版ごとに 1 トランザクションで「SQL 適用 → その版の検査 → `user_version` 更新」を行う。失敗時はロールバックし、`MigrationError(backup_path=...)` を送出する
+  - [ ] 移行前バックアップは書き込みトランザクション外で `copy_database()` により保存先を排他的に新規作成する。同名・確保・コピーの失敗は `MigrationError(backup_path=None)` とし、移行を開始しない。今回作成した未完成 DB と付随ファイルだけを後始末し、既存ファイル・完成したバックアップは保持する
   - [ ] 失敗時は開いた接続を必ず閉じる
 - [ ] `tests/test_migrations.py`(`tmp_path` 上の実ファイル DB)
   - [ ] 新規作成: `user_version = 1`、検査に合格、再接続後も永続化されている、WAL で動作する
@@ -184,7 +197,7 @@
   - [ ] 未対応の旧版(`min_supported = 2` を注入)と経路の欠落を拒否する
   - [ ] 依存ルール R2・R6 が成功し、DB 層に日時処理のための禁止 import・現在時刻取得がない
 
-#### G. CI・文書(1a の最後)
+#### H. CI・文書(1a の最後)
 
 - [ ] `.github/workflows/ci.yml` の `pytest --cov` の後に、カバレッジ閾値のステップを追加する
 - [ ] README のコマンド一覧にカバレッジ閾値のコマンドを追記する
@@ -193,7 +206,7 @@
 
 ### 1b. Repository・Service(`feature/phase1-services`。1a に依存)
 
-#### H. Repository `db/repositories.py`
+#### I. Repository `db/repositories.py`
 
 - [ ] 共通: すべての SQL をプレースホルダでパラメータ化する。行を dataclass に変換する関数を持つ
 - [ ] `IntegrityError` の変換: `sqlite_errorname`(`SQLITE_CONSTRAINT_UNIQUE`・`_CHECK`・`_FOREIGNKEY`・`_NOTNULL`)とメッセージ中の対象列で判定し、呼び出し箇所ごとの対応表で業務例外に変換する。対応外の制約違反は `ValidationError` とし、元の例外を `from` で連結する
@@ -208,18 +221,18 @@
   - [ ] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
   - [ ] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
   - [ ] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
-  - [ ] 業務整合性検査用(1c で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
+  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
 - [ ] `MovementRepository`
   - [ ] `insert`、`get`、`is_reversed(movement_id)`
   - [ ] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
-  - [ ] 業務整合性検査用(1c で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
+  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
 - [ ] `MasterRepository`
   - [ ] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
   - [ ] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
   - [ ] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
 - [ ] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
 
-#### I. Service `core/services.py`
+#### J. Service `core/services.py`
 
 - [ ] 共通の補助
   - [ ] `validate_purchase_url(url: str | None) -> str | None`: 前後の空白を除去し、空なら `None`。`urllib.parse.urlsplit` でスキームが `http`/`https` かつホスト名ありの場合のみ許可し、それ以外は `ValidationError`(UI が `openUrl` の前に再利用する)
@@ -258,14 +271,14 @@
   - [ ] `set_fiscal_year_start_month(month)`: `transaction(conn)` 内で検証・更新する(1〜12 以外は `ValidationError`)
   - [ ] `validate_all() -> list[str]`: 必須キーの存在、値が正規の整数表記で 1〜12、未知のキーがないことを検査し、不合格の理由一覧を返す。読み取り専用とし、トランザクションを開始しない
 
-#### J. テスト(1b)
+#### K. テスト(1b)
 
 - [ ] `tests/conftest.py` に共通フィクスチャを置く
   - [ ] `memory_conn`: `connect_memory()` と `create_schema()` で作成する
   - [ ] `seeded_conn`: 有効なクライアント 2・無効なクライアント 1、有効な発注主体 2・無効な発注主体 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
   - [ ] `fixed_clock`: 時刻を任意に進められる `clock`
   - [ ] Service 群(`inventory`・`master`・`settings`)
-- [ ] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換
+- [ ] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換、業務整合性検査用クエリの単体検証(`find_quantity_mismatches()` の一致・不一致・履歴なし、`find_invalid_reversals()` の正常行・元行不在・取り消し行の取り消し・差分 0 棚卸・品目不一致・delta 符号不正・属性不一致の各パターン)
 - [ ] `tests/test_inventory_service.py`
   - [ ] 品目の登録: 単位の固定、初期数量の adjust と担当者の記録、初期数量が正で担当者が未指定/無効の場合に品目・履歴・連番がいずれも変わらない
   - [ ] 採番: 品目登録 → 別カテゴリへ変更 → 元カテゴリの削除を拒否 → 元カテゴリで追加登録し、連番が継続する
@@ -282,7 +295,7 @@
 
 ### 1c. 集計・CSV・バックアップ・ダミーデータ(`feature/phase1-reports-backup`。1b に依存)
 
-#### K. 集計・CSV `core/reports.py`
+#### L. 集計・CSV `core/reports.py`
 
 - [ ] `ReportService(conn, tz=None, clock=...)`
 - [ ] `fiscal_year_of(local_date, start_month) -> int`(`年 − (月 < 開始月 ? 1 : 0)`)、`current_fiscal_year()`、`available_fiscal_years()`(履歴の最古・最新から算出し、現在の年度を含める)
@@ -313,15 +326,12 @@
   - [ ] 最終購入日がローカル日付になる
 - [ ] `tests/test_csv.py`: BOM・CRLF・全項目のクォート、数式インジェクション対策(各先頭文字、数値列は対象外)、日時のローカル表記(オフセットなし)、列の順序、書き込み失敗時に既存ファイルが壊れず一時ファイルが残らない
 
-#### L. DB バックアップ `db/backup.py`
+#### M. DB 整合性検査 `db/backup.py`
 
-- [ ] `copy_database(src_conn, dest_path)`: 保存先を排他的に新規作成してから接続し、`src_conn.backup(dest)` を実行して必ず閉じる。既存ファイルは `FileExistsError` とし、上書きしない。WAL 内の確定データも含まれる
-  - [ ] コピー失敗時は自身が今回作成した未完成 DB と付随ファイルだけを接続終了後に削除する。既存ファイルは変更・削除しない
-  - [ ] 呼び出し時に `src_conn.in_transaction` ならコピーを開始せず `RuntimeError` とする。現行 DB への上書き・復旧にはこの新規作成専用関数を使わず、書き込みトランザクション外で `backup()` を呼ぶ
-- [ ] `check_sqlite_integrity(conn) -> list[str]`: `PRAGMA integrity_check` が `ok`、`PRAGMA foreign_key_check` が結果なしであることを検査し、不合格の理由を返す
-- [ ] Service・UI を import しない(依存ルールのテストで担保する)
+- [ ] 1a で作成した `db/backup.py` に `check_sqlite_integrity(conn) -> list[str]` を追加する: `PRAGMA integrity_check` が `ok`、`PRAGMA foreign_key_check` が結果なしであることを検査し、不合格の理由を返す
+- [ ] 引き続き Service・UI を import しない(依存ルールのテストで担保する)
 
-#### M. BackupService `core/services.py`
+#### N. BackupService `core/services.py`
 
 - [ ] `BackupService(clock=..., tz=None)`(DB のパス・接続は引数で受け取る)
 - [ ] `create_backup(conn, dest_dir) -> Path`: `inventory_{ローカル日時}.db` を作成する。保存先がなければ作成し、`copy_database` の排他的な新規作成で同名を拒否する。同名の `FileExistsError` は `ValidationError` に変換する
@@ -341,7 +351,7 @@
   - [ ] 上書きまたは再検査に失敗したら、pre-restore のバックアップから `backup()` で復旧し、同じ検査を行う。合格なら `RestoreError(stage="overwrite", recovered=True, backup_path=...)`、不合格・失敗なら `RestoreError(stage="recovery", recovered=False, backup_path=...)`。自動バックアップは削除しない
   - [ ] 成功・失敗のいずれでも、自身が開いた接続をすべて閉じる
 - [ ] `cancel(prepared)`: 後始末のみ行う
-- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB)
+- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1c で `check_sqlite_integrity` と `BackupService` の総合テストを拡充)
   - [ ] バックアップに WAL 内の未チェックポイントの確定データが含まれる。ファイル名がローカル日時になる。保存先の作成、同名の拒否、書き込みできない保存先でのエラー
   - [ ] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する。保存先の確保・コピー失敗時に既存ファイルを変更・削除しない
   - [ ] `inspect_database()` が実際の `SettingsService.validate_all()` を呼び、ネストエラーなく正常終了する。スキーマ不一致時は業務・設定クエリへ進まない
@@ -357,7 +367,7 @@
   - [ ] 上書き後の再検査の失敗(検査を monkeypatch で不合格にする)で復旧され、`recovered=True` になる
   - [ ] 復旧の失敗で `recovered=False` となり、自動バックアップが残る
 
-#### N. ダミーデータ生成 `scripts/generate_dummy_data.py`
+#### O. ダミーデータ生成 `scripts/generate_dummy_data.py`
 
 - [ ] 引数: `--db`(必須)、`--items`(既定 5000)、`--movements`(既定 100000)、`--years`(既定 3)、`--seed`(既定 0)、`--force`(既存ファイルの上書きを許可)
 - [ ] 既存ファイルは `--force` がなければ拒否する。上書き時は DB と `-wal`・`-shm` を削除してから作成する
@@ -370,7 +380,7 @@
 - [ ] `pyproject.toml` の pyright の `include` に `scripts` を追加する
 - [ ] `tests/test_dummy_data.py`: 小規模(品目 50・履歴 500)で生成し、検査に合格する。既存ファイルの拒否
 
-#### O. 検証・完了処理(1c の最後)
+#### P. 検証・完了処理(1c の最後)
 
 - [ ] ローカル(Windows)で全コマンドが成功し、`core/`・`db/` の行カバレッジが 90% 以上
 - [ ] ダミーデータ(品目 5,000・履歴 100,000)を一時ディレクトリに生成し、検査に合格する(所要時間を PR に記載する)
@@ -383,9 +393,9 @@
 | 区分 | ファイル |
 | --- | --- |
 | 新規 | `src/inventory_manager_mini/core/{timeutil,errors,models,services,reports}.py` |
-| 新規 | `src/inventory_manager_mini/db/{connection,migrations,repositories,backup}.py`、`db/schema.sql` |
+| 新規 | `src/inventory_manager_mini/db/{connection,migrations,repositories,backup}.py`、`src/inventory_manager_mini/db/schema.sql` |
 | 新規 | `scripts/generate_dummy_data.py` |
-| 新規 | `tests/test_{timeutil,connection,schema_constraints,migrations,repositories,inventory_service,master_service,settings_service,reports,csv,backup,dummy_data}.py` |
+| 新規 | `tests/test_{timeutil,connection,backup,schema_constraints,migrations,repositories,inventory_service,master_service,settings_service,reports,csv,dummy_data}.py` |
 | 更新 | `tests/conftest.py`、`pyproject.toml`、`.github/workflows/ci.yml`、`README.md`、`docs/ローカル在庫管理アプリ開発計画書.md`(3.3) |
 
 ## 5. 完了条件
