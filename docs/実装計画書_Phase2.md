@@ -149,14 +149,14 @@
 
 #### E. カテゴリのツリーコンボ `ui/widgets/category_combo.py`
 
-- [ ] `CategoryComboBox(QComboBox)`: `QStandardItemModel` + `QTreeView` をポップアップに設定する
-- [ ] `set_categories(categories: list[Category], leading_label: str | None = None)`: `parent_id` から木を構築し、名前順に並べる。`leading_label` があれば先頭に ID `None` の項目を置く。再設定時は選択中の ID を可能な限り維持する
-- [ ] `current_category_id() -> int | None`、`set_current_category_id(category_id: int | None)`
-- [ ] 子孫の項目を選択した場合も表示テキストを正しく更新する(選択時に `setRootModelIndex` を親に切り替えて `setCurrentIndex` し、ルートへ戻す)
-- [ ] 展開矢印のクリックではポップアップを閉じない(ビューのイベントフィルタで判定)
-- [ ] 表示テキストはフルパス(`電球 > LED電球`)とし、ツールチップにも設定する
-- [ ] シグナル `category_changed(object)` を発火する
-- [ ] `tests/test_category_combo.py`: 木構造の構築、子孫の選択と表示テキスト、先頭項目、再設定時の選択維持、存在しない ID の指定
+- [x] `CategoryComboBox(QComboBox)`: `QStandardItemModel` + `QTreeView` をポップアップに設定する
+- [x] `set_categories(categories: list[Category], leading_label: str | None = None)`: `parent_id` から木を構築し、名前順に並べる。`leading_label` があれば先頭に ID `None` の項目を置く。再設定時は選択中の ID を可能な限り維持する
+- [x] `current_category_id() -> int | None`、`set_current_category_id(category_id: int | None)`
+- [x] 子孫の項目を選択した場合も表示テキストを正しく更新する(選択時に `setRootModelIndex` を親に切り替えて `setCurrentIndex` し、ルートへ戻す)
+- [x] 展開矢印のクリックではポップアップを閉じない(ビューのイベントフィルタで判定)
+- [x] 表示テキストはフルパス(`電球 > LED電球`)とし、ツールチップにも設定する
+- [x] シグナル `category_changed(object)` を発火する
+- [x] `tests/test_category_combo.py`: 木構造の構築、子孫の選択と表示テキスト、先頭項目、再設定時の選択維持、存在しない ID の指定
 
 #### F. 品目一覧モデル `ui/models/item_table_model.py`
 
