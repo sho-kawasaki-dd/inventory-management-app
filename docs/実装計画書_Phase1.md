@@ -114,25 +114,25 @@
 
 #### D. 接続 `db/connection.py`
 
-- [ ] `connect(path: Path) -> sqlite3.Connection`: `autocommit=True` で開き、`foreign_keys`・`journal_mode = WAL`・`busy_timeout = 5000` を設定する。`journal_mode` の戻り値が `wal` でなければ接続を閉じて例外とする
-- [ ] `connect_readonly(path: Path)`: `path.resolve().as_uri() + "?mode=ro"` と `uri=True` で開き、`foreign_keys`・`busy_timeout` のみを設定する(ジャーナルモードは変更しない)。ファイルが存在しない場合は接続前に `FileNotFoundError`
-- [ ] `connect_memory()`: `":memory:"`、`foreign_keys`・`busy_timeout` を設定する
-- [ ] `transaction(conn)`(`contextmanager`)
-  - [ ] 開始時に `conn.in_transaction` なら `RuntimeError`(ネスト禁止)
-  - [ ] `BEGIN IMMEDIATE` → 正常終了で `COMMIT`
-  - [ ] 本体で例外が起きたら、トランザクションが残っていれば `ROLLBACK` して再送出する
-  - [ ] `COMMIT` に失敗したら、トランザクションが残っていれば `ROLLBACK` して再送出する
-- [ ] `read_transaction(conn)`(`contextmanager`): 複数クエリを同一スナップショットで読む集計・検査用
-  - [ ] 既存トランザクションがあれば参加するだけとし、開始・COMMIT・ROLLBACK は呼び出し元に任せる
-  - [ ] 既存トランザクションがなければ `BEGIN` → 正常終了で `COMMIT`、例外・COMMIT 失敗時は残っていれば `ROLLBACK`。`BEGIN IMMEDIATE` は使わない
-- [ ] `tests/test_connection.py`
-  - [ ] 通常接続で `foreign_keys = 1`・`journal_mode = wal`・`busy_timeout = 5000`(`tmp_path`)
-  - [ ] 読み取り専用接続で書き込みが失敗し、DELETE モードの DB のジャーナルモードが変わらない
-  - [ ] 日本語や空白を含むパスでも読み取り専用接続できる
-  - [ ] メモリ DB で `foreign_keys = 1`
-  - [ ] `transaction()` の成功時 COMMIT、例外時 ROLLBACK、ネスト時の `RuntimeError`
-  - [ ] COMMIT 失敗時の ROLLBACK(`execute` で `COMMIT` を失敗させる `sqlite3.Connection` サブクラスを `factory=` で作る)
-  - [ ] `read_transaction()` の成功・例外時の終了処理、既存トランザクションへの参加時に呼び出し元の境界を変更しないこと、読み取り専用接続での使用を確認する
+- [x] `connect(path: Path) -> sqlite3.Connection`: `autocommit=True` で開き、`foreign_keys`・`journal_mode = WAL`・`busy_timeout = 5000` を設定する。`journal_mode` の戻り値が `wal` でなければ接続を閉じて例外とする
+- [x] `connect_readonly(path: Path)`: `path.resolve().as_uri() + "?mode=ro"` と `uri=True` で開き、`foreign_keys`・`busy_timeout` のみを設定する(ジャーナルモードは変更しない)。ファイルが存在しない場合は接続前に `FileNotFoundError`
+- [x] `connect_memory()`: `":memory:"`、`foreign_keys`・`busy_timeout` を設定する
+- [x] `transaction(conn)`(`contextmanager`)
+  - [x] 開始時に `conn.in_transaction` なら `RuntimeError`(ネスト禁止)
+  - [x] `BEGIN IMMEDIATE` → 正常終了で `COMMIT`
+  - [x] 本体で例外が起きたら、トランザクションが残っていれば `ROLLBACK` して再送出する
+  - [x] `COMMIT` に失敗したら、トランザクションが残っていれば `ROLLBACK` して再送出する
+- [x] `read_transaction(conn)`(`contextmanager`): 複数クエリを同一スナップショットで読む集計・検査用
+  - [x] 既存トランザクションがあれば参加するだけとし、開始・COMMIT・ROLLBACK は呼び出し元に任せる
+  - [x] 既存トランザクションがなければ `BEGIN` → 正常終了で `COMMIT`、例外・COMMIT 失敗時は残っていれば `ROLLBACK`。`BEGIN IMMEDIATE` は使わない
+- [x] `tests/test_connection.py`
+  - [x] 通常接続で `foreign_keys = 1`・`journal_mode = wal`・`busy_timeout = 5000`(`tmp_path`)
+  - [x] 読み取り専用接続で書き込みが失敗し、DELETE モードの DB のジャーナルモードが変わらない
+  - [x] 日本語や空白を含むパスでも読み取り専用接続できる
+  - [x] メモリ DB で `foreign_keys = 1`
+  - [x] `transaction()` の成功時 COMMIT、例外時 ROLLBACK、ネスト時の `RuntimeError`
+  - [x] COMMIT 失敗時の ROLLBACK(`execute` で `COMMIT` を失敗させる `sqlite3.Connection` サブクラスを `factory=` で作る)
+  - [x] `read_transaction()` の成功・例外時・COMMIT 失敗時の終了処理、既存トランザクションへの参加時に呼び出し元の境界を変更しないこと、読み取り専用接続での使用を確認する
 
 #### E. DB バックアップ基盤 `db/backup.py`
 
