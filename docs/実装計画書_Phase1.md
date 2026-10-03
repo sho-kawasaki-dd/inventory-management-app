@@ -100,17 +100,17 @@
 
 #### C. モデル `core/models.py`
 
-- [ ] `Reason(StrEnum)`: `IN="in"`、`OUT="out"`、`RETURN="return"`、`DISPOSE="dispose"`、`ADJUST="adjust"`
-- [ ] マスタ: `Client`、`Purchaser`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
-- [ ] `Item`: `items` の全列
-- [ ] `StockMovement`: `stock_movements` の全列
-- [ ] 入力用: `NewItem`(登録項目と `initial_quantity`・`initial_staff_id`)、`ItemUpdate`(管理番号・数量・単位以外の編集可能項目)
-- [ ] `PurchaseInfo`: `last_purchased_at: str | None`(UTC)、`lot_quantity: int | None`
-- [ ] 表示用: `ItemRow`(`Item` にクライアント名・発注主体名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・クライアント名・発注主体名・担当者名・`is_reversed` を加える)
-- [ ] `ItemFilter`: `text`、`client_id`、`purchaser_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
-- [ ] `PeriodKind(StrEnum)`: `ANNUAL`、`MONTHLY`
-- [ ] `GroupBy(StrEnum)`: `NONE`、`CLIENT`、`PURCHASER`、`CLIENT_PURCHASER`(ダッシュボードの内訳軸)
-- [ ] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`client_id`・`client_name`、`purchaser_id`・`purchaser_name`(内訳軸で畳み込んだ項目は `None`)、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
+- [x] `Reason(StrEnum)`: `IN="in"`、`OUT="out"`、`RETURN="return"`、`DISPOSE="dispose"`、`ADJUST="adjust"`
+- [x] マスタ: `Client`、`Purchaser`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
+- [x] `Item`: `items` の全列
+- [x] `StockMovement`: `stock_movements` の全列
+- [x] 入力用: `NewItem`(登録項目と `initial_quantity`・`initial_staff_id`)、`ItemUpdate`(管理番号・数量・単位以外の編集可能項目)
+- [x] `PurchaseInfo`: `last_purchased_at: str | None`(UTC)、`lot_quantity: int | None`
+- [x] 表示用: `ItemRow`(`Item` にクライアント名・発注主体名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・クライアント名・発注主体名・担当者名・`is_reversed` を加える)
+- [x] `ItemFilter`: `text`、`client_id`、`purchaser_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
+- [x] `PeriodKind(StrEnum)`: `ANNUAL`、`MONTHLY`
+- [x] `GroupBy(StrEnum)`: `NONE`、`CLIENT`、`PURCHASER`、`CLIENT_PURCHASER`(ダッシュボードの内訳軸)
+- [x] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`client_id`・`client_name`、`purchaser_id`・`purchaser_name`(内訳軸で畳み込んだ項目は `None`)、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
 
 #### D. 接続 `db/connection.py`
 
