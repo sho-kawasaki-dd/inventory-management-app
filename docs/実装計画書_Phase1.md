@@ -370,16 +370,16 @@
 
 #### O. ダミーデータ生成 `scripts/generate_dummy_data.py`
 
-- [ ] 引数: `--db`(必須)、`--items`(既定 5000)、`--movements`(既定 100000)、`--years`(既定 3)、`--seed`(既定 0)、`--force`(既存ファイルの上書きを許可)
-- [ ] 既存ファイルは `--force` がなければ拒否する。上書き時は DB と `-wal`・`-shm` を削除してから作成する
-- [ ] `open_database()` に `timeutil.local_timestamp_for_filename()` を利用する `backup_timestamp` コールバックを渡して新規作成し、1 トランザクションで投入する
-  - [ ] マスタ(クライアント・発注主体・担当者(一部は無効化)、2 階層のカテゴリ、保管場所)
-  - [ ] 品目(一部は廃止・参考価格なし・URL あり)。管理番号は採番と同じ規則にし、`next_seq` を整合させる
-  - [ ] 履歴: 過去 `--years` 年に時系列で分布させ、在庫が負にならないように生成する。全 `reason`、取り消し行、単価未登録を含める
-  - [ ] `items.quantity` を履歴の合計に一致させる
-- [ ] 終了時に `BackupService.inspect_database()` で合格を確認し、件数と所要時間を表示する
-- [ ] `pyproject.toml` の pyright の `include` に `scripts` を追加する
-- [ ] `tests/test_dummy_data.py`: 小規模(品目 50・履歴 500)で生成し、検査に合格する。既存ファイルの拒否
+- [x] 引数: `--db`(必須)、`--items`(既定 5000)、`--movements`(既定 100000)、`--years`(既定 3)、`--seed`(既定 0)、`--force`(既存ファイルの上書きを許可)
+- [x] 既存ファイルは `--force` がなければ拒否する。上書き時は DB と `-wal`・`-shm` を削除してから作成する
+- [x] `open_database()` に `timeutil.local_timestamp_for_filename()` を利用する `backup_timestamp` コールバックを渡して新規作成し、1 トランザクションで投入する
+  - [x] マスタ(クライアント・発注主体・担当者(一部は無効化)、2 階層のカテゴリ、保管場所)
+  - [x] 品目(一部は廃止・参考価格なし・URL あり)。管理番号は採番と同じ規則にし、`next_seq` を整合させる
+  - [x] 履歴: 過去 `--years` 年に時系列で分布させ、在庫が負にならないように生成する。全 `reason`、取り消し行、単価未登録を含める
+  - [x] `items.quantity` を履歴の合計に一致させる
+- [x] 終了時に `BackupService.inspect_database()` で合格を確認し、件数と所要時間を表示する
+- [x] `pyproject.toml` の pyright の `include` に `scripts` を追加する
+- [x] `tests/test_dummy_data.py`: 小規模(品目 50・履歴 500)で生成し、検査に合格する。既存ファイルの拒否
 
 #### P. 検証・完了処理(1c の最後)
 
