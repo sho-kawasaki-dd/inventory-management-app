@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from inventory_manager_mini.db import backup
-from inventory_manager_mini.db.backup import copy_database
+from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
 from inventory_manager_mini.db.connection import connect
 
 
@@ -26,6 +26,48 @@ class FailingBackupConnection(sqlite3.Connection):
         Path(f"{target_path}-wal").write_bytes(b"incomplete wal")
         Path(f"{target_path}-shm").write_bytes(b"incomplete shm")
         raise sqlite3.OperationalError("injected backup failure")
+
+
+class FakeResult:
+    def __init__(self, rows: list[tuple[str]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple[str]]:
+        return self._rows
+
+
+class FailingIntegrityConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters: object = (), /) -> sqlite3.Cursor:
+        if sql == "PRAGMA integrity_check":
+            return FakeResult([("page 1: malformed",)])  # type: ignore[return-value]
+        return super().execute(sql, parameters)  # type: ignore[arg-type]
+
+
+def test_check_sqlite_integrity_accepts_valid_database() -> None:
+    conn = sqlite3.connect(":memory:", autocommit=True)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))")
+        assert check_sqlite_integrity(conn) == []
+    finally:
+        conn.close()
+
+
+def test_check_sqlite_integrity_reports_integrity_and_foreign_key_failures() -> None:
+    conn = sqlite3.connect(":memory:", autocommit=True, factory=FailingIntegrityConnection)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))")
+        conn.execute("INSERT INTO child VALUES (42)")
+
+        assert check_sqlite_integrity(conn) == [
+            "SQLite 整合性検査に失敗しました: page 1: malformed",
+            "外部キー制約に違反しています: テーブル child、行 1、参照先 parent、制約 0",
+        ]
+    finally:
+        conn.close()
 
 
 def test_copy_database_includes_committed_data_in_wal(tmp_path: Path) -> None:

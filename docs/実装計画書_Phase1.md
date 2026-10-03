@@ -329,8 +329,8 @@
 
 #### M. DB 整合性検査 `db/backup.py`
 
-- [ ] 1a で作成した `db/backup.py` に `check_sqlite_integrity(conn) -> list[str]` を追加する: `PRAGMA integrity_check` が `ok`、`PRAGMA foreign_key_check` が結果なしであることを検査し、不合格の理由を返す
-- [ ] 引き続き Service・UI を import しない(依存ルールのテストで担保する)
+- [x] 1a で作成した `db/backup.py` に `check_sqlite_integrity(conn) -> list[str]` を追加する: `PRAGMA integrity_check` が `ok`、`PRAGMA foreign_key_check` が結果なしであることを検査し、不合格の理由を返す
+- [x] 引き続き Service・UI を import しない(依存ルールのテストで担保する)
 
 #### N. BackupService `core/services.py`
 
