@@ -78,19 +78,19 @@
 
 #### A. パス解決 `config.py`
 
-- [ ] 定数 `DATA_DIR_ENV = "INVENTORY_MANAGER_MINI_DATA_DIR"` を定義する
-- [ ] `AppPaths`(`frozen=True, slots=True` の dataclass): `data_dir`、`db_path`(`inventory.db`)、`backup_dir`(`backups/`)、`lock_path`(`inventory.lock`)、`log_dir`、`log_path`(`app.log`)
-- [ ] `AppPaths.from_dirs(data_dir: Path, log_dir: Path) -> AppPaths`
-- [ ] `resolve_paths(env: Mapping[str, str] = os.environ) -> AppPaths`
-  - [ ] 環境変数が空でなければ `data_dir = Path(値)`、`log_dir = data_dir / "logs"`
-  - [ ] 未設定時は `user_data_dir(APP_NAME, appauthor=False, roaming=True)`・`user_log_dir(APP_NAME, appauthor=False)`
-- [ ] `ensure_dirs(paths: AppPaths) -> None`: `data_dir`・`backup_dir`・`log_dir` を作成する(`parents=True, exist_ok=True`)
-- [ ] 開発計画書 3.5 に環境変数による保存先の上書き(テスト・検証用)を追記する
-- [ ] `tests/test_config.py`
-  - [ ] 環境変数指定時の各パス
-  - [ ] 未指定時に `platformdirs` へ `appauthor=False`・`roaming=True` が渡ること(`monkeypatch` で関数を差し替え、実フォルダを作らない)
-  - [ ] 空文字の環境変数は未設定として扱うこと
-  - [ ] `ensure_dirs` が `tmp_path` 配下にディレクトリを作成すること
+- [x] 定数 `DATA_DIR_ENV = "INVENTORY_MANAGER_MINI_DATA_DIR"` を定義する
+- [x] `AppPaths`(`frozen=True, slots=True` の dataclass): `data_dir`、`db_path`(`inventory.db`)、`backup_dir`(`backups/`)、`lock_path`(`inventory.lock`)、`log_dir`、`log_path`(`app.log`)
+- [x] `AppPaths.from_dirs(data_dir: Path, log_dir: Path) -> AppPaths`
+- [x] `resolve_paths(env: Mapping[str, str] = os.environ) -> AppPaths`
+  - [x] 環境変数が空でなければ `data_dir = Path(値)`、`log_dir = data_dir / "logs"`
+  - [x] 未設定時は `user_data_dir(APP_NAME, appauthor=False, roaming=True)`・`user_log_dir(APP_NAME, appauthor=False)`
+- [x] `ensure_dirs(paths: AppPaths) -> None`: `data_dir`・`backup_dir`・`log_dir` を作成する(`parents=True, exist_ok=True`)
+- [x] 開発計画書 3.5 に環境変数による保存先の上書き(テスト・検証用)を追記する
+- [x] `tests/test_config.py`
+  - [x] 環境変数指定時の各パス
+  - [x] 未指定時に `platformdirs` へ `appauthor=False`・`roaming=True` が渡ること(`monkeypatch` で関数を差し替え、実フォルダを作らない)
+  - [x] 空文字の環境変数は未設定として扱うこと
+  - [x] `ensure_dirs` が `tmp_path` 配下にディレクトリを作成すること
 
 #### B. 多重起動防止 `ui/single_instance.py`
 
