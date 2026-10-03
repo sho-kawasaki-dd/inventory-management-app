@@ -101,20 +101,20 @@
   - [x] 取得 → 解放 → 再取得できる
   - [x] 別プロセス(`sys.executable` で起動するヘルパー。ロック取得後に標準出力へ通知して待機)が保持中は取得できない
   - [x] ヘルパーが正常終了(解放)した後は取得できる
-  - [ ] ヘルパーを強制終了(`kill`)した後は、PID の生存確認によりロックを回収して取得できる(`setStaleLockTime(0)` でも回収されることを Windows/Linux で確認。回収されない場合は本書の方針を見直す)
+  - [x] ヘルパーを強制終了(`kill`)した後は、PID の生存確認によりロックを回収して取得できる(`setStaleLockTime(0)` でも回収されることを Windows/Linux で確認。回収されない場合は本書の方針を見直す)
   - [x] ヘルパーには環境変数でロックパスを渡し、実データの保存先を使わない
 
 #### C. UI 共通部品
 
-- [ ] `ui/context.py`: `AppContext` dataclass(`inventory: InventoryService`、`master: MasterService`、`settings: SettingsService`、`data_bus: DataBus`、`db_path: Path`、`schema_version: int`、`app_version: str`)
-- [ ] `ui/signals.py`: `DataBus(QObject)` に `data_changed = Signal()`
-- [ ] `ui/error_handling.py`
-  - [ ] `show_domain_error(parent, error: DomainError)`: 警告ダイアログで `error.message` を表示する
-  - [ ] `show_unexpected_error(parent, error: BaseException)`: `logger.exception` 相当で記録し、「予期しないエラーが発生しました。詳細はログを確認してください。」とログの場所を表示する
-  - [ ] `run_guarded(parent, func) -> tuple[bool, T | None]`(`T` は `func` の戻り値の型): `func()` を実行し、成功時は `(True, 戻り値)`、`DomainError` と その他の例外は上記で表示して `(False, None)` を返す。成功して `None` を返す場合も `(True, None)` とし、呼び出し側は成功フラグで判定する
-  - [ ] `install_excepthook(log_path: Path)`: 未捕捉例外をログ出力し、`QApplication` があれば汎用ダイアログを表示する
-- [ ] `tests/test_error_handling.py`: `DomainError`・その他の例外それぞれの表示とログ出力(`QMessageBox` は `monkeypatch` で差し替える)
-  - [ ] `run_guarded` が値を返す成功・`None` を返す成功・`DomainError`・その他の例外を区別して返すこと
+- [x] `ui/context.py`: `AppContext` dataclass(`inventory: InventoryService`、`master: MasterService`、`settings: SettingsService`、`data_bus: DataBus`、`db_path: Path`、`schema_version: int`、`app_version: str`)
+- [x] `ui/signals.py`: `DataBus(QObject)` に `data_changed = Signal()`
+- [x] `ui/error_handling.py`
+  - [x] `show_domain_error(parent, error: DomainError)`: 警告ダイアログで `error.message` を表示する
+  - [x] `show_unexpected_error(parent, error: BaseException)`: `logger.exception` 相当で記録し、「予期しないエラーが発生しました。詳細はログを確認してください。」とログの場所を表示する
+  - [x] `run_guarded(parent, func) -> tuple[bool, T | None]`(`T` は `func` の戻り値の型): `func()` を実行し、成功時は `(True, 戻り値)`、`DomainError` と その他の例外は上記で表示して `(False, None)` を返す。成功して `None` を返す場合も `(True, None)` とし、呼び出し側は成功フラグで判定する
+  - [x] `install_excepthook(log_path: Path)`: 未捕捉例外をログ出力し、`QApplication` があれば汎用ダイアログを表示する
+- [x] `tests/test_error_handling.py`: `DomainError`・その他の例外それぞれの表示とログ出力(`QMessageBox` は `monkeypatch` で差し替える)
+  - [x] `run_guarded` が値を返す成功・`None` を返す成功・`DomainError`・その他の例外を区別して返すこと
 
 #### D. 起動シーケンス `app.py`
 
