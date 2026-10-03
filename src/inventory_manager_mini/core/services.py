@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import tempfile
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, tzinfo
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -12,10 +14,13 @@ from inventory_manager_mini.core.errors import (
     CategoryCycleError,
     InactiveItemError,
     InactiveMasterError,
+    InvalidBackupError,
     MasterInUseError,
     NegativeStockError,
     PrefixLockedError,
+    RestoreError,
     ReversalNotAllowedError,
+    UnsupportedSchemaError,
     ValidationError,
 )
 from inventory_manager_mini.core.models import (
@@ -34,8 +39,25 @@ from inventory_manager_mini.core.models import (
     Staff,
     StockMovement,
 )
-from inventory_manager_mini.core.timeutil import utc_now, utc_now_str
-from inventory_manager_mini.db.connection import transaction
+from inventory_manager_mini.core.timeutil import (
+    local_timestamp_for_filename,
+    utc_now,
+    utc_now_str,
+)
+from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
+from inventory_manager_mini.db.connection import (
+    connect,
+    connect_readonly,
+    read_transaction,
+    transaction,
+)
+from inventory_manager_mini.db.migrations import (
+    MIGRATIONS,
+    MIN_SUPPORTED_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    check_migration_path,
+    inspect_schema,
+)
 from inventory_manager_mini.db.repositories import (
     ItemRepository,
     MasterRepository,
@@ -738,3 +760,250 @@ class SettingsService:
         if unknown:
             reasons.append("未知の設定キーがあります: " + ", ".join(unknown))
         return reasons
+
+
+class PreparedRestore:
+    def __init__(
+        self,
+        path: Path,
+        source_version: int,
+        item_count: int,
+        movement_count: int,
+        last_moved_at: str | None,
+        temporary_directory: tempfile.TemporaryDirectory[str],
+    ) -> None:
+        self.path = path
+        self.source_version = source_version
+        self.item_count = item_count
+        self.movement_count = movement_count
+        self.last_moved_at = last_moved_at
+        self._temporary_directory = temporary_directory
+        self._closed = False
+
+    def close(self) -> None:
+        if not self._closed:
+            self._temporary_directory.cleanup()
+            self._closed = True
+
+    def __enter__(self) -> PreparedRestore:
+        if self._closed:
+            raise RuntimeError("復元準備データはすでに破棄されています")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+class BackupService:
+    def __init__(
+        self,
+        clock: Callable[[], datetime] = utc_now,
+        tz: tzinfo | None = None,
+    ) -> None:
+        self.clock = clock
+        self.tz = tz
+
+    def _timestamp(self) -> str:
+        return local_timestamp_for_filename(now=self.clock(), tz=self.tz)
+
+    def create_backup(self, conn: sqlite3.Connection, dest_dir: Path) -> Path:
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_dir / f"inventory_{self._timestamp()}.db"
+        try:
+            copy_database(conn, dest_path)
+        except FileExistsError as error:
+            raise ValidationError("同名のバックアップファイルがすでに存在します") from error
+        return dest_path
+
+    def inspect_database(self, conn: sqlite3.Connection, version: int) -> list[str]:
+        with read_transaction(conn):
+            actual_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            reasons: list[str] = []
+            if actual_version != version:
+                reasons.append(
+                    f"データベースの版数が一致しません: 期待値 {version}、実際 {actual_version}"
+                )
+            reasons.extend(inspect_schema(conn, version))
+            reasons.extend(check_sqlite_integrity(conn))
+            if reasons:
+                return reasons
+
+            item_repository = ItemRepository(conn)
+            movement_repository = MovementRepository(conn)
+            for item_id, quantity, movement_total in item_repository.find_quantity_mismatches():
+                reasons.append(
+                    f"品目 {item_id} の在庫数が履歴合計と一致しません: "
+                    f"在庫 {quantity}、履歴合計 {movement_total}"
+                )
+            invalid_reversals = movement_repository.find_invalid_reversals()
+            if invalid_reversals:
+                reasons.append("取り消し履歴が不正です: " + ", ".join(map(str, invalid_reversals)))
+            reasons.extend(SettingsService(conn).validate_all())
+            return reasons
+
+    @staticmethod
+    def _is_input_error(error: BaseException) -> bool:
+        if isinstance(error, OSError):
+            return True
+        if not isinstance(error, sqlite3.DatabaseError):
+            return False
+        error_code = getattr(error, "sqlite_errorcode", None)
+        if error_code is None:
+            return False
+        primary_code = error_code & 0xFF
+        return primary_code in {
+            sqlite3.SQLITE_NOTADB,
+            sqlite3.SQLITE_CORRUPT,
+            sqlite3.SQLITE_CANTOPEN,
+        }
+
+    def prepare_restore(self, source_path: Path) -> PreparedRestore:
+        temporary_directory = tempfile.TemporaryDirectory(prefix="inventory-restore-")
+        temp_path = Path(temporary_directory.name) / "prepared.db"
+        source_conn: sqlite3.Connection | None = None
+        try:
+            source_conn = connect_readonly(Path(source_path))
+            source_conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            source_version = int(source_conn.execute("PRAGMA user_version").fetchone()[0])
+            if source_version == 0 or source_version < MIN_SUPPORTED_SCHEMA_VERSION:
+                raise InvalidBackupError((f"スキーマ版 {source_version} はサポートされていません",))
+            if source_version > SCHEMA_VERSION:
+                raise InvalidBackupError((f"スキーマ版 {source_version} は新しすぎます",))
+
+            reasons = inspect_schema(source_conn, source_version)
+            reasons.extend(check_sqlite_integrity(source_conn))
+            if reasons:
+                raise InvalidBackupError(tuple(reasons))
+
+            source_item_count = int(source_conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
+            source_movement_count = int(
+                source_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0]
+            )
+            last_moved_at_value = source_conn.execute(
+                "SELECT MAX(moved_at) FROM stock_movements"
+            ).fetchone()[0]
+            last_moved_at = None if last_moved_at_value is None else str(last_moved_at_value)
+            copy_database(source_conn, temp_path)
+            source_conn.close()
+            source_conn = None
+
+            if source_version < SCHEMA_VERSION:
+                try:
+                    check_migration_path(source_version, SCHEMA_VERSION, MIGRATIONS)
+                    migration_conn = connect(temp_path)
+                    try:
+                        for target_version in range(source_version + 1, SCHEMA_VERSION + 1):
+                            with transaction(migration_conn):
+                                migration_conn.executescript(MIGRATIONS[target_version])
+                                migration_reasons = inspect_schema(migration_conn, target_version)
+                                if migration_reasons:
+                                    raise UnsupportedSchemaError(
+                                        "移行後のスキーマ検査に失敗しました: "
+                                        + "、".join(migration_reasons)
+                                    )
+                                migration_conn.execute(f"PRAGMA user_version = {target_version}")
+                    finally:
+                        migration_conn.close()
+                except Exception as error:
+                    raise InvalidBackupError(
+                        (f"復元用データベースの移行に失敗しました: {error}",)
+                    ) from error
+
+            prepared_conn = connect_readonly(temp_path)
+            try:
+                reasons = self.inspect_database(prepared_conn, SCHEMA_VERSION)
+                if reasons:
+                    raise InvalidBackupError(tuple(reasons))
+            finally:
+                prepared_conn.close()
+
+            return PreparedRestore(
+                temp_path,
+                source_version,
+                source_item_count,
+                source_movement_count,
+                last_moved_at,
+                temporary_directory,
+            )
+        except InvalidBackupError:
+            temporary_directory.cleanup()
+            raise
+        except BaseException as error:
+            temporary_directory.cleanup()
+            if self._is_input_error(error):
+                raise InvalidBackupError((f"復元元を読み取れません: {error}",)) from error
+            raise
+        finally:
+            if source_conn is not None:
+                source_conn.close()
+
+    def apply_restore(
+        self,
+        prepared: PreparedRestore,
+        current_db_path: Path,
+        backup_dir: Path,
+    ) -> Path:
+        current_db_path = Path(current_db_path)
+        backup_dir = Path(backup_dir)
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = backup_dir / f"pre-restore_{self._timestamp()}.db"
+            current_conn = connect(current_db_path)
+            try:
+                copy_database(current_conn, backup_path)
+            finally:
+                current_conn.close()
+        except Exception as error:
+            raise RestoreError(
+                f"復元前のバックアップを作成できません: {error}",
+                stage="pre_backup",
+                recovered=True,
+            ) from error
+
+        try:
+            self._copy_over(prepared.path, current_db_path)
+            self._inspect_path(current_db_path)
+        except Exception as overwrite_error:
+            try:
+                self._copy_over(backup_path, current_db_path)
+                self._inspect_path(current_db_path)
+            except Exception as recovery_error:
+                raise RestoreError(
+                    f"復元に失敗し、現行データベースを復旧できませんでした: {recovery_error}",
+                    stage="recovery",
+                    recovered=False,
+                    backup_path=backup_path,
+                ) from overwrite_error
+            raise RestoreError(
+                f"復元に失敗しましたが、現行データベースを復旧しました: {overwrite_error}",
+                stage="overwrite",
+                recovered=True,
+                backup_path=backup_path,
+            ) from overwrite_error
+        return backup_path
+
+    def _copy_over(self, source_path: Path, destination_path: Path) -> None:
+        source_conn: sqlite3.Connection | None = None
+        destination_conn: sqlite3.Connection | None = None
+        try:
+            source_conn = connect_readonly(source_path)
+            destination_conn = connect(destination_path)
+            source_conn.backup(destination_conn)
+        finally:
+            if destination_conn is not None:
+                destination_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+
+    def _inspect_path(self, path: Path) -> None:
+        conn = connect_readonly(path)
+        try:
+            reasons = self.inspect_database(conn, SCHEMA_VERSION)
+            if reasons:
+                raise InvalidBackupError(tuple(reasons))
+        finally:
+            conn.close()
+
+    def cancel(self, prepared: PreparedRestore) -> None:
+        prepared.close()

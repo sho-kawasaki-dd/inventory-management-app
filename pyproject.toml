@@ -34,7 +34,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM"]
 
 [tool.pyright]
 pythonVersion = "3.13"
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 typeCheckingMode = "standard"
 strict = [
     "src/inventory_manager_mini/core",
