@@ -234,42 +234,42 @@
 
 #### J. Service `core/services.py`
 
-- [ ] 共通の補助
-  - [ ] `validate_purchase_url(url: str | None) -> str | None`: 前後の空白を除去し、空なら `None`。`urllib.parse.urlsplit` でスキームが `http`/`https` かつホスト名ありの場合のみ許可し、それ以外は `ValidationError`(UI が `openUrl` の前に再利用する)
-  - [ ] 任意文字列の正規化(前後の空白を除去し、空文字は `None`)と必須文字列の検証
-  - [ ] 整数の検証(`bool` を拒否し、下限を確認する)
-  - [ ] 接頭辞の検証(`^[A-Z0-9]{2,5}$`)
-- [ ] 更新操作の業務検証は `transaction(conn)` の内側(`BEGIN IMMEDIATE` 後)で最新の行を読んで行う。更新系公開メソッド同士を呼んでトランザクションを二重に開始しない
-- [ ] 読み取り専用の取得・一覧・検査メソッドはトランザクションを開始せず、既存トランザクション内でも利用可能とする。複数クエリの一貫性が必要な最上位の集計・検査だけ `read_transaction(conn)` を使う
-- [ ] `InventoryService(conn, clock=...)`
-  - [ ] `create_item(new: NewItem) -> Item`: クライアント・発注主体が有効(発注主体の未指定は `ValidationError`、無効は `InactiveMasterError`)、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
-  - [ ] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。クライアント・発注主体の変更先は有効なもののみ(発注主体を空にはできない)。無効化済みの現在の値を維持する編集は許可する。廃止品目の編集も許可する
-  - [ ] `deactivate_item`・`reactivate_item`(在庫残があっても廃止可能)
-  - [ ] `get_item`、`list_items(filter)`、`list_low_stock()`、`get_purchase_info(item_id)`
-  - [ ] 在庫操作 5 種: `receive(item_id, staff_id, quantity, unit_price, update_reference_price, note)`、`issue(item_id, staff_id, quantity, used_for, note)`、`return_to_supplier(...)`、`dispose(...)`、`stocktake(item_id, staff_id, actual_quantity, note)`
-    - [ ] 共通: 品目が有効(違反は `InactiveItemError`)、担当者が有効(違反は `InactiveMasterError`)、数量は 1 以上(棚卸の実数は 0 以上)
-    - [ ] 出庫は使用先が必須
-    - [ ] 減少後の在庫が負なら `NegativeStockError`
-    - [ ] `client_id`・`purchaser_id` は品目の現在の値をコピーする(無効化済みでも拒否しない)
-    - [ ] `unit_price`: 入庫は入力値(`None` の場合は参考価格)、それ以外は操作時点の参考価格
-    - [ ] 入庫で `update_reference_price=True` かつ実単価が参考価格と異なる場合は、同一トランザクションで `reference_price` を更新する
-    - [ ] 棚卸は差分 0 でも記録する
-    - [ ] 処理順: 検証 → 履歴 INSERT → 数量 UPDATE。`moved_at = utc_now_str(clock())`
-  - [ ] `reverse(movement_id, staff_id, note) -> StockMovement`
-    - [ ] 取り消し操作者は有効な担当者が必須
-    - [ ] 元行が取り消し行 → `ReversalNotAllowedError`、取り消し済み → `AlreadyReversedError`、差分 0 の棚卸 → `ReversalNotAllowedError`、品目が廃止 → `InactiveItemError`、取り消し後の在庫が負 → `NegativeStockError`
-    - [ ] `reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
-  - [ ] `list_history(item_id)`、`list_all_history()`
-  - [ ] `reversal_block_reason(movement_id) -> str | None`: 取り消し不可の理由(UI のツールチップ用。担当者の条件を除く)
-- [ ] `MasterService(conn)`
-  - [ ] クライアント・発注主体・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
-  - [ ] カテゴリ: 追加(親・名称・接頭辞)・名称変更・親変更(自身または子孫なら `CategoryCycleError`)・接頭辞変更(`next_seq > 1` なら `PrefixLockedError`)・削除(品目参照・子カテゴリ・`next_seq > 1` のいずれかで `MasterInUseError`)
-  - [ ] 保管場所: 追加・名称変更・削除(使用中なら `MasterInUseError`)
-  - [ ] 一覧(無効化を含むか指定)、使用中・削除可否の判定(UI の活性制御用)
-- [ ] `SettingsService(conn)`
-  - [ ] `get_fiscal_year_start_month() -> int`: 読み取り専用とし、トランザクションを開始しない
-  - [ ] `set_fiscal_year_start_month(month)`: `transaction(conn)` 内で検証・更新する(1〜12 以外は `ValidationError`)
-  - [ ] `validate_all() -> list[str]`: 必須キーの存在、値が正規の整数表記で 1〜12、未知のキーがないことを検査し、不合格の理由一覧を返す。読み取り専用とし、トランザクションを開始しない
+- [x] 共通の補助
+  - [x] `validate_purchase_url(url: str | None) -> str | None`: 前後の空白を除去し、空なら `None`。`urllib.parse.urlsplit` でスキームが `http`/`https` かつホスト名ありの場合のみ許可し、それ以外は `ValidationError`(UI が `openUrl` の前に再利用する)
+  - [x] 任意文字列の正規化(前後の空白を除去し、空文字は `None`)と必須文字列の検証
+  - [x] 整数の検証(`bool` を拒否し、下限を確認する)
+  - [x] 接頭辞の検証(`^[A-Z0-9]{2,5}$`)
+- [x] 更新操作の業務検証は `transaction(conn)` の内側(`BEGIN IMMEDIATE` 後)で最新の行を読んで行う。更新系公開メソッド同士を呼んでトランザクションを二重に開始しない
+- [x] 読み取り専用の取得・一覧・検査メソッドはトランザクションを開始せず、既存トランザクション内でも利用可能とする。複数クエリの一貫性が必要な最上位の集計・検査だけ `read_transaction(conn)` を使う
+- [x] `InventoryService(conn, clock=...)`
+  - [x] `create_item(new: NewItem) -> Item`: クライアント・発注主体が有効(発注主体の未指定は `ValidationError`、無効は `InactiveMasterError`)、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
+  - [x] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。クライアント・発注主体の変更先は有効なもののみ(発注主体を空にはできない)。無効化済みの現在の値を維持する編集は許可する。廃止品目の編集も許可する
+  - [x] `deactivate_item`・`reactivate_item`(在庫残があっても廃止可能)
+  - [x] `get_item`、`list_items(filter)`、`list_low_stock()`、`get_purchase_info(item_id)`
+  - [x] 在庫操作 5 種: `receive(item_id, staff_id, quantity, unit_price, update_reference_price, note)`、`issue(item_id, staff_id, quantity, used_for, note)`、`return_to_supplier(...)`、`dispose(...)`、`stocktake(item_id, staff_id, actual_quantity, note)`
+    - [x] 共通: 品目が有効(違反は `InactiveItemError`)、担当者が有効(違反は `InactiveMasterError`)、数量は 1 以上(棚卸の実数は 0 以上)
+    - [x] 出庫は使用先が必須
+    - [x] 減少後の在庫が負なら `NegativeStockError`
+    - [x] `client_id`・`purchaser_id` は品目の現在の値をコピーする(無効化済みでも拒否しない)
+    - [x] `unit_price`: 入庫は入力値(`None` の場合は参考価格)、それ以外は操作時点の参考価格
+    - [x] 入庫で `update_reference_price=True` かつ実単価が参考価格と異なる場合は、同一トランザクションで `reference_price` を更新する
+    - [x] 棚卸は差分 0 でも記録する
+    - [x] 処理順: 検証 → 履歴 INSERT → 数量 UPDATE。`moved_at = utc_now_str(clock())`
+  - [x] `reverse(movement_id, staff_id, note) -> StockMovement`
+    - [x] 取り消し操作者は有効な担当者が必須
+    - [x] 元行が取り消し行 → `ReversalNotAllowedError`、取り消し済み → `AlreadyReversedError`、差分 0 の棚卸 → `ReversalNotAllowedError`、品目が廃止 → `InactiveItemError`、取り消し後の在庫が負 → `NegativeStockError`
+    - [x] `reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
+  - [x] `list_history(item_id)`、`list_all_history()`
+  - [x] `reversal_block_reason(movement_id) -> str | None`: 取り消し不可の理由(UI のツールチップ用。担当者の条件を除く)
+- [x] `MasterService(conn)`
+  - [x] クライアント・発注主体・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
+  - [x] カテゴリ: 追加(親・名称・接頭辞)・名称変更・親変更(自身または子孫なら `CategoryCycleError`)・接頭辞変更(`next_seq > 1` なら `PrefixLockedError`)・削除(品目参照・子カテゴリ・`next_seq > 1` のいずれかで `MasterInUseError`)
+  - [x] 保管場所: 追加・名称変更・削除(使用中なら `MasterInUseError`)
+  - [x] 一覧(無効化を含むか指定)、使用中・削除可否の判定(UI の活性制御用)
+- [x] `SettingsService(conn)`
+  - [x] `get_fiscal_year_start_month() -> int`: 読み取り専用とし、トランザクションを開始しない
+  - [x] `set_fiscal_year_start_month(month)`: `transaction(conn)` 内で検証・更新する(1〜12 以外は `ValidationError`)
+  - [x] `validate_all() -> list[str]`: 必須キーの存在、値が正規の整数表記で 1〜12、未知のキーがないことを検査し、不合格の理由一覧を返す。読み取り専用とし、トランザクションを開始しない
 
 #### K. テスト(1b)
 
