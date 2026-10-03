@@ -208,29 +208,29 @@
 
 #### I. Repository `db/repositories.py`
 
-- [ ] 共通: すべての SQL をプレースホルダでパラメータ化する。行を dataclass に変換する関数を持つ
-- [ ] `IntegrityError` の変換: `sqlite_errorname`(`SQLITE_CONSTRAINT_UNIQUE`・`_CHECK`・`_FOREIGNKEY`・`_NOTNULL`)とメッセージ中の対象列で判定し、呼び出し箇所ごとの対応表で業務例外に変換する。対応外の制約違反は `ValidationError` とし、元の例外を `from` で連結する
-  - [ ] マスタ名・接頭辞の重複 → `ValidationError`
-  - [ ] `reversal_of` の重複 → `AlreadyReversedError`
-  - [ ] `quantity >= 0` 違反 → `NegativeStockError`
-  - [ ] 削除時の外部キー違反 → `MasterInUseError`
-- [ ] `ItemRepository`
-  - [ ] `allocate_code(category_id) -> str`: `UPDATE categories SET next_seq = next_seq + 1 WHERE id = ? RETURNING code_prefix, next_seq - 1` で連番を確保し、`接頭辞-%04d` を生成する
-  - [ ] `insert`、`update`(数量・単位・管理番号は対象外)、`get`、`set_active`
-  - [ ] `add_quantity(item_id, delta)`: `UPDATE items SET quantity = quantity + ? WHERE id = ?`
-  - [ ] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
-  - [ ] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
-  - [ ] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
-  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
-- [ ] `MovementRepository`
-  - [ ] `insert`、`get`、`is_reversed(movement_id)`
-  - [ ] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
-  - [ ] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
-- [ ] `MasterRepository`
-  - [ ] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
-  - [ ] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
-  - [ ] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
-- [ ] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
+- [x] 共通: すべての SQL をプレースホルダでパラメータ化する。行を dataclass に変換する関数を持つ
+- [x] `IntegrityError` の変換: `sqlite_errorname`(`SQLITE_CONSTRAINT_UNIQUE`・`_CHECK`・`_FOREIGNKEY`・`_NOTNULL`)とメッセージ中の対象列で判定し、呼び出し箇所ごとの対応表で業務例外に変換する。対応外の制約違反は `ValidationError` とし、元の例外を `from` で連結する
+  - [x] マスタ名・接頭辞の重複 → `ValidationError`
+  - [x] `reversal_of` の重複 → `AlreadyReversedError`
+  - [x] `quantity >= 0` 違反 → `NegativeStockError`
+  - [x] 削除時の外部キー違反 → `MasterInUseError`
+- [x] `ItemRepository`
+  - [x] `allocate_code(category_id) -> str`: `UPDATE categories SET next_seq = next_seq + 1 WHERE id = ? RETURNING code_prefix, next_seq - 1` で連番を確保し、`接頭辞-%04d` を生成する
+  - [x] `insert`、`update`(数量・単位・管理番号は対象外)、`get`、`set_active`
+  - [x] `add_quantity(item_id, delta)`: `UPDATE items SET quantity = quantity + ? WHERE id = ?`
+  - [x] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
+  - [x] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
+  - [x] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
+  - [x] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
+- [x] `MovementRepository`
+  - [x] `insert`、`get`、`is_reversed(movement_id)`
+  - [x] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
+  - [x] 業務整合性検査用(1b 単体テストおよび 1c BackupService で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
+- [x] `MasterRepository`
+  - [x] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
+  - [x] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
+  - [x] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
+- [x] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
 
 #### J. Service `core/services.py`
 
@@ -278,7 +278,7 @@
   - [ ] `seeded_conn`: 有効なクライアント 2・無効なクライアント 1、有効な発注主体 2・無効な発注主体 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
   - [ ] `fixed_clock`: 時刻を任意に進められる `clock`
   - [ ] Service 群(`inventory`・`master`・`settings`)
-- [ ] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換、業務整合性検査用クエリの単体検証(`find_quantity_mismatches()` の一致・不一致・履歴なし、`find_invalid_reversals()` の正常行・元行不在・取り消し行の取り消し・差分 0 棚卸・品目不一致・delta 符号不正・属性不一致の各パターン)
+- [x] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換、業務整合性検査用クエリの単体検証(`find_quantity_mismatches()` の一致・不一致・履歴なし、`find_invalid_reversals()` の正常行・元行不在・取り消し行の取り消し・差分 0 棚卸・品目不一致・delta 符号不正・属性不一致の各パターン)
 - [ ] `tests/test_inventory_service.py`
   - [ ] 品目の登録: 単位の固定、初期数量の adjust と担当者の記録、初期数量が正で担当者が未指定/無効の場合に品目・履歴・連番がいずれも変わらない
   - [ ] 採番: 品目登録 → 別カテゴリへ変更 → 元カテゴリの削除を拒否 → 元カテゴリで追加登録し、連番が継続する
