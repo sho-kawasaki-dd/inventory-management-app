@@ -3,13 +3,38 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from inventory_manager_mini.db import backup
+from inventory_manager_mini.core import services
+from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError, ValidationError
+from inventory_manager_mini.core.services import BackupService
+from inventory_manager_mini.db import backup, migrations
 from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
-from inventory_manager_mini.db.connection import connect
+from inventory_manager_mini.db.connection import connect, connect_readonly
+from inventory_manager_mini.db.migrations import create_schema
+
+
+def _create_inventory_database(path: Path, item_name: str, *, delete_journal: bool = False) -> None:
+    conn = sqlite3.connect(path, autocommit=True) if delete_journal else connect(path)
+    try:
+        create_schema(conn)
+        conn.executemany("INSERT INTO clients (id, name) VALUES (?, ?)", [(1, "クライアント")])
+        conn.executemany("INSERT INTO purchasers (id, name) VALUES (?, ?)", [(1, "発注主体")])
+        conn.executemany("INSERT INTO staff (id, name) VALUES (?, ?)", [(1, "担当者")])
+        conn.executemany(
+            "INSERT INTO categories (id, name, code_prefix) VALUES (?, ?, ?)",
+            [(1, "備品", "EQ")],
+        )
+        conn.execute(
+            "INSERT INTO items (client_id, purchaser_id, code, name, category_id) "
+            "VALUES (1, 1, 'EQ-0001', ?, 1)",
+            (item_name,),
+        )
+    finally:
+        conn.close()
 
 
 class FailingBackupConnection(sqlite3.Connection):
@@ -152,3 +177,393 @@ def test_copy_database_cleans_created_files_after_copy_failure(tmp_path: Path) -
     assert not Path(f"{destination_path}").exists()
     assert not Path(f"{destination_path}-wal").exists()
     assert not Path(f"{destination_path}-shm").exists()
+
+
+def test_backup_service_creates_timestamped_backup_and_rejects_existing_file(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "元の品目")
+    conn = connect(source_path)
+    service = BackupService(clock=lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC), tz=UTC)
+    try:
+        backup_path = service.create_backup(conn, tmp_path / "backups")
+        assert backup_path.name == "inventory_20261003_030405.db"
+        with pytest.raises(ValidationError):
+            service.create_backup(conn, tmp_path / "backups")
+    finally:
+        conn.close()
+
+    backup_conn = connect_readonly(backup_path)
+    try:
+        assert backup_conn.execute("SELECT name FROM items").fetchone() == ("元の品目",)
+    finally:
+        backup_conn.close()
+
+
+def test_backup_service_inspects_schema_and_business_integrity(tmp_path: Path) -> None:
+    path = tmp_path / "inventory.db"
+    _create_inventory_database(path, "品目")
+    conn = connect(path)
+    try:
+        service = BackupService()
+        assert service.inspect_database(conn, 1) == []
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = 1")
+        reasons = service.inspect_database(conn, 1)
+        assert any("在庫数が履歴合計と一致しません" in reason for reason in reasons)
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
+def test_backup_service_stops_before_business_checks_when_schema_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "inventory.db"
+    _create_inventory_database(path, "品目")
+    conn = connect(path)
+    conn.execute("DROP TRIGGER trg_items_updated_at")
+
+    def fail_if_business_check_runs(self: object) -> list[tuple[int, int, int]]:
+        raise AssertionError("業務検査へ進んではいけません")
+
+    monkeypatch.setattr(
+        services.ItemRepository,
+        "find_quantity_mismatches",
+        fail_if_business_check_runs,
+    )
+    try:
+        reasons = BackupService().inspect_database(conn, 1)
+        assert any("スキーマ" in reason or "トリガー" in reason for reason in reasons)
+    finally:
+        conn.close()
+
+
+def test_backup_service_rejects_invalid_settings_and_reversal_data(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.db"
+    _create_inventory_database(settings_path, "設定検査品目")
+    settings_conn = connect(settings_path)
+    settings_conn.execute(
+        "UPDATE settings SET value = ? WHERE key = ?", ("04", "fiscal_year_start_month")
+    )
+    try:
+        settings_reasons = BackupService().inspect_database(settings_conn, 1)
+        assert any("年度開始月" in reason for reason in settings_reasons)
+    finally:
+        settings_conn.close()
+
+    reversal_path = tmp_path / "reversal.db"
+    _create_inventory_database(reversal_path, "取り消し検査品目")
+    reversal_conn = connect(reversal_path)
+    reversal_conn.execute("UPDATE items SET quantity = 2 WHERE id = 1")
+    reversal_conn.executemany(
+        "INSERT INTO stock_movements "
+        "(item_id, client_id, purchaser_id, staff_id, reason, delta, reversal_of) "
+        "VALUES (1, 1, 1, 1, 'in', 1, ?)",
+        [(None,), (1,)],
+    )
+    try:
+        reversal_reasons = BackupService().inspect_database(reversal_conn, 1)
+        assert any("取り消し履歴が不正" in reason for reason in reversal_reasons)
+    finally:
+        reversal_conn.close()
+
+
+def test_prepare_restore_preserves_source_and_cleans_temporary_database(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "復元品目")
+    original_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    service = BackupService()
+
+    with service.prepare_restore(source_path) as prepared:
+        assert prepared.source_version == 1
+        assert prepared.item_count == 1
+        assert prepared.movement_count == 0
+        assert prepared.last_moved_at is None
+        assert prepared.path.exists()
+        temp_path = prepared.path
+    assert not temp_path.exists()
+    assert hashlib.sha256(source_path.read_bytes()).digest() == original_hash
+
+
+def test_prepare_restore_accepts_delete_journal_without_changing_source(tmp_path: Path) -> None:
+    source_path = tmp_path / "source-delete.db"
+    _create_inventory_database(source_path, "復元品目", delete_journal=True)
+    original_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    source_conn = sqlite3.connect(source_path, autocommit=True)
+    try:
+        assert source_conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+    finally:
+        source_conn.close()
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        assert prepared.item_count == 1
+
+    source_conn = sqlite3.connect(source_path, autocommit=True)
+    try:
+        assert source_conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+    finally:
+        source_conn.close()
+    assert hashlib.sha256(source_path.read_bytes()).digest() == original_hash
+
+
+def test_prepare_restore_wraps_non_database_input_and_preserves_cause(tmp_path: Path) -> None:
+    source_path = tmp_path / "not-a-database.db"
+    source_path.write_bytes(b"not a sqlite database")
+
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert error.value.reasons
+    assert error.value.__cause__ is not None
+    assert source_path.read_bytes() == b"not a sqlite database"
+
+
+def test_prepare_restore_wraps_missing_source_and_preserves_cause(tmp_path: Path) -> None:
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(tmp_path / "missing.db")
+
+    assert isinstance(error.value.__cause__, FileNotFoundError)
+
+
+def test_prepare_restore_wraps_access_denied_and_preserves_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "denied.db"
+
+    def deny_source(path: Path) -> sqlite3.Connection:
+        raise PermissionError("injected access denial")
+
+    monkeypatch.setattr(services, "connect_readonly", deny_source)
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert isinstance(error.value.__cause__, PermissionError)
+
+
+def test_prepare_restore_does_not_wrap_programming_sql_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "品目")
+
+    def fail_schema_query(*args: object, **kwargs: object) -> list[str]:
+        raise sqlite3.OperationalError("injected application SQL error")
+
+    monkeypatch.setattr(services, "inspect_schema", fail_schema_query)
+    with pytest.raises(sqlite3.OperationalError, match="injected application SQL error"):
+        BackupService().prepare_restore(source_path)
+
+
+def test_apply_restore_replaces_database_and_keeps_pre_restore_backup(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    service = BackupService(clock=lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC), tz=UTC)
+
+    with service.prepare_restore(source_path) as prepared:
+        backup_path = service.apply_restore(prepared, current_path, tmp_path / "backups")
+
+    restored = connect_readonly(current_path)
+    backup_conn = connect_readonly(backup_path)
+    try:
+        assert restored.execute("SELECT name FROM items").fetchone() == ("復元品目",)
+        assert backup_conn.execute("SELECT name FROM items").fetchone() == ("現行品目",)
+    finally:
+        restored.close()
+        backup_conn.close()
+    assert backup_path.name == "pre-restore_20261003_030405.db"
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_apply_restore_refuses_existing_pre_restore_backup_without_changing_current(
+    tmp_path: Path,
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    existing_path = backup_dir / "pre-restore_20261003_030405.db"
+    existing_path.write_bytes(b"keep")
+    existing_hash = hashlib.sha256(existing_path.read_bytes()).digest()
+    service = BackupService(clock=lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC), tz=UTC)
+
+    with (
+        service.prepare_restore(source_path) as prepared,
+        pytest.raises(RestoreError) as error,
+    ):
+        service.apply_restore(prepared, current_path, backup_dir)
+
+    assert error.value.stage == "pre_backup"
+    assert error.value.recovered
+    assert error.value.backup_path is None
+    assert hashlib.sha256(existing_path.read_bytes()).digest() == existing_hash
+    current = connect_readonly(current_path)
+    try:
+        assert current.execute("SELECT name FROM items").fetchone() == ("現行品目",)
+    finally:
+        current.close()
+
+
+def test_prepare_restore_migrates_older_backup_in_temporary_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source-v1.db"
+    current_path = tmp_path / "current-v1.db"
+    _create_inventory_database(source_path, "旧版品目")
+    _create_inventory_database(current_path, "現行品目")
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    spec_conn = connect(tmp_path / "spec.db")
+    try:
+        create_schema(spec_conn)
+        spec_conn.execute("ALTER TABLE settings ADD COLUMN extra TEXT")
+        version_two_spec = migrations._read_schema_spec(spec_conn)
+    finally:
+        spec_conn.close()
+    monkeypatch.setattr(services, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(services, "MIGRATIONS", {2: "ALTER TABLE settings ADD COLUMN extra TEXT;"})
+    monkeypatch.setitem(migrations.SCHEMA_SPECS, 2, version_two_spec)
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        BackupService().apply_restore(prepared, current_path, tmp_path / "backups")
+        prepared_conn = connect_readonly(prepared.path)
+        try:
+            assert prepared_conn.execute("PRAGMA user_version").fetchone() == (2,)
+            assert prepared_conn.execute("SELECT name FROM items").fetchone() == ("旧版品目",)
+        finally:
+            prepared_conn.close()
+    restored_conn = connect_readonly(current_path)
+    try:
+        assert restored_conn.execute("PRAGMA user_version").fetchone() == (2,)
+        assert restored_conn.execute("SELECT name FROM items").fetchone() == ("旧版品目",)
+    finally:
+        restored_conn.close()
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+@pytest.mark.parametrize("case", ("zero", "unsupported_old", "too_new", "schema", "integrity"))
+def test_prepare_restore_rejects_invalid_version_schema_and_integrity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    source_path = tmp_path / f"{case}.db"
+    _create_inventory_database(source_path, "品目")
+    if case == "zero":
+        source_conn = sqlite3.connect(source_path, autocommit=True)
+        source_conn.execute("PRAGMA user_version = 0")
+        source_conn.close()
+    elif case == "unsupported_old":
+        monkeypatch.setattr(services, "MIN_SUPPORTED_SCHEMA_VERSION", 2)
+    elif case == "too_new":
+        monkeypatch.setattr(services, "SCHEMA_VERSION", 0)
+    elif case == "schema":
+        source_conn = connect(source_path)
+        source_conn.execute("DROP TRIGGER trg_items_updated_at")
+        source_conn.close()
+    elif case == "integrity":
+        monkeypatch.setattr(
+            services,
+            "check_sqlite_integrity",
+            lambda conn: ["注入した SQLite 整合性エラー"],
+        )
+
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+    assert error.value.reasons
+
+
+def test_prepare_restore_rejects_failed_temporary_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source-v1.db"
+    _create_inventory_database(source_path, "旧版品目")
+    spec_conn = connect(tmp_path / "spec.db")
+    try:
+        create_schema(spec_conn)
+        spec_conn.execute("ALTER TABLE settings ADD COLUMN extra TEXT")
+        version_two_spec = migrations._read_schema_spec(spec_conn)
+    finally:
+        spec_conn.close()
+    monkeypatch.setattr(services, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(
+        services,
+        "MIGRATIONS",
+        {2: "ALTER TABLE settings ADD COLUMN extra TEXT; INVALID SQL;"},
+    )
+    monkeypatch.setitem(migrations.SCHEMA_SPECS, 2, version_two_spec)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    with pytest.raises(InvalidBackupError, match="移行に失敗"):
+        BackupService().prepare_restore(source_path)
+
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_cancel_removes_prepared_restore_directory(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "復元品目")
+    service = BackupService()
+    prepared = service.prepare_restore(source_path)
+    prepared_path = prepared.path
+
+    service.cancel(prepared)
+
+    assert not prepared_path.exists()
+
+
+def test_apply_restore_recovers_current_database_after_failed_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    service = BackupService()
+    real_inspect = service.inspect_database
+    with service.prepare_restore(source_path) as prepared:
+        inspections = 0
+
+        def fail_first_inspection(conn: sqlite3.Connection, version: int) -> list[str]:
+            nonlocal inspections
+            inspections += 1
+            if inspections == 1:
+                return ["検査失敗"]
+            return real_inspect(conn, version)
+
+        monkeypatch.setattr(service, "inspect_database", fail_first_inspection)
+        with pytest.raises(RestoreError) as error:
+            service.apply_restore(prepared, current_path, tmp_path / "backups")
+
+    assert error.value.stage == "overwrite"
+    assert error.value.recovered
+    assert error.value.backup_path is not None
+    current = connect_readonly(current_path)
+    try:
+        assert current.execute("SELECT name FROM items").fetchone() == ("現行品目",)
+    finally:
+        current.close()
+
+
+def test_apply_restore_reports_failed_recovery_and_preserves_automatic_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    service = BackupService()
+
+    with service.prepare_restore(source_path) as prepared:
+        monkeypatch.setattr(service, "inspect_database", lambda conn, version: ["検査失敗"])
+        with pytest.raises(RestoreError) as error:
+            service.apply_restore(prepared, current_path, tmp_path / "backups")
+
+    assert error.value.stage == "recovery"
+    assert not error.value.recovered
+    assert error.value.backup_path is not None
+    assert error.value.backup_path.exists()

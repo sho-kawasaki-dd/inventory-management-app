@@ -334,39 +334,39 @@
 
 #### N. BackupService `core/services.py`
 
-- [ ] `BackupService(clock=..., tz=None)`(DB のパス・接続は引数で受け取る)
-- [ ] `create_backup(conn, dest_dir) -> Path`: `inventory_{ローカル日時}.db` を作成する。保存先がなければ作成し、`copy_database` の排他的な新規作成で同名を拒否する。同名の `FileExistsError` は `ValidationError` に変換する
-- [ ] `inspect_database(conn, version) -> list[str]`: `read_transaction(conn)` 内で版別スキーマ・SQLite 整合性を検査し、合格した場合だけ業務整合性(`find_quantity_mismatches`・`find_invalid_reversals`)・設定値(`SettingsService(conn).validate_all()`)を検査する。内部の読み取りメソッドはトランザクションを開始しない。不合格の理由一覧を返す
-- [ ] `prepare_restore(source_path) -> PreparedRestore`
-  - [ ] `connect_readonly` で開き、版数(`MIN_SUPPORTED_SCHEMA_VERSION <= v <= SCHEMA_VERSION`)、その版のスキーマ、SQLite 整合性を検査する。不合格なら `InvalidBackupError(reasons)`
-  - [ ] 復元元のオープン・版数取得・PRAGMA 実行で、内容不正による `SQLITE_NOTADB`・`SQLITE_CORRUPT`(拡張コードを含む)、ファイル不存在・アクセス拒否など入力由来の失敗が起きた場合も、日本語の理由を持つ `InvalidBackupError` に変換し、元例外を `from` で保持する
-  - [ ] 入力由来かどうかは失敗した処理と SQLite のエラーコードで判定する。プログラム側の SQL 誤り・引数誤りなどを含む `sqlite3.DatabaseError` 全般を一律に `InvalidBackupError` へ変換しない
-  - [ ] `tempfile.TemporaryDirectory` に `copy_database` で一時 DB を作り、復元元の接続を閉じる
-  - [ ] 一時 DB が旧版なら版ごとのトランザクションで最新版へ移行する(失敗は `InvalidBackupError`)
-  - [ ] 一時 DB を `inspect_database(conn, SCHEMA_VERSION)` で再検査する(不合格は `InvalidBackupError`)
-  - [ ] `PreparedRestore` は一時 DB のパスと確認ダイアログ用の要約(元の版数、品目数、履歴件数、最終の操作日時)を持ち、コンテキストマネージャとして後始末(接続を閉じ、一時ディレクトリを削除)を保証する
-  - [ ] 失敗時も一時ファイルを後始末する。復元元のファイルは変更・削除しない
-- [ ] `apply_restore(prepared, current_db_path, backup_dir) -> Path`(呼び出し側が現行 DB の全接続を閉じた後に呼ぶ。戻り値は pre-restore のバックアップ)
-  - [ ] 現行 DB を `backup_dir/pre-restore_{ローカル日時}.db` へ `copy_database` で排他的に新規作成して保全する。同名・確保・コピーの失敗時は現行 DB を変更せず `RestoreError(stage="pre_backup", recovered=True, backup_path=None)`。今回作成した未完成ファイルだけを後始末する
-  - [ ] 一時 DB から現行 DB へ `backup()` で上書きし、`inspect_database` で再検査する
-  - [ ] 上書きまたは再検査に失敗したら、pre-restore のバックアップから `backup()` で復旧し、同じ検査を行う。合格なら `RestoreError(stage="overwrite", recovered=True, backup_path=...)`、不合格・失敗なら `RestoreError(stage="recovery", recovered=False, backup_path=...)`。自動バックアップは削除しない
-  - [ ] 成功・失敗のいずれでも、自身が開いた接続をすべて閉じる
-- [ ] `cancel(prepared)`: 後始末のみ行う
-- [ ] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1c で `check_sqlite_integrity` と `BackupService` の総合テストを拡充)
-  - [ ] バックアップに WAL 内の未チェックポイントの確定データが含まれる。ファイル名がローカル日時になる。保存先の作成、同名の拒否、書き込みできない保存先でのエラー
-  - [ ] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する。保存先の確保・コピー失敗時に既存ファイルを変更・削除しない
-  - [ ] `inspect_database()` が実際の `SettingsService.validate_all()` を呼び、ネストエラーなく正常終了する。スキーマ不一致時は業務・設定クエリへ進まない
-  - [ ] 正常な復元(DELETE モードの復元元を含む)で、現行 DB が置き換わり、pre-restore のバックアップが作成される
-  - [ ] 検査・成功・キャンセル・失敗のいずれでも、復元元のファイルのハッシュとジャーナルモードが変わらず、一時ファイルが残らない
-  - [ ] 拒否: 版数 0・未対応の旧版・新版、同名テーブルで列/制約が欠けた DB、`integrity_check`/`foreign_key_check` の不合格、数量と履歴合計の不一致、取り消し行の品目・符号・コピー属性の不正、取り消し元が取り消し行・差分 0 の棚卸、設定値の不正。いずれも現行 DB と復元元が変化しない
-  - [ ] 非 SQLite ファイル・物理破損 DB・不存在の復元元・アクセス拒否を `InvalidBackupError` で拒否し、日本語の理由と元例外を保持する。現行 DB は変わらず、存在する復元元のハッシュも変わらない。失敗後に開いた接続が閉じられ、一時ファイルが残らない
-  - [ ] プログラム側の SQL 誤りは `InvalidBackupError` に変換されず、接続・一時ファイルの後始末は同様に保証される
-  - [ ] 許容: 正常な初期数量・棚卸・取り消し、履歴なしの数量 0、コピー属性の NULL 同士、クライアント・発注主体・担当者の無効化、品目の廃止、クライアント・発注主体・参考価格の変更
-  - [ ] 試験用の v2 を注入した更新経路: v1 の復元元が一時 DB で v2 に移行されて復元される。移行失敗時は `InvalidBackupError` で、現行 DB と復元元が変化しない
-  - [ ] pre-restore のバックアップの失敗(保存先を書き込み不可にする)で、現行 DB が変化しない
-  - [ ] 固定時計と既存の同名 pre-restore バックアップで `RestoreError(stage="pre_backup", recovered=True)` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
-  - [ ] 上書き後の再検査の失敗(検査を monkeypatch で不合格にする)で復旧され、`recovered=True` になる
-  - [ ] 復旧の失敗で `recovered=False` となり、自動バックアップが残る
+- [x] `BackupService(clock=..., tz=None)`(DB のパス・接続は引数で受け取る)
+- [x] `create_backup(conn, dest_dir) -> Path`: `inventory_{ローカル日時}.db` を作成する。保存先がなければ作成し、`copy_database` の排他的な新規作成で同名を拒否する。同名の `FileExistsError` は `ValidationError` に変換する
+- [x] `inspect_database(conn, version) -> list[str]`: `read_transaction(conn)` 内で版別スキーマ・SQLite 整合性を検査し、合格した場合だけ業務整合性(`find_quantity_mismatches`・`find_invalid_reversals`)・設定値(`SettingsService(conn).validate_all()`)を検査する。内部の読み取りメソッドはトランザクションを開始しない。不合格の理由一覧を返す
+- [x] `prepare_restore(source_path) -> PreparedRestore`
+  - [x] `connect_readonly` で開き、版数(`MIN_SUPPORTED_SCHEMA_VERSION <= v <= SCHEMA_VERSION`)、その版のスキーマ、SQLite 整合性を検査する。不合格なら `InvalidBackupError(reasons)`
+  - [x] 復元元のオープン・版数取得・PRAGMA 実行で、内容不正による `SQLITE_NOTADB`・`SQLITE_CORRUPT`(拡張コードを含む)、ファイル不存在・アクセス拒否など入力由来の失敗が起きた場合も、日本語の理由を持つ `InvalidBackupError` に変換し、元例外を `from` で保持する
+  - [x] 入力由来かどうかは失敗した処理と SQLite のエラーコードで判定する。プログラム側の SQL 誤り・引数誤りなどを含む `sqlite3.DatabaseError` 全般を一律に `InvalidBackupError` へ変換しない
+  - [x] `tempfile.TemporaryDirectory` に `copy_database` で一時 DB を作り、復元元の接続を閉じる
+  - [x] 一時 DB が旧版なら版ごとのトランザクションで最新版へ移行する(失敗は `InvalidBackupError`)
+  - [x] 一時 DB を `inspect_database(conn, SCHEMA_VERSION)` で再検査する(不合格は `InvalidBackupError`)
+  - [x] `PreparedRestore` は一時 DB のパスと確認ダイアログ用の要約(元の版数、品目数、履歴件数、最終の操作日時)を持ち、コンテキストマネージャとして後始末(接続を閉じ、一時ディレクトリを削除)を保証する
+  - [x] 失敗時も一時ファイルを後始末する。復元元のファイルは変更・削除しない
+- [x] `apply_restore(prepared, current_db_path, backup_dir) -> Path`(呼び出し側が現行 DB の全接続を閉じた後に呼ぶ。戻り値は pre-restore のバックアップ)
+  - [x] 現行 DB を `backup_dir/pre-restore_{ローカル日時}.db` へ `copy_database` で排他的に新規作成して保全する。同名・確保・コピーの失敗時は現行 DB を変更せず `RestoreError(stage="pre_backup", recovered=True, backup_path=None)`。今回作成した未完成ファイルだけを後始末する
+  - [x] 一時 DB から現行 DB へ `backup()` で上書きし、`inspect_database` で再検査する
+  - [x] 上書きまたは再検査に失敗したら、pre-restore のバックアップから `backup()` で復旧し、同じ検査を行う。合格なら `RestoreError(stage="overwrite", recovered=True, backup_path=...)`、不合格・失敗なら `RestoreError(stage="recovery", recovered=False, backup_path=...)`。自動バックアップは削除しない
+  - [x] 成功・失敗のいずれでも、自身が開いた接続をすべて閉じる
+- [x] `cancel(prepared)`: 後始末のみ行う
+- [x] `tests/test_backup.py`(`tmp_path` 上の実ファイル DB。1c で `check_sqlite_integrity` と `BackupService` の総合テストを拡充)
+  - [x] バックアップに WAL 内の未チェックポイントの確定データが含まれる。ファイル名がローカル日時になる。保存先の作成、同名の拒否、書き込みできない保存先でのエラー
+  - [x] `copy_database()` が書き込みトランザクション外で呼ばれ、トランザクション中のコピー要求を開始前に拒否する。保存先の確保・コピー失敗時に既存ファイルを変更・削除しない
+  - [x] `inspect_database()` が実際の `SettingsService.validate_all()` を呼び、ネストエラーなく正常終了する。スキーマ不一致時は業務・設定クエリへ進まない
+  - [x] 正常な復元(DELETE モードの復元元を含む)で、現行 DB が置き換わり、pre-restore のバックアップが作成される
+  - [x] 検査・成功・キャンセル・失敗のいずれでも、復元元のファイルのハッシュとジャーナルモードが変わらず、一時ファイルが残らない
+  - [x] 拒否: 版数 0・未対応の旧版・新版、同名テーブルで列/制約が欠けた DB、`integrity_check`/`foreign_key_check` の不合格、数量と履歴合計の不一致、取り消し行の品目・符号・コピー属性の不正、取り消し元が取り消し行・差分 0 の棚卸、設定値の不正。いずれも現行 DB と復元元が変化しない
+  - [x] 非 SQLite ファイル・物理破損 DB・不存在の復元元・アクセス拒否を `InvalidBackupError` で拒否し、日本語の理由と元例外を保持する。現行 DB は変わらず、存在する復元元のハッシュも変わらない。失敗後に開いた接続が閉じられ、一時ファイルが残らない
+  - [x] プログラム側の SQL 誤りは `InvalidBackupError` に変換されず、接続・一時ファイルの後始末は同様に保証される
+  - [x] 許容: 正常な初期数量・棚卸・取り消し、履歴なしの数量 0、コピー属性の NULL 同士、クライアント・発注主体・担当者の無効化、品目の廃止、クライアント・発注主体・参考価格の変更
+  - [x] 試験用の v2 を注入した更新経路: v1 の復元元が一時 DB で v2 に移行されて復元される。移行失敗時は `InvalidBackupError` で、現行 DB と復元元が変化しない
+  - [x] pre-restore のバックアップの失敗(保存先を書き込み不可にする)で、現行 DB が変化しない
+  - [x] 固定時計と既存の同名 pre-restore バックアップで `RestoreError(stage="pre_backup", recovered=True)` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
+  - [x] 上書き後の再検査の失敗(検査を monkeypatch で不合格にする)で復旧され、`recovered=True` になる
+  - [x] 復旧の失敗で `recovered=False` となり、自動バックアップが残る
 
 #### O. ダミーデータ生成 `scripts/generate_dummy_data.py`
 
