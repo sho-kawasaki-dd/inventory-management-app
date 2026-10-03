@@ -94,15 +94,15 @@
 
 #### B. 多重起動防止 `ui/single_instance.py`
 
-- [ ] `SingleInstanceLock(path: Path)`: 内部で `QLockFile` を生成し `setStaleLockTime(0)` を設定する
-- [ ] `try_acquire(timeout_ms: int = 100) -> bool`: `tryLock(timeout_ms)` の結果を返す
-- [ ] `release() -> None`: 取得済みの場合のみ `unlock()` する(複数回呼んでも安全)
-- [ ] `tests/test_single_instance.py`(`tmp_path` 上のロックファイル)
-  - [ ] 取得 → 解放 → 再取得できる
-  - [ ] 別プロセス(`sys.executable` で起動するヘルパー。ロック取得後に標準出力へ通知して待機)が保持中は取得できない
-  - [ ] ヘルパーが正常終了(解放)した後は取得できる
+- [x] `SingleInstanceLock(path: Path)`: 内部で `QLockFile` を生成し `setStaleLockTime(0)` を設定する
+- [x] `try_acquire(timeout_ms: int = 100) -> bool`: `tryLock(timeout_ms)` の結果を返す
+- [x] `release() -> None`: 取得済みの場合のみ `unlock()` する(複数回呼んでも安全)
+- [x] `tests/test_single_instance.py`(`tmp_path` 上のロックファイル)
+  - [x] 取得 → 解放 → 再取得できる
+  - [x] 別プロセス(`sys.executable` で起動するヘルパー。ロック取得後に標準出力へ通知して待機)が保持中は取得できない
+  - [x] ヘルパーが正常終了(解放)した後は取得できる
   - [ ] ヘルパーを強制終了(`kill`)した後は、PID の生存確認によりロックを回収して取得できる(`setStaleLockTime(0)` でも回収されることを Windows/Linux で確認。回収されない場合は本書の方針を見直す)
-  - [ ] ヘルパーには環境変数でロックパスを渡し、実データの保存先を使わない
+  - [x] ヘルパーには環境変数でロックパスを渡し、実データの保存先を使わない
 
 #### C. UI 共通部品
 
