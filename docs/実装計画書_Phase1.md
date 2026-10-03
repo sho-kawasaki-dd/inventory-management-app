@@ -298,34 +298,34 @@
 
 #### L. 集計・CSV `core/reports.py`
 
-- [ ] `ReportService(conn, tz=None, clock=...)`
-- [ ] `fiscal_year_of(local_date, start_month) -> int`(`年 − (月 < 開始月 ? 1 : 0)`)、`current_fiscal_year()`、`available_fiscal_years()`(履歴の最古・最新から算出し、現在の年度を含める)
-- [ ] `dashboard(fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE) -> list[DashboardRow]`
-  - [ ] 最上位で `read_transaction(conn)` を使い、年度開始月と全期間の集計を同一スナップショットで読む。内部の読み取り Service は新しいトランザクションを開始しない
-  - [ ] 年度開始月は `SettingsService` から取得する
-  - [ ] 期間境界は `local_range_to_utc()` で算出する(月次は 12 区間、年次は 1 区間)
-  - [ ] `stock_movements m LEFT JOIN stock_movements o ON m.reversal_of = o.id` で `COALESCE(o.moved_at, m.moved_at) >= ? AND < ?` を条件とし、`(:client_id IS NULL OR m.client_id = :client_id)` と `(:purchaser_id IS NULL OR m.purchaser_id = :purchaser_id)` で絞り込んで、期間・`client_id`・`purchaser_id` ごとに 5.7 の指標を集計する(SQL は 1 本。列名を文字列で組み立てない)
-  - [ ] `group_by` に応じて、全指標が加算可能であることを利用して Python 側で畳み込む(`NONE` はクライアントも発注主体も `None`、`CLIENT` は発注主体を `None`、`PURCHASER` はクライアントを `None`)。`NONE` は履歴がなくても期間数分の行を 0 値で返し、それ以外は履歴のある組のみ返す。無効化済みのマスタも履歴があれば含める
-  - [ ] 単価未登録の出庫件数は、有効な操作(取り消し行でも取り消された行でもない)のみを数える
-  - [ ] 返品・棚卸(初期数量を含む)はいずれの指標にも含めない
-- [ ] `escape_csv_cell(value: str) -> str`: `=` `+` `-` `@` タブ・CR で始まる文字列の先頭に `'` を付与する
-- [ ] CSV の共通処理: `csv.writer(quoting=csv.QUOTE_ALL, lineterminator="\r\n")`、UTF-8(BOM 付き)。同じディレクトリの一時ファイルに書いてから `os.replace` で置換し、失敗時は一時ファイルを削除する。文字列列のみエスケープし、数値列はそのまま、`None` は空文字とする
-- [ ] `export_items_csv(path, filter)`: 5.8 の列。最終購入日はローカル日付、低在庫は `○`/空、状態は `有効`/`廃止`
-- [ ] `export_history_csv(path, item_id=None)`: 5.8 の列。日時は `format_local`、操作種別は `入庫`/`出庫`/`返品`/`廃棄`/`棚卸`、取り消し済みは `○`/空
-- [ ] `export_dashboard_csv(path, fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE)`: 5.8 の列(畳み込んだ軸の列は「(すべて)」)
-- [ ] `tests/test_reports.py`(`tz` に `ZoneInfo` を注入し、`clock` で `moved_at` を固定する)
-  - [ ] `dashboard()` が実際の `SettingsService.get_fiscal_year_start_month()` を呼び、ネストエラーなく正常終了する
-  - [ ] 月またぎ・年度またぎの入庫がローカル暦の正しい区間に集計される(UTC 15:00 = JST 翌日 0:00 の境界を含む)
-  - [ ] 月・年度をまたぐ取り消しが元行の期間で相殺される(タイムゾーン境界付近を含む)
-  - [ ] サマータイムの切替月の境界(`America/New_York`)
-  - [ ] 年度開始月の変更で区切りが変わる
-  - [ ] クライアント変更・発注主体変更の後も、過去の費用が元のクライアント・発注主体に帰属する
-  - [ ] 内訳軸 `NONE`・`CLIENT`・`PURCHASER`・`CLIENT_PURCHASER` の各合計が一致する
-  - [ ] クライアント・発注主体の 2 軸同時絞り込みが `CLIENT_PURCHASER` 内訳の該当行と一致する。無効化済みのマスタでも絞り込める
-  - [ ] 絞り込み未指定(`None`)は全件を対象とし、ID を指定したときのみ絞り込まれる
-  - [ ] 支出額・廃棄額は単価未登録を除外し、単価未登録の出庫件数は有効な操作のみ数える。返品・棚卸を含めない
-  - [ ] 最終購入日がローカル日付になる
-- [ ] `tests/test_csv.py`: BOM・CRLF・全項目のクォート、数式インジェクション対策(各先頭文字、数値列は対象外)、日時のローカル表記(オフセットなし)、列の順序、書き込み失敗時に既存ファイルが壊れず一時ファイルが残らない
+- [x] `ReportService(conn, tz=None, clock=...)`
+- [x] `fiscal_year_of(local_date, start_month) -> int`(`年 − (月 < 開始月 ? 1 : 0)`)、`current_fiscal_year()`、`available_fiscal_years()`(履歴の最古・最新から算出し、現在の年度を含める)
+- [x] `dashboard(fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE) -> list[DashboardRow]`
+  - [x] 最上位で `read_transaction(conn)` を使い、年度開始月と全期間の集計を同一スナップショットで読む。内部の読み取り Service は新しいトランザクションを開始しない
+  - [x] 年度開始月は `SettingsService` から取得する
+  - [x] 期間境界は `local_range_to_utc()` で算出する(月次は 12 区間、年次は 1 区間)
+  - [x] `stock_movements m LEFT JOIN stock_movements o ON m.reversal_of = o.id` で `COALESCE(o.moved_at, m.moved_at) >= ? AND < ?` を条件とし、`(:client_id IS NULL OR m.client_id = :client_id)` と `(:purchaser_id IS NULL OR m.purchaser_id = :purchaser_id)` で絞り込んで、期間・`client_id`・`purchaser_id` ごとに 5.7 の指標を集計する(SQL は 1 本。列名を文字列で組み立てない)
+  - [x] `group_by` に応じて、全指標が加算可能であることを利用して Python 側で畳み込む(`NONE` はクライアントも発注主体も `None`、`CLIENT` は発注主体を `None`、`PURCHASER` はクライアントを `None`)。`NONE` は履歴がなくても期間数分の行を 0 値で返し、それ以外は履歴のある組のみ返す。無効化済みのマスタも履歴があれば含める
+  - [x] 単価未登録の出庫件数は、有効な操作(取り消し行でも取り消された行でもない)のみを数える
+  - [x] 返品・棚卸(初期数量を含む)はいずれの指標にも含めない
+- [x] `escape_csv_cell(value: str) -> str`: `=` `+` `-` `@` タブ・CR で始まる文字列の先頭に `'` を付与する
+- [x] CSV の共通処理: `csv.writer(quoting=csv.QUOTE_ALL, lineterminator="\r\n")`、UTF-8(BOM 付き)。同じディレクトリの一時ファイルに書いてから `os.replace` で置換し、失敗時は一時ファイルを削除する。文字列列のみエスケープし、数値列はそのまま、`None` は空文字とする
+- [x] `export_items_csv(path, filter)`: 5.8 の列。最終購入日はローカル日付、低在庫は `○`/空、状態は `有効`/`廃止`
+- [x] `export_history_csv(path, item_id=None)`: 5.8 の列。日時は `format_local`、操作種別は `入庫`/`出庫`/`返品`/`廃棄`/`棚卸`、取り消し済みは `○`/空
+- [x] `export_dashboard_csv(path, fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE)`: 5.8 の列(畳み込んだ軸の列は「(すべて)」)
+- [x] `tests/test_reports.py`(`tz` に `ZoneInfo` を注入し、`clock` で `moved_at` を固定する)
+  - [x] `dashboard()` が実際の `SettingsService.get_fiscal_year_start_month()` を呼び、ネストエラーなく正常終了する
+  - [x] 月またぎ・年度またぎの入庫がローカル暦の正しい区間に集計される(UTC 15:00 = JST 翌日 0:00 の境界を含む)
+  - [x] 月・年度をまたぐ取り消しが元行の期間で相殺される(タイムゾーン境界付近を含む)
+  - [x] サマータイムの切替月の境界(`America/New_York`)
+  - [x] 年度開始月の変更で区切りが変わる
+  - [x] クライアント変更・発注主体変更の後も、過去の費用が元のクライアント・発注主体に帰属する
+  - [x] 内訳軸 `NONE`・`CLIENT`・`PURCHASER`・`CLIENT_PURCHASER` の各合計が一致する
+  - [x] クライアント・発注主体の 2 軸同時絞り込みが `CLIENT_PURCHASER` 内訳の該当行と一致する。無効化済みのマスタでも絞り込める
+  - [x] 絞り込み未指定(`None`)は全件を対象とし、ID を指定したときのみ絞り込まれる
+  - [x] 支出額・廃棄額は単価未登録を除外し、単価未登録の出庫件数は有効な操作のみ数える。返品・棚卸を含めない
+  - [x] 最終購入日がローカル日付になる
+- [x] `tests/test_csv.py`: BOM・CRLF・全項目のクォート、数式インジェクション対策(各先頭文字、数値列は対象外)、日時のローカル表記(オフセットなし)、列の順序、書き込み失敗時に既存ファイルが壊れず一時ファイルが残らない
 
 #### M. DB 整合性検査 `db/backup.py`
 
