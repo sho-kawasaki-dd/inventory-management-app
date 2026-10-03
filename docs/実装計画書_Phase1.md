@@ -41,9 +41,9 @@
 | Service の構築 | DB を扱う Service は `conn: sqlite3.Connection` を受け取り、Repository を内部で生成する。時刻を扱う Service の `clock: Callable[[], datetime]` の既定は `timeutil.utc_now` とする。`BackupService` の接続はメソッド引数で受け取る |
 | トランザクション境界 | 更新系の公開メソッドは最上位の業務操作で 1 回だけ `transaction(conn)` を開始する。読み取りメソッドは開始せず、呼び出し元のトランザクション内でも利用可能とする。複数クエリの一貫性が必要な集計・検査は最上位で `read_transaction(conn)` を使う。バックアップ・復元全体は単一トランザクションの対象外で、`backup()` は書き込みトランザクション外で実行する |
 | バックアップの保存先 | 手動・移行前・復元前のいずれも保存先を排他的に新規作成し、同名ファイルがあれば中止する。失敗時に削除するのは今回作成した未完成ファイルだけとし、既存ファイルや完成した自動バックアップは削除しない |
-| 品目操作の所属 | 品目の登録・編集・廃止・再有効化・一覧は `InventoryService` に置く(初期数量の履歴を伴うため)。`MasterService` は所有者・担当者・カテゴリ・保管場所を担当する |
+| 品目操作の所属 | 品目の登録・編集・廃止・再有効化・一覧は `InventoryService` に置く(初期数量の履歴を伴うため)。`MasterService` はクライアント・発注主体・担当者・カテゴリ・保管場所を担当する |
 | CSV 出力 | `ReportService` が出力先 `Path` を受け取り、`encoding="utf-8-sig"`・`newline=""` で書き込む。同じディレクトリの一時ファイルに書いてから `os.replace` で置換する |
-| 検索・絞り込み | `ItemFilter` の全条件(部分一致・所有者・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含む)を Repository の SQL で処理する。UI の `QSortFilterProxyModel` はソートを主に担う |
+| 検索・絞り込み | `ItemFilter` の全条件(部分一致・クライアント・発注主体・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含む)を Repository の SQL で処理する。UI の `QSortFilterProxyModel` はソートを主に担う |
 | 業務例外の追加 | 3.3 にない次の 3 クラスを `DomainError` 派生で追加し、開発計画書 3.3 を更新する: `UnsupportedSchemaError`(版数 0・未対応の旧版・スキーマ不一致)、`MigrationError`(自動バックアップのパスを保持)、`RestoreError`(失敗段階・復旧の成否・自動バックアップのパスを保持) |
 | `PRAGMA user_version` | プレースホルダを使えないため、`int` であること(`bool` 不可)と 0 以上であることを検証してから SQL に埋め込む。SQL パラメータ化規則の唯一の例外とし、コード内に 1 行コメントで明示する |
 | DDL の実行 | `executescript()` を `transaction(conn)` 内で使用する(`autocommit=True` では暗黙 COMMIT が発生しない)。途中失敗時に DDL がロールバックされることをテストで確認する |
@@ -100,15 +100,16 @@
 #### C. モデル `core/models.py`
 
 - [ ] `Reason(StrEnum)`: `IN="in"`、`OUT="out"`、`RETURN="return"`、`DISPOSE="dispose"`、`ADJUST="adjust"`
-- [ ] マスタ: `Owner`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
+- [ ] マスタ: `Client`、`Purchaser`、`Staff`(`id`、`name`、`is_active`)、`Category`(`id`、`parent_id`、`name`、`code_prefix`、`next_seq`)、`Location`
 - [ ] `Item`: `items` の全列
 - [ ] `StockMovement`: `stock_movements` の全列
 - [ ] 入力用: `NewItem`(登録項目と `initial_quantity`・`initial_staff_id`)、`ItemUpdate`(管理番号・数量・単位以外の編集可能項目)
 - [ ] `PurchaseInfo`: `last_purchased_at: str | None`(UTC)、`lot_quantity: int | None`
-- [ ] 表示用: `ItemRow`(`Item` に所有者名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・所有者名・担当者名・`is_reversed` を加える)
-- [ ] `ItemFilter`: `text`、`owner_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
+- [ ] 表示用: `ItemRow`(`Item` にクライアント名・発注主体名、カテゴリのフルパス、保管場所名、`is_low_stock`、`PurchaseInfo` を加える)、`MovementRow`(`StockMovement` に管理番号・品名・クライアント名・発注主体名・担当者名・`is_reversed` を加える)
+- [ ] `ItemFilter`: `text`、`client_id`、`purchaser_id`、`category_id`(子孫を含む)、`location_id`、`low_stock_only`、`include_inactive`(すべて任意。既定は絞り込みなし・廃止を除外)
 - [ ] `PeriodKind(StrEnum)`: `ANNUAL`、`MONTHLY`
-- [ ] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`owner_id`、`owner_name`、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
+- [ ] `GroupBy(StrEnum)`: `NONE`、`CLIENT`、`PURCHASER`、`CLIENT_PURCHASER`(ダッシュボードの内訳軸)
+- [ ] `DashboardRow`: 期間ラベル・期間開始日(ローカル)、`client_id`・`client_name`、`purchaser_id`・`purchaser_name`(内訳軸で畳み込んだ項目は `None`)、入庫数、出庫数、支出額、単価未登録の出庫件数、廃棄数、廃棄額
 
 #### D. 接続 `db/connection.py`
 
@@ -138,8 +139,9 @@
 - [ ] `importlib.resources.files("inventory_manager_mini.db") / "schema.sql"` で読み込み、wheel に含まれることを確認する
 - [ ] `tests/test_schema_constraints.py`(`:memory:`)
   - [ ] CHECK: `is_active`、`code_prefix`(長さ・使用文字)、`unit = '個'`、`quantity >= 0`、`reorder_threshold >= 0`、`reorder_quantity > 0`、`reference_price >= 0`、`unit_price >= 0`、`reason` の値域、`reason` と `delta` の符号(取り消し行は除外)
-  - [ ] UNIQUE: 所有者名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
-  - [ ] FOREIGN KEY: 存在しない所有者・カテゴリ・品目・元行の参照を拒否する
+  - [ ] UNIQUE: クライアント名・発注主体名・担当者名・保管場所名・接頭辞・管理番号・`reversal_of`、同一親の下でのカテゴリ名(親が NULL 同士も重複として拒否)
+  - [ ] FOREIGN KEY: 存在しないクライアント・発注主体・カテゴリ・品目・元行の参照を拒否する
+  - [ ] NOT NULL: `items.client_id`・`items.purchaser_id`、`stock_movements.client_id`・`stock_movements.purchaser_id` の NULL を拒否する
   - [ ] `trg_items_updated_at`: 更新時に `updated_at` が変わる(明示的に指定した場合はその値を維持する)
 
 #### F. マイグレーション `db/migrations.py`
@@ -203,16 +205,16 @@
   - [ ] `allocate_code(category_id) -> str`: `UPDATE categories SET next_seq = next_seq + 1 WHERE id = ? RETURNING code_prefix, next_seq - 1` で連番を確保し、`接頭辞-%04d` を生成する
   - [ ] `insert`、`update`(数量・単位・管理番号は対象外)、`get`、`set_active`
   - [ ] `add_quantity(item_id, delta)`: `UPDATE items SET quantity = quantity + ? WHERE id = ?`
-  - [ ] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。所有者名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
+  - [ ] `list(filter: ItemFilter) -> list[ItemRow]`: 品名・管理番号・メーカー型番を `LIKE ? ESCAPE '\'` で部分一致させる(`%`・`_`・`\` をエスケープ)。カテゴリは再帰 CTE で子孫を含める。クライアント名・発注主体名・カテゴリのフルパス(` > ` 区切り)・保管場所名・低在庫・最終購入情報を 1 クエリで取得する
   - [ ] `list_low_stock() -> list[ItemRow]`(有効品目で `quantity <= reorder_threshold`)
   - [ ] `get_purchase_info(item_id) -> PurchaseInfo`(開発計画書 5.6 の SQL)
   - [ ] 業務整合性検査用(1c で使用): `find_quantity_mismatches()`(全品目で `quantity` と `COALESCE(SUM(delta), 0)` が不一致の行)
 - [ ] `MovementRepository`
   - [ ] `insert`、`get`、`is_reversed(movement_id)`
   - [ ] `list_by_item(item_id) -> list[MovementRow]`、`list_all() -> list[MovementRow]`(日時・ID の昇順)
-  - [ ] 業務整合性検査用(1c で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`owner_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
+  - [ ] 業務整合性検査用(1c で使用): `find_invalid_reversals()`(元行の不在、元行が取り消し行、元行が差分 0 の棚卸、`item_id` の不一致、`delta` が符号反転でない、`reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` の不一致(`IS NOT` で NULL 同士を一致扱い))
 - [ ] `MasterRepository`
-  - [ ] 所有者・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定
+  - [ ] クライアント・発注主体・担当者: 一覧(無効化を含むか指定)・取得・追加・名称変更・有効/無効の切替・削除・使用中の判定(クライアント・発注主体は `items` と `stock_movements` の参照、担当者は `stock_movements` の参照)
   - [ ] カテゴリ: 一覧・取得・追加・名称変更・親変更・接頭辞変更・削除・子孫 ID の取得(再帰 CTE)・フルパスの取得・使用中の判定(品目参照・子カテゴリ・`next_seq > 1`)
   - [ ] 保管場所: 一覧・取得・追加・名称変更・削除・使用中の判定
 - [ ] `SettingsRepository`: `get(key)`、`set(key, value)`、`all() -> dict[str, str]`
@@ -227,15 +229,15 @@
 - [ ] 更新操作の業務検証は `transaction(conn)` の内側(`BEGIN IMMEDIATE` 後)で最新の行を読んで行う。更新系公開メソッド同士を呼んでトランザクションを二重に開始しない
 - [ ] 読み取り専用の取得・一覧・検査メソッドはトランザクションを開始せず、既存トランザクション内でも利用可能とする。複数クエリの一貫性が必要な最上位の集計・検査だけ `read_transaction(conn)` を使う
 - [ ] `InventoryService(conn, clock=...)`
-  - [ ] `create_item(new: NewItem) -> Item`: 所有者が有効、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
-  - [ ] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。所有者の変更先は有効なもののみ。無効化済みの現在の所有者を維持する編集は許可する。廃止品目の編集も許可する
+  - [ ] `create_item(new: NewItem) -> Item`: クライアント・発注主体が有効(発注主体の未指定は `ValidationError`、無効は `InactiveMasterError`)、品名・カテゴリが必須、単位は「個」を固定で設定、URL を検証する。採番と INSERT を同一トランザクションで行う。初期数量が 1 以上なら有効な担当者を必須とし、`reason='adjust'`・`delta=初期数量`・`unit_price=参考価格` の履歴を記録する。0 なら担当者不要で履歴は作らない
+  - [ ] `update_item(update: ItemUpdate) -> Item`: 管理番号・数量・単位は変更しない。クライアント・発注主体の変更先は有効なもののみ(発注主体を空にはできない)。無効化済みの現在の値を維持する編集は許可する。廃止品目の編集も許可する
   - [ ] `deactivate_item`・`reactivate_item`(在庫残があっても廃止可能)
   - [ ] `get_item`、`list_items(filter)`、`list_low_stock()`、`get_purchase_info(item_id)`
   - [ ] 在庫操作 5 種: `receive(item_id, staff_id, quantity, unit_price, update_reference_price, note)`、`issue(item_id, staff_id, quantity, used_for, note)`、`return_to_supplier(...)`、`dispose(...)`、`stocktake(item_id, staff_id, actual_quantity, note)`
     - [ ] 共通: 品目が有効(違反は `InactiveItemError`)、担当者が有効(違反は `InactiveMasterError`)、数量は 1 以上(棚卸の実数は 0 以上)
     - [ ] 出庫は使用先が必須
     - [ ] 減少後の在庫が負なら `NegativeStockError`
-    - [ ] `owner_id` は品目の現在の所有者をコピーする(無効化済みでも拒否しない)
+    - [ ] `client_id`・`purchaser_id` は品目の現在の値をコピーする(無効化済みでも拒否しない)
     - [ ] `unit_price`: 入庫は入力値(`None` の場合は参考価格)、それ以外は操作時点の参考価格
     - [ ] 入庫で `update_reference_price=True` かつ実単価が参考価格と異なる場合は、同一トランザクションで `reference_price` を更新する
     - [ ] 棚卸は差分 0 でも記録する
@@ -243,11 +245,11 @@
   - [ ] `reverse(movement_id, staff_id, note) -> StockMovement`
     - [ ] 取り消し操作者は有効な担当者が必須
     - [ ] 元行が取り消し行 → `ReversalNotAllowedError`、取り消し済み → `AlreadyReversedError`、差分 0 の棚卸 → `ReversalNotAllowedError`、品目が廃止 → `InactiveItemError`、取り消し後の在庫が負 → `NegativeStockError`
-    - [ ] `reason`・`owner_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
+    - [ ] `reason`・`client_id`・`purchaser_id`・`unit_price`・`used_for` は元行をコピーし、`delta = -元delta`、`reversal_of = 元行 ID` とする。参考価格は戻さない
   - [ ] `list_history(item_id)`、`list_all_history()`
   - [ ] `reversal_block_reason(movement_id) -> str | None`: 取り消し不可の理由(UI のツールチップ用。担当者の条件を除く)
 - [ ] `MasterService(conn)`
-  - [ ] 所有者・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
+  - [ ] クライアント・発注主体・担当者: 追加・名称変更・無効化・再有効化・削除(使用中なら `MasterInUseError`。無効化のみ可)
   - [ ] カテゴリ: 追加(親・名称・接頭辞)・名称変更・親変更(自身または子孫なら `CategoryCycleError`)・接頭辞変更(`next_seq > 1` なら `PrefixLockedError`)・削除(品目参照・子カテゴリ・`next_seq > 1` のいずれかで `MasterInUseError`)
   - [ ] 保管場所: 追加・名称変更・削除(使用中なら `MasterInUseError`)
   - [ ] 一覧(無効化を含むか指定)、使用中・削除可否の判定(UI の活性制御用)
@@ -260,18 +262,18 @@
 
 - [ ] `tests/conftest.py` に共通フィクスチャを置く
   - [ ] `memory_conn`: `connect_memory()` と `create_schema()` で作成する
-  - [ ] `seeded_conn`: 有効な所有者 2・無効な所有者 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
+  - [ ] `seeded_conn`: 有効なクライアント 2・無効なクライアント 1、有効な発注主体 2・無効な発注主体 1、有効な担当者 2・無効な担当者 1、親子のカテゴリ(接頭辞付き)、保管場所 2 を投入する
   - [ ] `fixed_clock`: 時刻を任意に進められる `clock`
   - [ ] Service 群(`inventory`・`master`・`settings`)
 - [ ] `tests/test_repositories.py`: 採番の連番と 10000 以降の 5 桁化、`ItemFilter` の各条件と組み合わせ(LIKE の特殊文字を含む)、カテゴリのフルパス、最終購入情報(取り消し済みの入庫を除外)、`IntegrityError` の変換
 - [ ] `tests/test_inventory_service.py`
   - [ ] 品目の登録: 単位の固定、初期数量の adjust と担当者の記録、初期数量が正で担当者が未指定/無効の場合に品目・履歴・連番がいずれも変わらない
   - [ ] 採番: 品目登録 → 別カテゴリへ変更 → 元カテゴリの削除を拒否 → 元カテゴリで追加登録し、連番が継続する
-  - [ ] 品目の編集: 数量・単位・管理番号が変わらない、無効化済み所有者の維持は可、無効な所有者への変更は拒否、過去の履歴の `owner_id` は不変
+  - [ ] 品目の編集: 数量・単位・管理番号が変わらない、無効化済みクライアント・発注主体の維持は可、無効なクライアント・発注主体への変更は拒否、発注主体の未指定・登録時の無効な発注主体を拒否、過去の履歴の `client_id`・`purchaser_id` は不変
   - [ ] URL の検証: `http`/`https` かつホストありのみ許可(`javascript:`・`file:`・`ftp:`・ホストなしを拒否)
-  - [ ] 在庫操作 5 種の `reason`・`delta`・`unit_price`・`used_for` と数量の更新、負の在庫の拒否、廃止品目・無効な担当者の拒否、無効化済み所有者の品目への通常操作の許可
+  - [ ] 在庫操作 5 種の `reason`・`delta`・`unit_price`・`used_for` と数量の更新、負の在庫の拒否、廃止品目・無効な担当者の拒否、無効化済みクライアント・発注主体の品目への通常操作の許可
   - [ ] 入庫で参考価格を更新した後にその入庫を取り消しても参考価格が戻らず、取り消し行の単価が元行と一致する。入庫後に参考価格を再変更した場合も最新値が維持される
-  - [ ] 取り消しの全不可条件、初期数量の adjust の取り消し、元行の所有者・担当者が無効化済みでも取り消せる、所有者変更後の取り消しで元行の `owner_id` がコピーされる
+  - [ ] 取り消しの全不可条件、初期数量の adjust の取り消し、元行のクライアント・発注主体・担当者が無効化済みでも取り消せる、クライアント・発注主体変更後の取り消しで元行の `client_id`・`purchaser_id` がコピーされる
   - [ ] トランザクション: 成功時の永続化。履歴 INSERT 後・数量 UPDATE 前の失敗(`add_quantity` を monkeypatch で例外にする)で、履歴と数量の両方が元に戻る。COMMIT 失敗(`factory=` で作った Connection サブクラス)で両方が元に戻る
 - [ ] `tests/test_master_service.py`: 5.4 の表の全パターン(未使用は物理削除、使用中は無効化のみ/削除不可)、循環参照の拒否(自身・子・孫)、接頭辞の形式とロック、同一親での名称重複の拒否、名称変更
 - [ ] `tests/test_settings_service.py`: 取得・設定・範囲外の拒否、`validate_all()` の各不合格パターン
@@ -284,25 +286,29 @@
 
 - [ ] `ReportService(conn, tz=None, clock=...)`
 - [ ] `fiscal_year_of(local_date, start_month) -> int`(`年 − (月 < 開始月 ? 1 : 0)`)、`current_fiscal_year()`、`available_fiscal_years()`(履歴の最古・最新から算出し、現在の年度を含める)
-- [ ] `dashboard(fiscal_year, kind, owner_id=None) -> list[DashboardRow]`
+- [ ] `dashboard(fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE) -> list[DashboardRow]`
   - [ ] 最上位で `read_transaction(conn)` を使い、年度開始月と全期間の集計を同一スナップショットで読む。内部の読み取り Service は新しいトランザクションを開始しない
   - [ ] 年度開始月は `SettingsService` から取得する
   - [ ] 期間境界は `local_range_to_utc()` で算出する(月次は 12 区間、年次は 1 区間)
-  - [ ] `stock_movements m LEFT JOIN stock_movements o ON m.reversal_of = o.id` で `COALESCE(o.moved_at, m.moved_at) >= ? AND < ?` を条件とし、所有者別に 5.7 の指標を集計する。`owner_id=None` は全体の合計とする
+  - [ ] `stock_movements m LEFT JOIN stock_movements o ON m.reversal_of = o.id` で `COALESCE(o.moved_at, m.moved_at) >= ? AND < ?` を条件とし、`(:client_id IS NULL OR m.client_id = :client_id)` と `(:purchaser_id IS NULL OR m.purchaser_id = :purchaser_id)` で絞り込んで、期間・`client_id`・`purchaser_id` ごとに 5.7 の指標を集計する(SQL は 1 本。列名を文字列で組み立てない)
+  - [ ] `group_by` に応じて、全指標が加算可能であることを利用して Python 側で畳み込む(`NONE` はクライアントも発注主体も `None`、`CLIENT` は発注主体を `None`、`PURCHASER` はクライアントを `None`)。`NONE` は履歴がなくても期間数分の行を 0 値で返し、それ以外は履歴のある組のみ返す。無効化済みのマスタも履歴があれば含める
   - [ ] 単価未登録の出庫件数は、有効な操作(取り消し行でも取り消された行でもない)のみを数える
   - [ ] 返品・棚卸(初期数量を含む)はいずれの指標にも含めない
 - [ ] `escape_csv_cell(value: str) -> str`: `=` `+` `-` `@` タブ・CR で始まる文字列の先頭に `'` を付与する
 - [ ] CSV の共通処理: `csv.writer(quoting=csv.QUOTE_ALL, lineterminator="\r\n")`、UTF-8(BOM 付き)。同じディレクトリの一時ファイルに書いてから `os.replace` で置換し、失敗時は一時ファイルを削除する。文字列列のみエスケープし、数値列はそのまま、`None` は空文字とする
 - [ ] `export_items_csv(path, filter)`: 5.8 の列。最終購入日はローカル日付、低在庫は `○`/空、状態は `有効`/`廃止`
 - [ ] `export_history_csv(path, item_id=None)`: 5.8 の列。日時は `format_local`、操作種別は `入庫`/`出庫`/`返品`/`廃棄`/`棚卸`、取り消し済みは `○`/空
-- [ ] `export_dashboard_csv(path, fiscal_year, kind, owner_id=None)`: 5.8 の列
+- [ ] `export_dashboard_csv(path, fiscal_year, kind, client_id=None, purchaser_id=None, group_by=GroupBy.NONE)`: 5.8 の列(畳み込んだ軸の列は「(すべて)」)
 - [ ] `tests/test_reports.py`(`tz` に `ZoneInfo` を注入し、`clock` で `moved_at` を固定する)
   - [ ] `dashboard()` が実際の `SettingsService.get_fiscal_year_start_month()` を呼び、ネストエラーなく正常終了する
   - [ ] 月またぎ・年度またぎの入庫がローカル暦の正しい区間に集計される(UTC 15:00 = JST 翌日 0:00 の境界を含む)
   - [ ] 月・年度をまたぐ取り消しが元行の期間で相殺される(タイムゾーン境界付近を含む)
   - [ ] サマータイムの切替月の境界(`America/New_York`)
   - [ ] 年度開始月の変更で区切りが変わる
-  - [ ] 所有者変更後も、過去の費用が元の所有者に帰属する
+  - [ ] クライアント変更・発注主体変更の後も、過去の費用が元のクライアント・発注主体に帰属する
+  - [ ] 内訳軸 `NONE`・`CLIENT`・`PURCHASER`・`CLIENT_PURCHASER` の各合計が一致する
+  - [ ] クライアント・発注主体の 2 軸同時絞り込みが `CLIENT_PURCHASER` 内訳の該当行と一致する。無効化済みのマスタでも絞り込める
+  - [ ] 絞り込み未指定(`None`)は全件を対象とし、ID を指定したときのみ絞り込まれる
   - [ ] 支出額・廃棄額は単価未登録を除外し、単価未登録の出庫件数は有効な操作のみ数える。返品・棚卸を含めない
   - [ ] 最終購入日がローカル日付になる
 - [ ] `tests/test_csv.py`: BOM・CRLF・全項目のクォート、数式インジェクション対策(各先頭文字、数値列は対象外)、日時のローカル表記(オフセットなし)、列の順序、書き込み失敗時に既存ファイルが壊れず一時ファイルが残らない
@@ -344,7 +350,7 @@
   - [ ] 拒否: 版数 0・未対応の旧版・新版、同名テーブルで列/制約が欠けた DB、`integrity_check`/`foreign_key_check` の不合格、数量と履歴合計の不一致、取り消し行の品目・符号・コピー属性の不正、取り消し元が取り消し行・差分 0 の棚卸、設定値の不正。いずれも現行 DB と復元元が変化しない
   - [ ] 非 SQLite ファイル・物理破損 DB・不存在の復元元・アクセス拒否を `InvalidBackupError` で拒否し、日本語の理由と元例外を保持する。現行 DB は変わらず、存在する復元元のハッシュも変わらない。失敗後に開いた接続が閉じられ、一時ファイルが残らない
   - [ ] プログラム側の SQL 誤りは `InvalidBackupError` に変換されず、接続・一時ファイルの後始末は同様に保証される
-  - [ ] 許容: 正常な初期数量・棚卸・取り消し、履歴なしの数量 0、コピー属性の NULL 同士、所有者・担当者の無効化、品目の廃止、所有者・参考価格の変更
+  - [ ] 許容: 正常な初期数量・棚卸・取り消し、履歴なしの数量 0、コピー属性の NULL 同士、クライアント・発注主体・担当者の無効化、品目の廃止、クライアント・発注主体・参考価格の変更
   - [ ] 試験用の v2 を注入した更新経路: v1 の復元元が一時 DB で v2 に移行されて復元される。移行失敗時は `InvalidBackupError` で、現行 DB と復元元が変化しない
   - [ ] pre-restore のバックアップの失敗(保存先を書き込み不可にする)で、現行 DB が変化しない
   - [ ] 固定時計と既存の同名 pre-restore バックアップで `RestoreError(stage="pre_backup", recovered=True)` となり、既存バックアップのハッシュ・現行 DB のデータ・`user_version` が変わらない
@@ -356,7 +362,7 @@
 - [ ] 引数: `--db`(必須)、`--items`(既定 5000)、`--movements`(既定 100000)、`--years`(既定 3)、`--seed`(既定 0)、`--force`(既存ファイルの上書きを許可)
 - [ ] 既存ファイルは `--force` がなければ拒否する。上書き時は DB と `-wal`・`-shm` を削除してから作成する
 - [ ] `open_database()` に `timeutil.local_timestamp_for_filename()` を利用する `backup_timestamp` コールバックを渡して新規作成し、1 トランザクションで投入する
-  - [ ] マスタ(所有者・担当者(一部は無効化)、2 階層のカテゴリ、保管場所)
+  - [ ] マスタ(クライアント・発注主体・担当者(一部は無効化)、2 階層のカテゴリ、保管場所)
   - [ ] 品目(一部は廃止・参考価格なし・URL あり)。管理番号は採番と同じ規則にし、`next_seq` を整合させる
   - [ ] 履歴: 過去 `--years` 年に時系列で分布させ、在庫が負にならないように生成する。全 `reason`、取り消し行、単価未登録を含める
   - [ ] `items.quantity` を履歴の合計に一致させる
