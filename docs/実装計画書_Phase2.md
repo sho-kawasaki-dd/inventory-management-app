@@ -274,11 +274,14 @@
 
 #### K. 試験ビルド(手動)
 
-- [ ] `uv run pyinstaller --noconfirm --onedir --windowed --name inventory-manager-mini --specpath build --hidden-import PySide6.QtCharts --hidden-import PySide6.QtPrintSupport --collect-data inventory_manager_mini.db --copy-metadata inventory-manager-mini src/inventory_manager_mini/__main__.py` を実行する
-- [ ] `dist/inventory-manager-mini/` に QtCharts の DLL と印刷サポートのプラグイン(`printsupport`)が含まれることを確認する
-- [ ] DB 初期化用の `inventory_manager_mini/db/schema.sql` とアプリ版数取得用の配布メタデータ(`inventory-manager-mini` の dist-info)が同梱されていることを確認する
-- [ ] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で空の一時フォルダを指定して exe を起動し、新規 DB 作成・品目登録・多重起動拒否・バージョン情報(アプリ版・スキーマ版・DB パス)の表示を確認する
-- [ ] 結果(PyInstaller 版・問題点・対処)を本書 4.2 に記録する。成果物(`build/`・`dist/`)はコミットしない
+- [x] `uv run pyinstaller --noconfirm --onedir --windowed --name inventory-manager-mini --specpath build --hidden-import PySide6.QtCharts --hidden-import PySide6.QtPrintSupport --hidden-import inventory_manager_mini.ui.dialogs.item_dialog --hidden-import inventory_manager_mini.ui.dialogs.master_dialog --collect-data inventory_manager_mini.db --copy-metadata inventory-manager-mini src/inventory_manager_mini/__main__.py` を実行する
+- [x] `dist/inventory-manager-mini/` に QtCharts の DLL が含まれることを確認する
+- [ ] `dist/inventory-manager-mini/` に印刷サポートのプラグイン(`printsupport`)が含まれることを確認する
+- [x] DB 初期化用の `inventory_manager_mini/db/schema.sql` とアプリ版数取得用の配布メタデータ(`inventory-manager-mini` の dist-info)が同梱されていることを確認する
+- [x] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で空の一時フォルダを指定して exe を起動し、新規 DB 作成・多重起動拒否を確認する
+- [ ] exe から品目を登録し、DB に保存されることを確認する
+- [ ] バージョン情報でアプリ版・スキーマ版・DB パスの表示を確認する
+- [x] 結果(PyInstaller 版・問題点・対処)を本書 4.2 に記録する。成果物(`build/`・`dist/`)はコミットしない
 
 #### L. ドキュメント・仕上げ
 
@@ -303,10 +306,12 @@
 
 | 確認項目 | 結果 | 備考 |
 | --- | --- | --- |
-| QtCharts の同梱 | | |
-| 印刷サポートプラグインの同梱 | | |
-| DB 初期化用 SQL の同梱 | | |
-| アプリの配布メタデータの同梱 | | |
-| exe の起動・DB 作成・品目登録 | | |
-| exe のバージョン情報表示 | | |
-| 多重起動の拒否 | | |
+| QtCharts の同梱 | 確認済み | `QtCharts.pyd`・`Qt6Charts.dll` を確認 |
+| 印刷サポートプラグインの同梱 | 未達 | `QtPrintSupport.pyd`・`Qt6PrintSupport.dll` はあるが、PySide6 の入力環境に `printsupport` プラグインがなく、成果物にもない |
+| DB 初期化用 SQL の同梱 | 確認済み | `_internal/inventory_manager_mini/db/schema.sql` |
+| アプリの配布メタデータの同梱 | 確認済み | `_internal/inventory_manager_mini-0.1.0.dist-info/METADATA` |
+| exe の起動・DB 作成 | 確認済み | 一時保存先に DB・ログを作成 |
+| exe からの品目登録 | 未確認 | 登録ダイアログの起動まで確認。ネイティブフォームを自動操作できず、DB 保存は未確認 |
+| exe のバージョン情報表示 | 一部確認 | ダイアログの起動まで確認。アプリ版・スキーマ版・DB パスの表示内容は未確認 |
+| 多重起動の拒否 | 確認済み | 2つ目に「既に起動しています」を表示後、2つ目だけ終了 |
+| ビルド環境 | PyInstaller 6.22.3 / Python 3.13.12 / Qt 6.11.2 | Windows 11 |
