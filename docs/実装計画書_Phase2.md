@@ -276,7 +276,7 @@
 
 - [x] `uv run pyinstaller --noconfirm --onedir --windowed --name inventory-manager-mini --specpath build --hidden-import PySide6.QtCharts --hidden-import PySide6.QtPrintSupport --hidden-import inventory_manager_mini.ui.dialogs.item_dialog --hidden-import inventory_manager_mini.ui.dialogs.master_dialog --collect-data inventory_manager_mini.db --copy-metadata inventory-manager-mini src/inventory_manager_mini/__main__.py` を実行する
 - [x] `dist/inventory-manager-mini/` に QtCharts の DLL が含まれることを確認する
-- [ ] `dist/inventory-manager-mini/` に印刷サポートのプラグイン(`printsupport`)が含まれることを確認する
+- [x] `dist/inventory-manager-mini/` に印刷サポート(`QtPrintSupport.pyd`・`Qt6PrintSupport.dll`)が含まれ、凍結環境で `QPrinter` が動作することを確認する(Qt 6 の Windows 版は印刷バックエンドを `Qt6PrintSupport.dll` に静的に内蔵するため、別個の `printsupport` プラグインは不要)
 - [x] DB 初期化用の `inventory_manager_mini/db/schema.sql` とアプリ版数取得用の配布メタデータ(`inventory-manager-mini` の dist-info)が同梱されていることを確認する
 - [x] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で空の一時フォルダを指定して exe を起動し、新規 DB 作成・多重起動拒否を確認する
 - [ ] exe から品目を登録し、DB に保存されることを確認する
@@ -307,7 +307,7 @@
 | 確認項目 | 結果 | 備考 |
 | --- | --- | --- |
 | QtCharts の同梱 | 確認済み | `QtCharts.pyd`・`Qt6Charts.dll` を確認 |
-| 印刷サポートプラグインの同梱 | 未達 | `QtPrintSupport.pyd`・`Qt6PrintSupport.dll` はあるが、PySide6 の入力環境に `printsupport` プラグインがなく、成果物にもない |
+| 印刷サポートの同梱 | 確認済み | `QtPrintSupport.pyd`・`Qt6PrintSupport.dll` を確認。Windows 版 PySide6 には `plugins/printsupport/` がなく、印刷バックエンド(`QWindowsPrinterSupport`)は `Qt6PrintSupport.dll` に静的に内蔵されている。`QPrinter` のみを使う最小アプリを PyInstaller で凍結して実行し、`QPrinter.isValid()` が真でプリンター一覧を取得できることを確認(Windows 以外のプラグインは対象外) |
 | DB 初期化用 SQL の同梱 | 確認済み | `_internal/inventory_manager_mini/db/schema.sql` |
 | アプリの配布メタデータの同梱 | 確認済み | `_internal/inventory_manager_mini-0.1.0.dist-info/METADATA` |
 | exe の起動・DB 作成 | 確認済み | 一時保存先に DB・ログを作成 |
