@@ -119,6 +119,20 @@ class MainWindow(QMainWindow):
         self.toggle_active_action.triggered.connect(self._toggle_item_active)
         item_menu.addAction(self.toggle_active_action)
 
+        master_menu = self.menuBar().addMenu("マスタ")
+        master_tabs = (
+            ("クライアント", "CLIENT"),
+            ("発注主体", "PURCHASER"),
+            ("担当者", "STAFF"),
+            ("カテゴリ", "CATEGORY"),
+            ("保管場所", "LOCATION"),
+        )
+        for label, tab_name in master_tabs:
+            action = master_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=tab_name: self._open_master_dialog(value)
+            )
+
         view_menu = self.menuBar().addMenu("表示")
         self.include_inactive_action = QAction("廃止品目を含む", self)
         self.include_inactive_action.setCheckable(True)
@@ -234,6 +248,15 @@ class MainWindow(QMainWindow):
         dialog = ItemDialog(self.context, item_id=item_id, parent=self)
         if dialog.exec():
             self.refresh()
+
+    def _open_master_dialog(self, tab_name: str) -> None:
+        master_dialog_module = import_module("inventory_manager_mini.ui.dialogs.master_dialog")
+        dialog = master_dialog_module.MasterDialog(
+            self.context,
+            initial_tab=master_dialog_module.MasterTab(tab_name.lower()),
+            parent=self,
+        )
+        dialog.exec()
 
     def _toggle_item_active(self) -> None:
         item_id = self._selected_item_id()
