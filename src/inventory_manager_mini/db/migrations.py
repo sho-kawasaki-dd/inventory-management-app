@@ -14,9 +14,12 @@ from inventory_manager_mini.core.errors import (
 from inventory_manager_mini.db.backup import copy_database
 from inventory_manager_mini.db.connection import connect, transaction
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MIN_SUPPORTED_SCHEMA_VERSION = 1
-MIGRATIONS: dict[int, str] = {}
+MIGRATIONS: dict[int, str] = {
+    2: "CREATE INDEX idx_movements_item_purchase ON stock_movements "
+    "(item_id, moved_at DESC, id DESC) WHERE reason = 'in' AND reversal_of IS NULL;"
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +270,10 @@ def _schema_spec_from_ddl(ddl: str) -> SchemaSpec:
         conn.close()
 
 
-SCHEMA_SPECS: dict[int, SchemaSpec] = {1: _schema_spec_from_ddl(_SCHEMA_V1_DDL)}
+SCHEMA_SPECS: dict[int, SchemaSpec] = {
+    1: _schema_spec_from_ddl(_SCHEMA_V1_DDL),
+    2: _schema_spec_from_ddl(_SCHEMA_V1_DDL + "\n" + MIGRATIONS[2]),
+}
 
 
 def normalize_sql(sql: str) -> str:

@@ -16,6 +16,7 @@ from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, connect_memory
 from inventory_manager_mini.db.migrations import (
     SCHEMA_SPECS,
+    SCHEMA_VERSION,
     check_migration_path,
     create_schema,
     inspect_schema,
@@ -28,7 +29,9 @@ def _schema_sql() -> str:
     return files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
 
 
-def _create_database(path: Path, *, schema_sql: str | None = None, version: int = 1) -> None:
+def _create_database(
+    path: Path, *, schema_sql: str | None = None, version: int = SCHEMA_VERSION
+) -> None:
     conn = sqlite3.connect(path, autocommit=True)
     try:
         conn.executescript(_schema_sql() if schema_sql is None else schema_sql)
@@ -37,7 +40,7 @@ def _create_database(path: Path, *, schema_sql: str | None = None, version: int 
         conn.close()
 
 
-def _make_version_two_spec() -> migrations.SchemaSpec:
+def _make_version_three_spec() -> migrations.SchemaSpec:
     conn = connect_memory()
     try:
         conn.executescript(_schema_sql())
@@ -51,9 +54,9 @@ def test_new_database_is_created_and_persists_schema(tmp_path: Path) -> None:
     path = tmp_path / "inventory.db"
     conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261003_120000")
     try:
-        assert conn.execute("PRAGMA user_version").fetchone() == (1,)
+        assert conn.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
-        assert inspect_schema(conn, 1) == []
+        assert inspect_schema(conn, SCHEMA_VERSION) == []
         assert conn.execute(
             "SELECT value FROM settings WHERE key = ?", ("fiscal_year_start_month",)
         ).fetchone() == ("4",)
@@ -62,6 +65,22 @@ def test_new_database_is_created_and_persists_schema(tmp_path: Path) -> None:
 
     reopened = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
     reopened.close()
+
+
+def test_version_one_database_migrates_latest_purchase_index(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    _create_database(path, schema_sql=migrations._SCHEMA_V1_DDL, version=1)
+
+    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261004_120000")
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+        assert inspect_schema(conn, SCHEMA_VERSION) == []
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+            ("idx_movements_item_purchase",),
+        ).fetchone() == ("idx_movements_item_purchase",)
+    finally:
+        conn.close()
 
 
 def test_create_schema_rolls_back_partial_ddl() -> None:
@@ -111,7 +130,7 @@ def test_existing_version_zero_is_rejected(tmp_path: Path) -> None:
 
 def test_newer_schema_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "newer.db"
-    _create_database(path, version=2)
+    _create_database(path, version=SCHEMA_VERSION + 1)
     with pytest.raises(SchemaTooNewError):
         open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
 
@@ -187,7 +206,7 @@ def test_inspect_schema_rejects_schema_changes(old: str, new: str) -> None:
     conn = connect_memory()
     try:
         conn.executescript(modified_sql)
-        reasons = inspect_schema(conn, 1)
+        reasons = inspect_schema(conn, SCHEMA_VERSION)
         assert reasons
     finally:
         conn.close()
@@ -198,7 +217,9 @@ def test_inspect_schema_only_excludes_sqlite_underscore_prefix() -> None:
     try:
         conn.executescript(_schema_sql())
         conn.execute('CREATE TABLE "sqliteX_user_table" (id INTEGER)')
-        assert any("sqliteX_user_table" in reason for reason in inspect_schema(conn, 1))
+        assert any(
+            "sqliteX_user_table" in reason for reason in inspect_schema(conn, SCHEMA_VERSION)
+        )
     finally:
         conn.close()
 
@@ -232,32 +253,32 @@ def test_migrates_one_version_and_creates_timestamped_backup(tmp_path: Path) -> 
     source.execute("UPDATE settings SET value = '9' WHERE key = 'fiscal_year_start_month'")
     source.close()
 
-    version_two = _make_version_two_spec()
-    specs = {**SCHEMA_SPECS, 2: version_two}
+    version_three = _make_version_three_spec()
+    specs = {**SCHEMA_SPECS, 3: version_three}
     backup_dir = tmp_path / "backups"
     conn = open_database(
         path,
         backup_dir,
         backup_timestamp=lambda: "20261003_123456",
-        schema_version=2,
+        schema_version=3,
         min_supported=1,
-        migrations={2: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
+        migrations={3: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
         specs=specs,
     )
     try:
-        assert conn.execute("PRAGMA user_version").fetchone() == (2,)
-        assert inspect_schema(conn, 2, specs) == []
+        assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+        assert inspect_schema(conn, 3, specs) == []
         assert conn.execute(
             "SELECT value FROM settings WHERE key = ?", ("fiscal_year_start_month",)
         ).fetchone() == ("9",)
     finally:
         conn.close()
 
-    backup = backup_dir / "pre-migrate_v1_20261003_123456.db"
+    backup = backup_dir / "pre-migrate_v2_20261003_123456.db"
     assert backup.exists()
     backup_conn = sqlite3.connect(backup)
     try:
-        assert backup_conn.execute("PRAGMA user_version").fetchone() == (1,)
+        assert backup_conn.execute("PRAGMA user_version").fetchone() == (2,)
         assert backup_conn.execute(
             "SELECT value FROM settings WHERE key = ?", ("fiscal_year_start_month",)
         ).fetchone() == ("9",)
@@ -270,7 +291,7 @@ def test_migration_backup_collision_preserves_existing_files(tmp_path: Path) -> 
     _create_database(path)
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
-    backup = backup_dir / "pre-migrate_v1_fixed.db"
+    backup = backup_dir / "pre-migrate_v2_fixed.db"
     backup.write_bytes(b"keep existing backup")
 
     with pytest.raises(MigrationError) as error:
@@ -278,15 +299,15 @@ def test_migration_backup_collision_preserves_existing_files(tmp_path: Path) -> 
             path,
             backup_dir,
             backup_timestamp=lambda: "fixed",
-            schema_version=2,
-            migrations={2: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
-            specs={**SCHEMA_SPECS, 2: _make_version_two_spec()},
+            schema_version=3,
+            migrations={3: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
+            specs={**SCHEMA_SPECS, 3: _make_version_three_spec()},
         )
     assert error.value.backup_path is None
     assert backup.read_bytes() == b"keep existing backup"
     verify = sqlite3.connect(path)
     try:
-        assert verify.execute("PRAGMA user_version").fetchone() == (1,)
+        assert verify.execute("PRAGMA user_version").fetchone() == (2,)
         assert "extra" not in {row[1] for row in verify.execute("PRAGMA table_info(settings)")}
     finally:
         verify.close()
@@ -303,15 +324,15 @@ def test_migration_sql_failure_rolls_back_and_keeps_backup(tmp_path: Path) -> No
             path,
             tmp_path / "backups",
             backup_timestamp=lambda: "20261003_130000",
-            schema_version=2,
-            migrations={2: "CREATE TABLE partial_migration (id INTEGER); INVALID DDL;"},
-            specs={**SCHEMA_SPECS, 2: SCHEMA_SPECS[1]},
+            schema_version=3,
+            migrations={3: "CREATE TABLE partial_migration (id INTEGER); INVALID DDL;"},
+            specs={**SCHEMA_SPECS, 3: SCHEMA_SPECS[2]},
         )
     backup_path = error.value.backup_path
     assert backup_path is not None and backup_path.exists()
     verify = sqlite3.connect(path)
     try:
-        assert verify.execute("PRAGMA user_version").fetchone() == (1,)
+        assert verify.execute("PRAGMA user_version").fetchone() == (2,)
         assert (
             verify.execute(
                 "SELECT name FROM sqlite_master WHERE name = 'partial_migration'"
@@ -333,14 +354,14 @@ def test_migration_schema_failure_rolls_back(tmp_path: Path) -> None:
             path,
             tmp_path / "backups",
             backup_timestamp=lambda: "20261003_130001",
-            schema_version=2,
-            migrations={2: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
-            specs={**SCHEMA_SPECS, 2: SCHEMA_SPECS[1]},
+            schema_version=3,
+            migrations={3: "ALTER TABLE settings ADD COLUMN extra TEXT;"},
+            specs={**SCHEMA_SPECS, 3: SCHEMA_SPECS[2]},
         )
     assert error.value.backup_path is not None and error.value.backup_path.exists()
     verify = sqlite3.connect(path)
     try:
-        assert verify.execute("PRAGMA user_version").fetchone() == (1,)
+        assert verify.execute("PRAGMA user_version").fetchone() == (2,)
         assert "extra" not in {row[1] for row in verify.execute("PRAGMA table_info(settings)")}
     finally:
         verify.close()
@@ -356,12 +377,12 @@ def test_unsupported_old_version_and_missing_migration_path_are_rejected(
             old_path,
             tmp_path / "backups-old",
             backup_timestamp=lambda: "unused",
-            min_supported=2,
-            schema_version=2,
+            min_supported=3,
+            schema_version=3,
         )
 
     gap_path = tmp_path / "gap.db"
-    _create_database(gap_path)
+    _create_database(gap_path, schema_sql=migrations._SCHEMA_V1_DDL, version=1)
     with pytest.raises(UnsupportedSchemaError, match="経路"):
         open_database(
             gap_path,
@@ -369,16 +390,16 @@ def test_unsupported_old_version_and_missing_migration_path_are_rejected(
             backup_timestamp=lambda: "unused",
             schema_version=3,
             migrations={3: "SELECT 1;"},
-            specs={**SCHEMA_SPECS, 2: SCHEMA_SPECS[1], 3: SCHEMA_SPECS[1]},
+            specs={**SCHEMA_SPECS, 3: SCHEMA_SPECS[2]},
         )
 
 
-def test_version_two_spec_is_based_on_its_own_ddl_snapshot() -> None:
-    version_two = _make_version_two_spec()
-    settings = next(table for table in version_two.tables if table.name == "settings")
+def test_version_three_spec_is_based_on_its_own_ddl_snapshot() -> None:
+    version_three = _make_version_three_spec()
+    settings = next(table for table in version_three.tables if table.name == "settings")
     assert (
         settings.sql
-        != next(table for table in SCHEMA_SPECS[1].tables if table.name == "settings").sql
+        != next(table for table in SCHEMA_SPECS[2].tables if table.name == "settings").sql
     )
     assert any(column.name == "extra" for column in settings.columns)
 

@@ -86,6 +86,8 @@ CREATE TABLE stock_movements (
 CREATE INDEX idx_movements_item ON stock_movements(item_id, moved_at);
 CREATE INDEX idx_movements_client_date ON stock_movements(client_id, moved_at);
 CREATE INDEX idx_movements_purchaser_date ON stock_movements(purchaser_id, moved_at);
+CREATE INDEX idx_movements_item_purchase ON stock_movements(item_id, moved_at DESC, id DESC)
+WHERE reason = 'in' AND reversal_of IS NULL;
 
 CREATE TABLE settings (
   key TEXT PRIMARY KEY,

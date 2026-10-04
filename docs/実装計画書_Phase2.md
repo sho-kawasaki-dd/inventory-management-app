@@ -47,8 +47,8 @@
 | 保存先の差し替え | 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` が設定されていれば、DB・バックアップ・ロックをその直下、ログを `logs/` 配下に置く。未設定時は `platformdirs` で解決する。`main(paths: AppPaths \| None = None)` でも注入できる。テスト・別プロセステストはこれらで `tmp_path` を指定する |
 | UI への依存注入 | `ui/` は `sqlite3`・`db/` を import できないため、`app.py` が接続と Service 群を構築し、`ui/context.py` の `AppContext` に格納して MainWindow に渡す。スキーマ版数・DB パス・アプリ版数も `AppContext` 経由で渡す |
 | データ変更通知 | `ui/signals.py` の `DataBus(QObject)` に `data_changed = Signal()` を 1 つ置く。Service 呼び出しが成功した画面が発火し、MainWindow がマスタ選択肢と一覧を再読込する(選択中の品目 ID を維持)。Phase 4 の低在庫再判定もこの通知に接続する |
-| 検索・絞り込み | 絞り込みは `InventoryService.list_items(ItemFilter)` の SQL で行い、`QSortFilterProxyModel` はソートのみを担う。検索欄は最終入力から 300ms のデバウンス後に再検索する。検索処理開始から再描画完了まで 0.3 秒以内、最終入力から再描画完了まで 0.6 秒以内とする。その他の絞り込み条件は変更時に即時再検索し、条件変更から再描画完了まで 0.3 秒以内とする |
-| ソート | 一覧モデルは `Qt.ItemDataRole.UserRole` で生の値(数値・文字列・`None`)を返し、プロキシの `sortRole` に設定する。`None` は昇順で末尾とする |
+| 検索・絞り込み | 絞り込みは `InventoryService.list_items(ItemFilter)` の SQL で行い、`ItemSortProxyModel` はソートのみを担う。検索欄は最終入力から 300ms のデバウンス後に再検索する。検索処理開始から再描画完了まで 0.3 秒以内、最終入力から再描画完了まで 0.6 秒以内とする。その他の絞り込み条件は変更時に即時再検索し、条件変更から再描画完了まで 0.3 秒以内とする |
+| ソート | 一覧モデルは `Qt.ItemDataRole.UserRole` で生の値(数値・文字列・`None`)を返す。`ItemSortProxyModel(QAbstractProxyModel)` はソート列の順序を一括計算して行マッピングを作り、比較ごとの Python/C++ 境界往復を避ける。`None` は昇順で末尾とする |
 | 行の表示 | 廃止行はグレー表示(`ForegroundRole`)。低在庫行の着色は Phase 4 |
 | カテゴリ選択 UI | `QComboBox` のポップアップを `QTreeView` にしたツリーコンボ `CategoryComboBox` を作成し、MainWindow の絞り込み(先頭「すべて」)、ItemDialog(先頭項目なし)、カテゴリの親変更(先頭「(最上位)」)で共用する |
 | 任意の数値入力 | 参考価格(0 以上)・推奨発注数(1 以上)は `QLineEdit` + `QIntValidator` とし、空欄を `None` とする(参考価格 0 円と未登録を区別するため)。初期数量・閾値は `QSpinBox`(0 以上) |
@@ -166,7 +166,7 @@
 - [x] `TextAlignmentRole`: 数値列(数量・閾値・推奨発注数・参考価格)は右寄せ
 - [x] `ForegroundRole`: 廃止行はグレー
 - [x] `UserRole`: ソート用の生の値。`row_at(row) -> ItemRow`、`row_of(item_id) -> int | None`
-- [x] `ItemSortProxyModel(QSortFilterProxyModel)`: `sortRole = UserRole`、`None` を昇順で末尾にする `lessThan`
+- [x] `ItemSortProxyModel(QAbstractProxyModel)`: `UserRole` の生値で行マッピングをソートし、`None` を昇順で末尾にする
 - [x] `tests/test_item_table_model.py`: 列見出し、表示書式、右寄せ、廃止行の色、ソート(数値・文字列・`None`)、`row_of`
 
 #### G. MainWindow `ui/main_window.py`
@@ -262,15 +262,15 @@
 
 #### J. 性能計測 `tests/test_performance.py`
 
-- [ ] `tests/conftest.py` に `--run-perf` オプションと `perf` マーカーを追加し、未指定時は `perf` テストをスキップする(`pyproject.toml` の `markers` に登録)
-- [ ] モジュールスコープのフィクスチャで `tmp_path_factory.mktemp()` により一時ディレクトリを作成し、`scripts/generate_dummy_data.py` の `generate_database()` で品目 5,000・履歴 100,000 件の DB を生成する。関数スコープの `tmp_path` には依存せず、DB 生成時間は計測対象外とする
-- [ ] 起動から一覧表示: 一時保存先を環境変数で渡し、親プロセスが別プロセスの起動を要求する直前から、初期データを設定した一覧の初回描画完了通知を受信するまでが 3 秒以内。Python・Qt の読み込み、`QApplication` 初期化・ロック・ログ・DB オープン・AppContext 構築・MainWindow 表示を含む。テスト用ラッパーは描画完了を標準出力へ通知して正常終了し、親は `timeout` を設定して子プロセスを回収する
-- [ ] 検索: 検索処理開始から再描画完了までが 0.3 秒以内、最終入力から再描画完了までが 300ms のデバウンスを含め 0.6 秒以内。それぞれを計測・検証する
-- [ ] その他の絞り込み: クライアント・発注主体・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含むの各条件変更から再描画完了までが 0.3 秒以内
-- [ ] 一覧のソート(数量列・品名列): ソート条件変更から再描画完了までが 0.3 秒以内
-- [ ] 計測の終了条件は、対象のモデル更新後の `QTableView` の viewport の描画完了とする。`show()`・モデル更新・ソート処理の呼び出し直後で終了とせず、`QApplication.processEvents()` で保留中の描画イベントを消化するか、`qtbot.waitUntil()` や `viewport().repaint()` を組み合わせて確実にペイント完了時点までを計測する
-- [ ] 計測値を出力し、ローカル(Windows)で実行して本書 4.1 に記録する
-- [ ] 未達の場合は `ItemRepository.list` の SQL(最終購入日の相関サブクエリ等)・インデックスを見直し、スキーマ変更が必要ならマイグレーション規約に従う
+- [x] `tests/conftest.py` に `--run-perf` オプションと `perf` マーカーを追加し、未指定時は `perf` テストをスキップする(`pyproject.toml` の `markers` に登録)
+- [x] モジュールスコープのフィクスチャで `tmp_path_factory.mktemp()` により一時ディレクトリを作成し、`scripts/generate_dummy_data.py` の `generate_database()` で品目 5,000・履歴 100,000 件の DB を生成する。関数スコープの `tmp_path` には依存せず、DB 生成時間は計測対象外とする
+- [x] 起動から一覧表示: 一時保存先を環境変数で渡し、親プロセスが別プロセスの起動を要求する直前から、初期データを設定した一覧の初回描画完了通知を受信するまでが 3 秒以内。Python・Qt の読み込み、`QApplication` 初期化・ロック・ログ・DB オープン・AppContext 構築・MainWindow 表示を含む。テスト用ラッパーは描画完了を標準出力へ通知して正常終了し、親は `timeout` を設定して子プロセスを回収する
+- [x] 検索: 検索処理開始から再描画完了までが 0.3 秒以内、最終入力から再描画完了までが 300ms のデバウンスを含め 0.6 秒以内。それぞれを計測・検証する
+- [x] その他の絞り込み: クライアント・発注主体・カテゴリ(子孫含む)・保管場所・低在庫のみ・廃止品目を含むの各条件変更から再描画完了までが 0.3 秒以内
+- [x] 一覧のソート(数量列・品名列): ソート条件変更から再描画完了までが 0.3 秒以内
+- [x] 計測の終了条件は、対象のモデル更新後の `QTableView` の viewport の描画完了とする。`show()`・モデル更新・ソート処理の呼び出し直後で終了とせず、`QApplication.processEvents()` で保留中の描画イベントを消化するか、`qtbot.waitUntil()` や `viewport().repaint()` を組み合わせて確実にペイント完了時点までを計測する
+- [x] 計測値を出力し、ローカル(Windows)で実行して本書 4.1 に記録する
+- [x] 未達の場合は `ItemRepository.list` の SQL(最終購入日の相関サブクエリ等)・インデックスを見直し、スキーマ変更が必要ならマイグレーション規約に従う。SQLite が履歴相関検索で不適切なインデックスを選んでいたため、版2で部分インデックスを追加し、検索 SQL で明示する
 
 #### K. 試験ビルド(手動)
 
@@ -293,11 +293,11 @@
 
 | 項目 | 目標 | 結果 | 実行環境 |
 | --- | --- | --- | --- |
-| 別プロセス起動要求から一覧の初回描画完了 | 3 秒以内 | | |
-| 検索処理開始から再描画完了(最大) | 0.3 秒以内 | | |
-| 検索の最終入力から再描画完了(デバウンス込み、最大) | 0.6 秒以内 | | |
-| その他の絞り込み条件変更から再描画完了(最大) | 0.3 秒以内 | | |
-| ソート条件変更から再描画完了(最大) | 0.3 秒以内 | | |
+| 別プロセス起動要求から一覧の初回描画完了 | 3 秒以内 | 0.759 秒 | Windows / Python 3.13.12 / Qt 6.11.2 |
+| 検索処理開始から再描画完了(最大) | 0.3 秒以内 | 0.014 秒 | Windows / Python 3.13.12 / Qt 6.11.2 |
+| 検索の最終入力から再描画完了(デバウンス込み、最大) | 0.6 秒以内 | 0.317 秒 | Windows / Python 3.13.12 / Qt 6.11.2 |
+| その他の絞り込み条件変更から再描画完了(最大) | 0.3 秒以内 | 0.059 秒 | Windows / Python 3.13.12 / Qt 6.11.2 |
+| ソート条件変更から再描画完了(最大) | 0.3 秒以内 | 0.038 秒 | Windows / Python 3.13.12 / Qt 6.11.2 |
 
 ### 4.2 試験ビルド
 

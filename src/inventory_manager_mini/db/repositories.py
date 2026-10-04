@@ -340,7 +340,7 @@ class ItemRepository:
             JOIN category_tree ct ON ct.id = i.category_id
             LEFT JOIN locations lo ON lo.id = i.location_id
             LEFT JOIN stock_movements purchase ON purchase.id = (
-                SELECT m.id FROM stock_movements m
+                SELECT m.id FROM stock_movements m INDEXED BY idx_movements_item_purchase
                 WHERE m.item_id = i.id AND m.reason = 'in' AND m.reversal_of IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM stock_movements r WHERE r.reversal_of = m.id

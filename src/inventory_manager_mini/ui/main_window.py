@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table.setSortingEnabled(True)
+        self.sort_model.set_item_selection_model(self.table.selectionModel())
         self.table.selectionModel().selectionChanged.connect(self._update_selection_actions)
         layout.addWidget(self.table)
         self.setCentralWidget(central)

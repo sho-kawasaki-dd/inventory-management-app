@@ -2,7 +2,7 @@ from dataclasses import replace
 from datetime import date
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtGui import QBrush, QColor
 
 from inventory_manager_mini.core.models import ItemRow, PurchaseInfo
@@ -159,3 +159,24 @@ def test_proxy_sorts_values_and_places_none_last(column: int, rows, expected: li
     assert [proxy.index(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(2)] == [
         source.row_at(index - 1).code for index in expected
     ]
+
+
+def test_proxy_sort_preserves_selected_source_row() -> None:
+    source = ItemTableModel()
+    source.set_rows([_item(1, quantity=10), _item(2, quantity=2), _item(3, quantity=5)])
+    proxy = ItemSortProxyModel()
+    proxy.setSourceModel(source)
+    selection = QItemSelectionModel(proxy)
+    proxy.set_item_selection_model(selection)
+    selected_source_index = source.index(0, 0)
+    selection.select(
+        proxy.mapFromSource(selected_source_index),
+        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    assert len(selection.selectedRows()) == 1
+
+    proxy.sort(7, Qt.SortOrder.AscendingOrder)
+
+    selected_proxy_rows = selection.selectedRows()
+    assert len(selected_proxy_rows) == 1
+    assert proxy.mapToSource(selected_proxy_rows[0]) == selected_source_index

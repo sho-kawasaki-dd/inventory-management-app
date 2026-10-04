@@ -45,6 +45,7 @@ strict = [
 testpaths = ["tests"]
 qt_api = "pyside6"
 addopts = "-ra --strict-markers --strict-config"
+markers = ["perf: 時間のかかる性能計測テスト"]
 
 [tool.coverage.run]
 source = ["inventory_manager_mini"]
