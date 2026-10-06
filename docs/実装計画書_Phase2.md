@@ -280,8 +280,8 @@
 - [x] `dist/inventory-manager-mini/` に印刷サポート(`QtPrintSupport.pyd`・`Qt6PrintSupport.dll`)が含まれ、凍結環境で `QPrinter` が動作することを確認する(Qt 6 の Windows 版は印刷バックエンドを `Qt6PrintSupport.dll` に静的に内蔵するため、別個の `printsupport` プラグインは不要)
 - [x] DB 初期化用の `inventory_manager_mini/db/schema.sql` とアプリ版数取得用の配布メタデータ(`inventory-manager-mini` の dist-info)が同梱されていることを確認する
 - [x] 環境変数 `INVENTORY_MANAGER_MINI_DATA_DIR` で空の一時フォルダを指定して exe を起動し、新規 DB 作成・多重起動拒否を確認する
-- [ ] exe から品目を登録し、DB に保存されることを確認する
-- [ ] バージョン情報でアプリ版・スキーマ版・DB パスの表示を確認する
+- [x] exe から品目を登録し、DB に保存されることを確認する
+- [x] バージョン情報でアプリ版・スキーマ版・DB パスの表示を確認する
 - [x] 結果(PyInstaller 版・問題点・対処)を本書 4.2 に記録する。成果物(`build/`・`dist/`)はコミットしない
 
 #### M. カテゴリ選択 UI の改修(K の手動確認で判明した不具合。`feature/phase2-master-dialog` 上で対応)
@@ -304,7 +304,7 @@
   - [x] 部品: ボタン押下で確定した ID・フルパス表示・シグナル、キャンセル時の不変、再設定時の選択維持、存在しない ID、`category_count()`
   - [x] `ItemDialog`: 部品経由でカテゴリを選択すると「カテゴリを選択してください」が消え OK が活性になること
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov` が成功する
-- [ ] 試験ビルドを作り直し、exe でカテゴリ(子カテゴリを含む)を選択して品目を登録できることを確認する(K の未確認項目と合わせて実施)
+- [x] 試験ビルドを作り直し、exe でカテゴリ(子カテゴリを含む)を選択して品目を登録できることを確認する(K の未確認項目と合わせて実施)
 
 #### L. ドキュメント・仕上げ
 
