@@ -41,6 +41,8 @@ def test_new_item_dialog_validates_initial_staff_and_records_quantity(
     initial_staff_combo = dialog.initial_staff_combo
     assert initial_quantity_spin is not None
     assert initial_staff_combo is not None
+    assert dialog.quantity_label is None
+    assert dialog.last_purchase_label is None
     _fill_required(dialog)
 
     assert dialog.unit_label.text() == "個"
@@ -116,6 +118,7 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert dialog.initial_quantity_spin is None
     assert dialog.initial_quantity_row is None
     assert dialog.unit_label.text() == "個"
+    assert dialog.quantity_label is not None
     assert dialog.quantity_label.text() == "0 個"
     assert _ok_button(dialog).isEnabled()
     dialog.name_edit.setText("更新後")
@@ -191,6 +194,7 @@ def test_edit_purchase_info_and_dialog_size(qtbot, dialog_context) -> None:
     dialog.show()
     qtbot.waitExposed(dialog)
 
+    assert dialog.last_purchase_label is not None
     assert "個" in dialog.last_purchase_label.text()
     assert dialog.sizeHint().width() <= 1366
     assert dialog.sizeHint().height() <= 768

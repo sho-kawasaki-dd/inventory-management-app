@@ -95,12 +95,12 @@ class ItemDialog(QDialog):
 
         self.initial_quantity_spin: QSpinBox | None = None
         self.initial_quantity_row: QSpinBox | None = None
-        self.quantity_label = QLabel("0", form_widget)
-        self.quantity_row = self.quantity_label
+        self.quantity_label: QLabel | None = None
+        self.quantity_row: QLabel | None = None
         self.initial_staff_combo: QComboBox | None = None
         self.initial_staff_row: QComboBox | None = None
-        self.last_purchase_label = QLabel("-", form_widget)
-        self.last_purchase_row = self.last_purchase_label
+        self.last_purchase_label: QLabel | None = None
+        self.last_purchase_row: QLabel | None = None
         if self.item is None:
             self.initial_quantity_spin = QSpinBox(form_widget)
             self.initial_quantity_spin.setRange(0, 2_147_483_647)
@@ -111,6 +111,11 @@ class ItemDialog(QDialog):
             form.addRow("初期数量", self.initial_quantity_spin)
             form.addRow("初期数量の記録担当者", self.initial_staff_combo)
         else:
+            self.quantity_label = QLabel("0", form_widget)
+            self.quantity_row = self.quantity_label
+            self.last_purchase_label = QLabel("-", form_widget)
+            self.last_purchase_row = self.last_purchase_label
+            assert self.quantity_label is not None
             form.addRow("現在数量", self.quantity_label)
 
         self.threshold_spin = QSpinBox(form_widget)
@@ -147,6 +152,7 @@ class ItemDialog(QDialog):
         form.addRow("備考", self.note_edit)
 
         if self.item is not None:
+            assert self.last_purchase_label is not None
             form.addRow("最終購入日・購入ロット数", self.last_purchase_label)
         self.error_label = QLabel(form_widget)
         self.error_label.setWordWrap(True)
@@ -243,11 +249,13 @@ class ItemDialog(QDialog):
             "" if item.reference_price is None else str(item.reference_price)
         )
         self.note_edit.setPlainText(item.note or "")
+        assert self.quantity_row is not None
         self.quantity_row.setText(f"{item.quantity:,} 個")
         succeeded, purchase_info = run_guarded(
             self, lambda: self.context.inventory.get_purchase_info(item.id)
         )
         if succeeded and purchase_info is not None and purchase_info.last_purchased_at:
+            assert self.last_purchase_label is not None
             last_date = local_date(purchase_info.last_purchased_at).isoformat()
             lot_quantity = (
                 "-" if purchase_info.lot_quantity is None else f"{purchase_info.lot_quantity:,} 個"
