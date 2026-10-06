@@ -115,14 +115,14 @@ def test_filter_controls_and_inactive_master_labels(window_with_items) -> None:
     window.purchaser_combo.setCurrentIndex(window.purchaser_combo.findData(1))
     assert _item_ids(window) == {first.id}
     window.purchaser_combo.setCurrentIndex(0)
-    window.category_combo.set_current_category_id(1)
-    window.category_combo.category_changed.emit(1)
+    window.category_picker.set_current_category_id(1)
+    window.category_picker.category_changed.emit(1)
     assert _item_ids(window) == {first.id, second.id}
-    window.category_combo.set_current_category_id(2)
-    window.category_combo.category_changed.emit(2)
+    window.category_picker.set_current_category_id(2)
+    window.category_picker.category_changed.emit(2)
     assert _item_ids(window) == {first.id}
-    window.category_combo.set_current_category_id(None)
-    window.category_combo.category_changed.emit(None)
+    window.category_picker.set_current_category_id(None)
+    window.category_picker.category_changed.emit(None)
     window.location_combo.setCurrentIndex(window.location_combo.findData(2))
     assert _item_ids(window) == {second.id}
     window.location_combo.setCurrentIndex(0)

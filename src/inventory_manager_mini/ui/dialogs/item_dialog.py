@@ -25,7 +25,7 @@ from inventory_manager_mini.core.services import validate_purchase_url
 from inventory_manager_mini.core.timeutil import local_date
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.error_handling import run_guarded
-from inventory_manager_mini.ui.widgets.category_combo import CategoryComboBox
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 
 class ItemDialog(QDialog):
@@ -85,8 +85,8 @@ class ItemDialog(QDialog):
         form.addRow("メーカー型番", self.manufacturer_edit)
         self.application_edit = QLineEdit(form_widget)
         form.addRow("用途", self.application_edit)
-        self.category_combo = CategoryComboBox(form_widget)
-        form.addRow("カテゴリ", self.category_combo)
+        self.category_picker = CategoryPicker(form_widget)
+        form.addRow("カテゴリ", self.category_picker)
 
         self.location_combo = QComboBox(form_widget)
         form.addRow("保管場所", self.location_combo)
@@ -197,7 +197,7 @@ class ItemDialog(QDialog):
             )
         self._fill_required_masters(self.client_combo, clients, current_client_id)
         self._fill_required_masters(self.purchaser_combo, purchasers, current_purchaser_id)
-        self.category_combo.set_categories(categories)
+        self.category_picker.set_categories(categories)
         self.location_combo.addItem("(なし)", None)
         for location in locations:
             self.location_combo.addItem(location.name, location.id)
@@ -225,7 +225,7 @@ class ItemDialog(QDialog):
         self.name_edit.setText(item.name)
         self.manufacturer_edit.setText(item.manufacturer_part_number or "")
         self.application_edit.setText(item.application or "")
-        self.category_combo.set_current_category_id(item.category_id)
+        self.category_picker.set_current_category_id(item.category_id)
         self.location_combo.setCurrentIndex(self.location_combo.findData(item.location_id))
         self.threshold_spin.setValue(item.reorder_threshold)
         self.reorder_quantity_edit.setText(
@@ -252,7 +252,7 @@ class ItemDialog(QDialog):
     def _connect_validation(self) -> None:
         self.client_combo.currentIndexChanged.connect(self._validate)
         self.name_edit.textChanged.connect(self._validate)
-        self.category_combo.category_changed.connect(self._validate)
+        self.category_picker.category_changed.connect(self._validate)
         self.location_combo.currentIndexChanged.connect(self._validate)
         self.initial_quantity_spin.valueChanged.connect(self._update_initial_staff_state)
         self.initial_quantity_spin.valueChanged.connect(self._validate)
@@ -281,13 +281,13 @@ class ItemDialog(QDialog):
                 messages.append("先にクライアントマスタを登録してください")
             if self.purchaser_combo.count() == 0:
                 messages.append("先に発注主体マスタを登録してください")
-            if self.category_combo.model().rowCount() == 0:
+            if self.category_picker.category_count() == 0:
                 messages.append("先にカテゴリマスタを登録してください")
         if self.client_combo.currentData() is None:
             messages.append("クライアントを選択してください")
         if not self.name_edit.text().strip():
             messages.append("品名を入力してください")
-        if self.category_combo.current_category_id() is None:
+        if self.category_picker.current_category_id() is None:
             messages.append("カテゴリを選択してください")
         if self.purchaser_combo.currentData() is None:
             messages.append("発注主体を選択してください")
@@ -317,7 +317,7 @@ class ItemDialog(QDialog):
         self._validate()
         if not self.button_box.button(QDialogButtonBox.StandardButton.Ok).isEnabled():
             return
-        category_id = self.category_combo.current_category_id()
+        category_id = self.category_picker.current_category_id()
         if category_id is None:
             return
         reorder_quantity = self._optional_integer(self.reorder_quantity_edit)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import ItemFilter, NewItem
@@ -9,6 +9,7 @@ from inventory_manager_mini.core.services import InventoryService, MasterService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.signals import DataBus
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def dialog_context(
 def _fill_required(dialog: ItemDialog) -> None:
     dialog.client_combo.setCurrentIndex(0)
     dialog.name_edit.setText("新しい品目")
-    dialog.category_combo.set_current_category_id(1)
+    dialog.category_picker.set_current_category_id(1)
     dialog.purchaser_combo.setCurrentIndex(0)
 
 
@@ -53,6 +54,27 @@ def test_new_item_dialog_validates_initial_staff_and_records_quantity(
     assert item.quantity == 2
     assert movements[0].staff_id == 1
     assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_category_selected_via_picker_dialog_enables_ok(qtbot, dialog_context, monkeypatch) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    dialog.client_combo.setCurrentIndex(0)
+    dialog.name_edit.setText("新しい品目")
+    dialog.purchaser_combo.setCurrentIndex(0)
+    assert "カテゴリを選択してください" in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    def fake_exec(picker_dialog: CategoryPickerDialog) -> QDialog.DialogCode:
+        picker_dialog.tree.setCurrentItem(picker_dialog._items[1])
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(CategoryPickerDialog, "exec", fake_exec)
+    dialog.category_picker.open_dialog()
+
+    assert dialog.category_picker.current_category_id() == 1
+    assert "カテゴリを選択してください" not in dialog.error_label.text()
+    assert _ok_button(dialog).isEnabled()
 
 
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "https:///missing-host"])

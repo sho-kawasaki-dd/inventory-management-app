@@ -4,6 +4,7 @@
 - ステータス: 承認済
 - 作業ブランチ: `feature/phase2-app-foundation`(2a)→ `feature/phase2-main-window`(2b)→ `feature/phase2-master-dialog`(2c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3.1・3.2・3.5・5.1・5.4・6 章・7.1・7.3・7.5・8・9・10 章)
+- 改訂履歴: 2026-10-06 試験ビルドの exe で、品目登録時にカテゴリを選択しても未選択扱いになる不具合が判明したため、カテゴリ選択 UI を `QComboBox` のツリーポップアップからモーダルダイアログ選択へ変更(2.2 決定事項・E 章・M 章)
 
 ---
 
@@ -40,7 +41,7 @@
 
 | 項目 | 決定 |
 | --- | --- |
-| PR 分割 | 2a(起動基盤: `config.py`・ログ・多重起動防止・`app.py`・UI 共通部品・最小 MainWindow・既存起動テストの改修)→ 2b(MainWindow の一覧・操作機能の追加、一覧モデル・カテゴリのツリーコンボ・ItemDialog)→ 2c(MasterDialog・性能計測・試験ビルド・README)の 3 PR。2a で起動・終了できる状態とし、後続 PR の未実装モジュールには依存しない。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
+| PR 分割 | 2a(起動基盤: `config.py`・ログ・多重起動防止・`app.py`・UI 共通部品・最小 MainWindow・既存起動テストの改修)→ 2b(MainWindow の一覧・操作機能の追加、一覧モデル・カテゴリ選択部品・ItemDialog)→ 2c(MasterDialog・性能計測・試験ビルド・README)の 3 PR。2a で起動・終了できる状態とし、後続 PR の未実装モジュールには依存しない。各 PR は CI 成功後にマージし、次のブランチは最新の `main` から作成する |
 | 後続フェーズのメニュー | 6.2 のメニュー・ツールバーのうち、Phase 2 で実装する項目のみ作成する。在庫操作・履歴・CSV・印刷・バックアップ・復元・アラートパネル・ダッシュボード・設定・販売ページを開く等は、各フェーズで追加する(不活性の仮項目は置かない) |
 | 起動時の低在庫通知 | Phase 4 で実装する。Phase 2 では `app.py` の起動シーケンスで MainWindow 表示後に呼ぶ関数 `show_startup_notifications()` を用意し、処理は空とする |
 | 一覧のダブルクリック | Phase 2 では何もしない。Phase 3 で履歴ビューに接続する |
@@ -50,7 +51,7 @@
 | 検索・絞り込み | 絞り込みは `InventoryService.list_items(ItemFilter)` の SQL で行い、`ItemSortProxyModel` はソートのみを担う。検索欄は最終入力から 300ms のデバウンス後に再検索する。検索処理開始から再描画完了まで 0.3 秒以内、最終入力から再描画完了まで 0.6 秒以内とする。その他の絞り込み条件は変更時に即時再検索し、条件変更から再描画完了まで 0.3 秒以内とする |
 | ソート | 一覧モデルは `Qt.ItemDataRole.UserRole` で生の値(数値・文字列・`None`)を返す。`ItemSortProxyModel(QAbstractProxyModel)` はソート列の順序を一括計算して行マッピングを作り、比較ごとの Python/C++ 境界往復を避ける。`None` は昇順で末尾とする |
 | 行の表示 | 廃止行はグレー表示(`ForegroundRole`)。低在庫行の着色は Phase 4 |
-| カテゴリ選択 UI | `QComboBox` のポップアップを `QTreeView` にしたツリーコンボ `CategoryComboBox` を作成し、MainWindow の絞り込み(先頭「すべて」)、ItemDialog(先頭項目なし)、カテゴリの親変更(先頭「(最上位)」)で共用する |
+| カテゴリ選択 UI | 読み取り専用の表示欄(フルパス)と「選択…」ボタンから成る `CategoryPicker`(`ui/widgets/category_picker.py`)を作成し、押下でモーダルの `CategoryPickerDialog`(全展開した `QTreeWidget`、OK・ダブルクリックで確定、キャンセルで元の選択を維持)を開く。MainWindow の絞り込み(先頭「すべて」)、ItemDialog(先頭項目なし)、カテゴリの親変更(先頭「(最上位)」)で共用する。当初の `QComboBox` + `QTreeView` ポップアップ方式は、Qt の `QComboBox` が項目クリックのマウスリリースを消費して `clicked` が発火せず選択が確定しないこと、および展開してもポップアップの高さが追従しないことから廃止した |
 | 任意の数値入力 | 参考価格(0 以上)・推奨発注数(1 以上)は `QLineEdit` + `QIntValidator` とし、空欄を `None` とする(参考価格 0 円と未登録を区別するため)。初期数量・閾値は `QSpinBox`(0 以上) |
 | URL 検証 | ItemDialog は入力変更ごとに `core.services.validate_purchase_url` を呼び、`ValidationError` ならエラー表示と OK 不活性とする |
 | 例外の表示 | `ui/error_handling.py` に集約する。`DomainError` は `message` を警告ダイアログで表示し、ダイアログは開いたままにする。それ以外の例外は `logger.exception` で記録して汎用エラーダイアログを表示する。未捕捉例外は `sys.excepthook` で同様に扱う |
@@ -147,7 +148,7 @@
 
 ### 2b. MainWindow・品目 CRUD(`feature/phase2-main-window`)
 
-#### E. カテゴリのツリーコンボ `ui/widgets/category_combo.py`
+#### E. カテゴリのツリーコンボ `ui/widgets/category_combo.py`(M 章で `CategoryPicker` に置き換え済み。以下は当初の実装記録)
 
 - [x] `CategoryComboBox(QComboBox)`: `QStandardItemModel` + `QTreeView` をポップアップに設定する
 - [x] `set_categories(categories: list[Category], leading_label: str | None = None)`: `parent_id` から木を構築し、名前順に並べる。`leading_label` があれば先頭に ID `None` の項目を置く。再設定時は選択中の ID を可能な限り維持する
@@ -174,7 +175,7 @@
 - [x] 2a の `MainWindow(context: AppContext)` を拡張し、以下の一覧・操作機能を追加する。タイトルと画面内に収まるサイズの要件は維持する
 - [x] 絞り込み欄
   - [x] 検索欄(プレースホルダ「品名・管理番号・メーカー型番」)。`QTimer`(単発、300ms)でデバウンスして再検索する
-  - [x] クライアント・発注主体(先頭「すべて」。無効化済みも「(無効)」付きで含める)、カテゴリ(`CategoryComboBox`、先頭「すべて」)、保管場所(先頭「すべて」)
+  - [x] クライアント・発注主体(先頭「すべて」。無効化済みも「(無効)」付きで含める)、カテゴリ(カテゴリ選択部品、先頭「すべて」)、保管場所(先頭「すべて」)
   - [x] 「低在庫のみ」「廃止品目を含む」チェックボックス。「廃止品目を含む」は表示メニューの同名アクションと同期する
   - [x] 条件から `ItemFilter` を組み立てて `list_items` を呼び、件数をステータスバーに表示する
 - [x] 一覧: `QTableView` + `ItemSortProxyModel`。行単位・単一選択、ソート有効、ダブルクリックは接続しない
@@ -203,7 +204,7 @@
 
 - [x] `ItemDialog(context, item_id: int | None = None, parent=None)`: `item_id` が `None` なら新規、指定時は編集
 - [x] フォームを `QScrollArea` に配置し、1366×768 で画面内に収まるようにする
-- [x] 項目(6.3 の順): 管理番号(表示のみ。新規時は「登録時に自動採番」)、クライアント、品名、メーカー型番、用途、カテゴリ(`CategoryComboBox`)、保管場所(先頭「(なし)」)、単位(「個」表示のみ)、初期数量(新規時)/現在数量(編集時、表示のみ)、初期数量の記録担当者(新規時)、閾値、推奨発注数、発注主体と販売ページ URL(並べて配置)、仕入先、参考価格、備考(`QPlainTextEdit`)、最終購入日・購入ロット数(編集時、表示のみ)
+- [x] 項目(6.3 の順): 管理番号(表示のみ。新規時は「登録時に自動採番」)、クライアント、品名、メーカー型番、用途、カテゴリ(カテゴリ選択部品)、保管場所(先頭「(なし)」)、単位(「個」表示のみ)、初期数量(新規時)/現在数量(編集時、表示のみ)、初期数量の記録担当者(新規時)、閾値、推奨発注数、発注主体と販売ページ URL(並べて配置)、仕入先、参考価格、備考(`QPlainTextEdit`)、最終購入日・購入ロット数(編集時、表示のみ)
 - [x] 選択肢
   - [x] クライアント・発注主体: 有効なもののみ。編集時、現在の値が無効化済みなら「(無効)」付きで先頭に加え、「現在の○○は無効化されています。変更する場合は有効なものを選択してください」を表示する
   - [x] 担当者: 有効なもののみ
@@ -245,7 +246,7 @@
   - [x] `QTreeWidget` で名称・接頭辞・次番号を表示する
   - [x] ボタン: 追加(最上位)、子カテゴリ追加、名称変更、親変更、接頭辞変更、削除
   - [x] 追加は名称・接頭辞を入力する小ダイアログ(接頭辞は英大文字・数字 2〜5 文字の入力補助。最終検証は Service)
-  - [x] 親変更は `CategoryComboBox`(先頭「(最上位)」)で選択し、`CategoryCycleError` を表示する
+  - [x] 親変更はカテゴリ選択ダイアログ(先頭「(最上位)」)で選択し、`CategoryCycleError` を表示する
   - [x] 接頭辞変更は `next_seq > 1` で不活性(「採番済みのため変更できません」)
   - [x] 削除は `can_delete_category` が真の場合のみ活性
 - [x] 保管場所タブ: 追加、名称変更、削除(`can_delete_location` で活性制御)
@@ -282,6 +283,28 @@
 - [ ] exe から品目を登録し、DB に保存されることを確認する
 - [ ] バージョン情報でアプリ版・スキーマ版・DB パスの表示を確認する
 - [x] 結果(PyInstaller 版・問題点・対処)を本書 4.2 に記録する。成果物(`build/`・`dist/`)はコミットしない
+
+#### M. カテゴリ選択 UI の改修(K の手動確認で判明した不具合。`feature/phase2-master-dialog` 上で対応)
+
+- 目的: exe で品目登録時にカテゴリを選択しても未選択扱いになる不具合を解消し、子カテゴリの選択を容易にする。
+- 原因: `QComboBox` のポップアップは、項目上のマウスリリースを自身で処理して `itemSelected` を送出しイベントを消費する。このためビューの `clicked` が発火せず、`clicked` に接続していた選択確定処理が呼ばれなかった。自動テストが確定処理を直接呼んでいたため検出できなかった。また、ポップアップの高さは表示時点の展開状態で一度だけ決まるため、子カテゴリを展開しても追従しない。
+- 要件: 2.2 決定事項「カテゴリ選択 UI」に従う。公開 API(`set_categories`・`current_category_id`・`set_current_category_id`・`category_changed(object)`)は維持する。
+
+- [x] `ui/widgets/category_picker.py` を新設する(`category_combo.py` は削除する)
+  - [x] `CategoryPickerDialog(categories, leading_label, current_id, parent)`: `QTreeWidget`(ヘッダなし・全展開・名前順)に先頭項目(`leading_label`)とカテゴリ木を表示する。項目選択時のみ OK が活性、ダブルクリックで確定、現在の選択項目を初期選択する。1366×768 に収まるサイズとする
+  - [x] `CategoryPicker(QWidget)`: 読み取り専用の `QLineEdit`(フルパス表示・ツールチップ)と「選択…」ボタン。`set_categories`・`current_category_id`・`set_current_category_id`・`category_changed(object)` に加え、カテゴリ件数を返す `category_count()`(先頭項目を除く)を提供する。存在しない ID の指定は未選択に戻す。再設定時は選択中の ID を可能な限り維持する
+  - [x] ダイアログで確定した場合のみ ID を更新し `category_changed` を発火する(同じ項目を選び直した場合は発火しない)。キャンセル時は変更しない
+- [x] 呼び出し側を置き換える
+  - [x] `ItemDialog`: `CategoryPicker` を使用し、カテゴリ 0 件の判定を `category_count()` に変更する
+  - [x] `MainWindow`: 絞り込みのカテゴリ欄を `CategoryPicker`(先頭「すべて」)にする
+  - [x] `MasterDialog`: 親カテゴリ変更ダイアログを `CategoryPickerDialog` の派生(先頭「(最上位)」)にする
+  - [x] 属性名・テストの参照を `category_combo` から `category_picker` に更新する
+- [x] `tests/test_category_combo.py` を `tests/test_category_picker.py` に置き換える
+  - [x] ダイアログ: 木構造と並び順、先頭項目、現在値の初期選択、未選択時の OK 不活性、実際のダブルクリック・OK 押下による確定
+  - [x] 部品: ボタン押下で確定した ID・フルパス表示・シグナル、キャンセル時の不変、再設定時の選択維持、存在しない ID、`category_count()`
+  - [x] `ItemDialog`: 部品経由でカテゴリを選択すると「カテゴリを選択してください」が消え OK が活性になること
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov` が成功する
+- [ ] 試験ビルドを作り直し、exe でカテゴリ(子カテゴリを含む)を選択して品目を登録できることを確認する(K の未確認項目と合わせて実施)
 
 #### L. ドキュメント・仕上げ
 

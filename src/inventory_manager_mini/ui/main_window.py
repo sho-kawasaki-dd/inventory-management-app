@@ -23,7 +23,7 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
-from inventory_manager_mini.ui.widgets.category_combo import CategoryComboBox
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 
 class MainWindow(QMainWindow):
@@ -53,24 +53,24 @@ class MainWindow(QMainWindow):
 
         self.client_combo = self._master_combo()
         self.purchaser_combo = self._master_combo()
-        self.category_combo = CategoryComboBox(self)
-        self.category_combo.category_changed.connect(self.refresh_items)
+        self.category_picker = CategoryPicker(self)
+        self.category_picker.category_changed.connect(self.refresh_items)
         self.location_combo = self._master_combo()
-        for index, (label, combo) in enumerate(
+        for combo in (self.client_combo, self.purchaser_combo, self.location_combo):
+            combo.currentIndexChanged.connect(self.refresh_items)
+        for index, (label, widget) in enumerate(
             (
                 ("クライアント", self.client_combo),
                 ("発注主体", self.purchaser_combo),
-                ("カテゴリ", self.category_combo),
+                ("カテゴリ", self.category_picker),
                 ("保管場所", self.location_combo),
             )
         ):
-            combo.setMinimumWidth(130)
-            if combo is not self.category_combo:
-                combo.currentIndexChanged.connect(self.refresh_items)
+            widget.setMinimumWidth(130)
             row = 1 + index // 2
             column = (index % 2) * 2
             filters.addWidget(QLabel(label, self), row, column)
-            filters.addWidget(combo, row, column + 1)
+            filters.addWidget(widget, row, column + 1)
 
         self.low_stock_checkbox = QCheckBox("低在庫のみ", self)
         self.low_stock_checkbox.toggled.connect(self.refresh_items)
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
             self.purchaser_combo,
             [(purchaser.id, purchaser.name, purchaser.is_active) for purchaser in purchasers],
         )
-        self.category_combo.set_categories(categories, leading_label="すべて")
+        self.category_picker.set_categories(categories, leading_label="すべて")
         self._fill_master_combo(
             self.location_combo,
             [(location.id, location.name, True) for location in locations],
@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
             text=self.search_edit.text().strip() or None,
             client_id=self.client_combo.currentData(),
             purchaser_id=self.purchaser_combo.currentData(),
-            category_id=self.category_combo.current_category_id(),
+            category_id=self.category_picker.current_category_id(),
             location_id=self.location_combo.currentData(),
             low_stock_only=self.low_stock_checkbox.isChecked(),
             include_inactive=self.inactive_checkbox.isChecked(),

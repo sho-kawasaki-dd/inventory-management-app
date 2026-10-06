@@ -220,8 +220,8 @@ def test_filter_changes_to_table_paint(qtbot, performance_window) -> None:
     window, probe = performance_window
 
     def select_category() -> None:
-        window.category_combo.set_current_category_id(1)
-        window.category_combo.category_changed.emit(1)
+        window.category_picker.set_current_category_id(1)
+        window.category_picker.category_changed.emit(1)
 
     actions: tuple[tuple[str, Callable[[], None]], ...] = (
         (

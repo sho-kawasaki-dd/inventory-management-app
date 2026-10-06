@@ -407,7 +407,7 @@ def test_add_purchaser_then_reopen_item_dialog(qtbot, dialog_context, monkeypatc
     assert reopened.purchaser_combo.findText("新発注主体") >= 0
     reopened.client_combo.setCurrentIndex(reopened.client_combo.findData(1))
     reopened.name_edit.setText("新しい品目")
-    reopened.category_combo.set_current_category_id(1)
+    reopened.category_picker.set_current_category_id(1)
     reopened.purchaser_combo.setCurrentIndex(reopened.purchaser_combo.findText("新発注主体"))
     assert reopened.button_box.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
 

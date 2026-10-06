@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from inventory_manager_mini.core.models import Category
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.error_handling import run_guarded
-from inventory_manager_mini.ui.widgets.category_combo import CategoryComboBox
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
 
 
 class MasterTab(StrEnum):
@@ -507,21 +507,10 @@ class _PrefixDialog(QDialog):
         return self.prefix_edit.text()
 
 
-class _CategoryParentDialog(QDialog):
+class _CategoryParentDialog(CategoryPickerDialog):
     def __init__(self, categories: list[Category], parent_id: int | None, parent: QWidget) -> None:
-        super().__init__(parent)
+        super().__init__(categories, "(最上位)", parent_id, parent)
         self.setWindowTitle("親カテゴリの変更")
-        layout = QVBoxLayout(self)
-        self.combo = CategoryComboBox(self)
-        self.combo.set_categories(categories, leading_label="(最上位)")
-        self.combo.set_current_category_id(parent_id)
-        layout.addWidget(self.combo)
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
-        )
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        layout.addWidget(self.buttons)
 
     def parent_category_id(self) -> int | None:
-        return self.combo.current_category_id()
+        return self.selected_id()
