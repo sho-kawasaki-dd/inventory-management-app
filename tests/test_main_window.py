@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 from inventory_manager_mini.core.models import NewItem
@@ -161,6 +162,26 @@ def test_selection_actions_and_deactivate_reactivate(window_with_items, monkeypa
     assert not window.context.inventory.get_item(first.id).is_active
     assert window._selected_item_id() == first.id
     assert window.item_model.row_at(window.item_model.row_of(first.id)).is_active is False
+
+
+def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_items) -> None:
+    window, first, second = window_with_items
+    shared = [window.new_action, window.edit_action, window.toggle_active_action]
+
+    assert window.toolbar.actions() == shared
+    assert window.table.actions() == shared
+    assert window.table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
+    item_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "品目")
+    assert item_menu.actions() == shared
+
+    assert window.new_action.isEnabled()
+    _select_item(window, first.id)
+    assert window.edit_action.isEnabled()
+
+    window.inactive_checkbox.setChecked(True)
+    _select_item(window, second.id)
+    assert window.edit_action.isEnabled()
+    assert window.toggle_active_action.text() == "再有効化"
 
 
 def test_data_changed_refreshes_master_options(window_with_items) -> None:

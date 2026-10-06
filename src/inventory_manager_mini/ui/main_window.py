@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -94,10 +94,24 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self._build_menus()
-        toolbar = QToolBar("品目", self)
-        self.addToolBar(toolbar)
-        toolbar.addAction(self.new_action)
+        self._build_toolbar()
+        self._build_table_context_menu()
         self.statusBar()
+
+    def _build_toolbar(self) -> None:
+        self.toolbar = QToolBar("品目操作", self)
+        self.toolbar.setMovable(False)
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.addToolBar(self.toolbar)
+        self.toolbar.addAction(self.new_action)
+        self.toolbar.addAction(self.edit_action)
+        self.toolbar.addAction(self.toggle_active_action)
+
+    def _build_table_context_menu(self) -> None:
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.table.addAction(self.new_action)
+        self.table.addAction(self.edit_action)
+        self.table.addAction(self.toggle_active_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
