@@ -105,6 +105,8 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert dialog.purchaser_combo.currentText() == "本部 (無効)"
     assert dialog.purchaser_combo.findData(3) == -1
     assert "変更する場合は有効なものを選択してください" in dialog.purchaser_notice.text()
+    assert dialog.initial_staff_combo is None
+    assert dialog.initial_staff_row is None
     assert dialog.unit_label.text() == "個"
     assert not dialog.initial_quantity_row.isVisible()
     assert dialog.quantity_label.text() == "0 個"
