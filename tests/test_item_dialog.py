@@ -37,15 +37,19 @@ def test_new_item_dialog_validates_initial_staff_and_records_quantity(
 ) -> None:
     dialog = ItemDialog(dialog_context)
     qtbot.addWidget(dialog)
+    initial_quantity_spin = dialog.initial_quantity_spin
+    initial_staff_combo = dialog.initial_staff_combo
+    assert initial_quantity_spin is not None
+    assert initial_staff_combo is not None
     _fill_required(dialog)
 
     assert dialog.unit_label.text() == "個"
-    assert not dialog.initial_staff_combo.isEnabled()
+    assert not initial_staff_combo.isEnabled()
     assert _ok_button(dialog).isEnabled()
-    dialog.initial_quantity_spin.setValue(2)
-    assert dialog.initial_staff_combo.isEnabled()
+    initial_quantity_spin.setValue(2)
+    assert initial_staff_combo.isEnabled()
     assert not _ok_button(dialog).isEnabled()
-    dialog.initial_staff_combo.setCurrentIndex(1)
+    initial_staff_combo.setCurrentIndex(1)
     assert _ok_button(dialog).isEnabled()
 
     dialog._save()
@@ -96,6 +100,8 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     dialog_context.master.deactivate_purchaser(1)
     dialog = ItemDialog(dialog_context, item.id)
     qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
 
     assert dialog.client_combo.count() == 2
     assert dialog.client_combo.currentText() == "総務 (無効)"
@@ -107,8 +113,9 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert "変更する場合は有効なものを選択してください" in dialog.purchaser_notice.text()
     assert dialog.initial_staff_combo is None
     assert dialog.initial_staff_row is None
+    assert dialog.initial_quantity_spin is None
+    assert dialog.initial_quantity_row is None
     assert dialog.unit_label.text() == "個"
-    assert not dialog.initial_quantity_row.isVisible()
     assert dialog.quantity_label.text() == "0 個"
     assert _ok_button(dialog).isEnabled()
     dialog.name_edit.setText("更新後")
