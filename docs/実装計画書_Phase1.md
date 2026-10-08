@@ -1,7 +1,7 @@
 # Phase 1 実装計画書(スキーマ・リポジトリ・サービス層)
 
 - 作成日: 2026-10-02
-- ステータス: 承認済
+- ステータス: 実装済
 - 作業ブランチ: `feature/phase1-db-foundation`(1a)→ `feature/phase1-services`(1b)→ `feature/phase1-reports-backup`(1c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3・4・5・7.2・7.4・8・9 章)
 
