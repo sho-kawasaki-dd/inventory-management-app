@@ -25,7 +25,7 @@ from inventory_manager_mini.core.services import validate_purchase_url
 from inventory_manager_mini.core.timeutil import local_date
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.error_handling import run_guarded
-from inventory_manager_mini.ui.widgets.category_combo import CategoryComboBox
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 
 class ItemDialog(QDialog):
@@ -85,28 +85,37 @@ class ItemDialog(QDialog):
         form.addRow("メーカー型番", self.manufacturer_edit)
         self.application_edit = QLineEdit(form_widget)
         form.addRow("用途", self.application_edit)
-        self.category_combo = CategoryComboBox(form_widget)
-        form.addRow("カテゴリ", self.category_combo)
+        self.category_picker = CategoryPicker(form_widget)
+        form.addRow("カテゴリ", self.category_picker)
 
         self.location_combo = QComboBox(form_widget)
         form.addRow("保管場所", self.location_combo)
         self.unit_label = QLabel("個", form_widget)
         form.addRow("単位", self.unit_label)
 
-        self.initial_quantity_spin = QSpinBox(form_widget)
-        self.initial_quantity_spin.setRange(0, 2_147_483_647)
-        self.initial_quantity_row = self.initial_quantity_spin
-        self.quantity_label = QLabel("0", form_widget)
-        self.quantity_row = self.quantity_label
-        self.initial_staff_combo = QComboBox(form_widget)
-        self.initial_staff_combo.addItem("選択してください", None)
-        self.initial_staff_row = self.initial_staff_combo
-        self.last_purchase_label = QLabel("-", form_widget)
-        self.last_purchase_row = self.last_purchase_label
+        self.initial_quantity_spin: QSpinBox | None = None
+        self.initial_quantity_row: QSpinBox | None = None
+        self.quantity_label: QLabel | None = None
+        self.quantity_row: QLabel | None = None
+        self.initial_staff_combo: QComboBox | None = None
+        self.initial_staff_row: QComboBox | None = None
+        self.last_purchase_label: QLabel | None = None
+        self.last_purchase_row: QLabel | None = None
         if self.item is None:
+            self.initial_quantity_spin = QSpinBox(form_widget)
+            self.initial_quantity_spin.setRange(0, 2_147_483_647)
+            self.initial_quantity_row = self.initial_quantity_spin
+            self.initial_staff_combo = QComboBox(form_widget)
+            self.initial_staff_combo.addItem("選択してください", None)
+            self.initial_staff_row = self.initial_staff_combo
             form.addRow("初期数量", self.initial_quantity_spin)
             form.addRow("初期数量の記録担当者", self.initial_staff_combo)
         else:
+            self.quantity_label = QLabel("0", form_widget)
+            self.quantity_row = self.quantity_label
+            self.last_purchase_label = QLabel("-", form_widget)
+            self.last_purchase_row = self.last_purchase_label
+            assert self.quantity_label is not None
             form.addRow("現在数量", self.quantity_label)
 
         self.threshold_spin = QSpinBox(form_widget)
@@ -143,6 +152,7 @@ class ItemDialog(QDialog):
         form.addRow("備考", self.note_edit)
 
         if self.item is not None:
+            assert self.last_purchase_label is not None
             form.addRow("最終購入日・購入ロット数", self.last_purchase_label)
         self.error_label = QLabel(form_widget)
         self.error_label.setWordWrap(True)
@@ -197,12 +207,13 @@ class ItemDialog(QDialog):
             )
         self._fill_required_masters(self.client_combo, clients, current_client_id)
         self._fill_required_masters(self.purchaser_combo, purchasers, current_purchaser_id)
-        self.category_combo.set_categories(categories)
+        self.category_picker.set_categories(categories)
         self.location_combo.addItem("(なし)", None)
         for location in locations:
             self.location_combo.addItem(location.name, location.id)
-        for member in staff:
-            self.initial_staff_combo.addItem(member.name, member.id)
+        if self.initial_staff_combo is not None:
+            for member in staff:
+                self.initial_staff_combo.addItem(member.name, member.id)
 
     @staticmethod
     def _fill_required_masters(combo: QComboBox, masters, current_id: int | None) -> None:
@@ -225,7 +236,7 @@ class ItemDialog(QDialog):
         self.name_edit.setText(item.name)
         self.manufacturer_edit.setText(item.manufacturer_part_number or "")
         self.application_edit.setText(item.application or "")
-        self.category_combo.set_current_category_id(item.category_id)
+        self.category_picker.set_current_category_id(item.category_id)
         self.location_combo.setCurrentIndex(self.location_combo.findData(item.location_id))
         self.threshold_spin.setValue(item.reorder_threshold)
         self.reorder_quantity_edit.setText(
@@ -238,11 +249,13 @@ class ItemDialog(QDialog):
             "" if item.reference_price is None else str(item.reference_price)
         )
         self.note_edit.setPlainText(item.note or "")
+        assert self.quantity_row is not None
         self.quantity_row.setText(f"{item.quantity:,} 個")
         succeeded, purchase_info = run_guarded(
             self, lambda: self.context.inventory.get_purchase_info(item.id)
         )
         if succeeded and purchase_info is not None and purchase_info.last_purchased_at:
+            assert self.last_purchase_label is not None
             last_date = local_date(purchase_info.last_purchased_at).isoformat()
             lot_quantity = (
                 "-" if purchase_info.lot_quantity is None else f"{purchase_info.lot_quantity:,} 個"
@@ -252,11 +265,13 @@ class ItemDialog(QDialog):
     def _connect_validation(self) -> None:
         self.client_combo.currentIndexChanged.connect(self._validate)
         self.name_edit.textChanged.connect(self._validate)
-        self.category_combo.category_changed.connect(self._validate)
+        self.category_picker.category_changed.connect(self._validate)
         self.location_combo.currentIndexChanged.connect(self._validate)
-        self.initial_quantity_spin.valueChanged.connect(self._update_initial_staff_state)
-        self.initial_quantity_spin.valueChanged.connect(self._validate)
-        self.initial_staff_combo.currentIndexChanged.connect(self._validate)
+        if self.initial_quantity_spin is not None:
+            self.initial_quantity_spin.valueChanged.connect(self._update_initial_staff_state)
+            self.initial_quantity_spin.valueChanged.connect(self._validate)
+        if self.initial_staff_combo is not None:
+            self.initial_staff_combo.currentIndexChanged.connect(self._validate)
         self.threshold_spin.valueChanged.connect(self._validate)
         self.reorder_quantity_edit.textChanged.connect(self._validate)
         self.purchaser_combo.currentIndexChanged.connect(self._validate)
@@ -264,8 +279,9 @@ class ItemDialog(QDialog):
         self.reference_price_edit.textChanged.connect(self._validate)
 
     def _update_initial_staff_state(self, *_args) -> None:
-        if self.item_id is not None:
+        if self.initial_staff_combo is None:
             return
+        assert self.initial_quantity_spin is not None
         enabled = self.initial_quantity_spin.value() > 0
         self.initial_staff_combo.setEnabled(enabled)
         if not enabled:
@@ -281,22 +297,26 @@ class ItemDialog(QDialog):
                 messages.append("先にクライアントマスタを登録してください")
             if self.purchaser_combo.count() == 0:
                 messages.append("先に発注主体マスタを登録してください")
-            if self.category_combo.model().rowCount() == 0:
+            if self.category_picker.category_count() == 0:
                 messages.append("先にカテゴリマスタを登録してください")
         if self.client_combo.currentData() is None:
             messages.append("クライアントを選択してください")
         if not self.name_edit.text().strip():
             messages.append("品名を入力してください")
-        if self.category_combo.current_category_id() is None:
+        if self.category_picker.current_category_id() is None:
             messages.append("カテゴリを選択してください")
         if self.purchaser_combo.currentData() is None:
             messages.append("発注主体を選択してください")
+        if self.item_id is None:
+            assert self.initial_quantity_spin is not None
         if (
             self.item_id is None
+            and self.initial_quantity_spin is not None
             and self.initial_quantity_spin.value() > 0
-            and self.initial_staff_combo.currentData() is None
         ):
-            messages.append("初期数量を記録する担当者を選択してください")
+            assert self.initial_staff_combo is not None
+            if self.initial_staff_combo.currentData() is None:
+                messages.append("初期数量を記録する担当者を選択してください")
         try:
             validate_purchase_url(self.purchase_url_edit.text())
         except ValidationError as error:
@@ -317,12 +337,14 @@ class ItemDialog(QDialog):
         self._validate()
         if not self.button_box.button(QDialogButtonBox.StandardButton.Ok).isEnabled():
             return
-        category_id = self.category_combo.current_category_id()
+        category_id = self.category_picker.current_category_id()
         if category_id is None:
             return
         reorder_quantity = self._optional_integer(self.reorder_quantity_edit)
         reference_price = self._optional_integer(self.reference_price_edit)
         if self.item_id is None:
+            assert self.initial_quantity_spin is not None
+            assert self.initial_staff_combo is not None
             value = NewItem(
                 client_id=self.client_combo.currentData(),
                 purchaser_id=self.purchaser_combo.currentData(),

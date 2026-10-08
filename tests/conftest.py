@@ -15,6 +15,24 @@ from inventory_manager_mini.db.connection import connect_memory
 from inventory_manager_mini.db.migrations import create_schema
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-perf",
+        action="store_true",
+        default=False,
+        help="性能計測テストを実行する",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--run-perf"):
+        return
+    skip_perf = pytest.mark.skip(reason="--run-perf が指定されていません")
+    for item in items:
+        if "perf" in item.keywords:
+            item.add_marker(skip_perf)
+
+
 class FixedClock:
     def __init__(self) -> None:
         self.current = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)

@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -23,7 +23,7 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
-from inventory_manager_mini.ui.widgets.category_combo import CategoryComboBox
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 
 class MainWindow(QMainWindow):
@@ -53,24 +53,24 @@ class MainWindow(QMainWindow):
 
         self.client_combo = self._master_combo()
         self.purchaser_combo = self._master_combo()
-        self.category_combo = CategoryComboBox(self)
-        self.category_combo.category_changed.connect(self.refresh_items)
+        self.category_picker = CategoryPicker(self)
+        self.category_picker.category_changed.connect(self.refresh_items)
         self.location_combo = self._master_combo()
-        for index, (label, combo) in enumerate(
+        for combo in (self.client_combo, self.purchaser_combo, self.location_combo):
+            combo.currentIndexChanged.connect(self.refresh_items)
+        for index, (label, widget) in enumerate(
             (
                 ("クライアント", self.client_combo),
                 ("発注主体", self.purchaser_combo),
-                ("カテゴリ", self.category_combo),
+                ("カテゴリ", self.category_picker),
                 ("保管場所", self.location_combo),
             )
         ):
-            combo.setMinimumWidth(130)
-            if combo is not self.category_combo:
-                combo.currentIndexChanged.connect(self.refresh_items)
+            widget.setMinimumWidth(130)
             row = 1 + index // 2
             column = (index % 2) * 2
             filters.addWidget(QLabel(label, self), row, column)
-            filters.addWidget(combo, row, column + 1)
+            filters.addWidget(widget, row, column + 1)
 
         self.low_stock_checkbox = QCheckBox("低在庫のみ", self)
         self.low_stock_checkbox.toggled.connect(self.refresh_items)
@@ -88,15 +88,30 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table.setSortingEnabled(True)
+        self.sort_model.set_item_selection_model(self.table.selectionModel())
         self.table.selectionModel().selectionChanged.connect(self._update_selection_actions)
         layout.addWidget(self.table)
         self.setCentralWidget(central)
 
         self._build_menus()
-        toolbar = QToolBar("品目", self)
-        self.addToolBar(toolbar)
-        toolbar.addAction(self.new_action)
+        self._build_toolbar()
+        self._build_table_context_menu()
         self.statusBar()
+
+    def _build_toolbar(self) -> None:
+        self.toolbar = QToolBar("品目操作", self)
+        self.toolbar.setMovable(False)
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.addToolBar(self.toolbar)
+        self.toolbar.addAction(self.new_action)
+        self.toolbar.addAction(self.edit_action)
+        self.toolbar.addAction(self.toggle_active_action)
+
+    def _build_table_context_menu(self) -> None:
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.table.addAction(self.new_action)
+        self.table.addAction(self.edit_action)
+        self.table.addAction(self.toggle_active_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -118,6 +133,20 @@ class MainWindow(QMainWindow):
         self.toggle_active_action = QAction("廃止", self)
         self.toggle_active_action.triggered.connect(self._toggle_item_active)
         item_menu.addAction(self.toggle_active_action)
+
+        master_menu = self.menuBar().addMenu("マスタ")
+        master_tabs = (
+            ("クライアント", "CLIENT"),
+            ("発注主体", "PURCHASER"),
+            ("担当者", "STAFF"),
+            ("カテゴリ", "CATEGORY"),
+            ("保管場所", "LOCATION"),
+        )
+        for label, tab_name in master_tabs:
+            action = master_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=tab_name: self._open_master_dialog(value)
+            )
 
         view_menu = self.menuBar().addMenu("表示")
         self.include_inactive_action = QAction("廃止品目を含む", self)
@@ -162,7 +191,7 @@ class MainWindow(QMainWindow):
             self.purchaser_combo,
             [(purchaser.id, purchaser.name, purchaser.is_active) for purchaser in purchasers],
         )
-        self.category_combo.set_categories(categories, leading_label="すべて")
+        self.category_picker.set_categories(categories, leading_label="すべて")
         self._fill_master_combo(
             self.location_combo,
             [(location.id, location.name, True) for location in locations],
@@ -186,7 +215,7 @@ class MainWindow(QMainWindow):
             text=self.search_edit.text().strip() or None,
             client_id=self.client_combo.currentData(),
             purchaser_id=self.purchaser_combo.currentData(),
-            category_id=self.category_combo.current_category_id(),
+            category_id=self.category_picker.current_category_id(),
             location_id=self.location_combo.currentData(),
             low_stock_only=self.low_stock_checkbox.isChecked(),
             include_inactive=self.inactive_checkbox.isChecked(),
@@ -234,6 +263,15 @@ class MainWindow(QMainWindow):
         dialog = ItemDialog(self.context, item_id=item_id, parent=self)
         if dialog.exec():
             self.refresh()
+
+    def _open_master_dialog(self, tab_name: str) -> None:
+        master_dialog_module = import_module("inventory_manager_mini.ui.dialogs.master_dialog")
+        dialog = master_dialog_module.MasterDialog(
+            self.context,
+            initial_tab=master_dialog_module.MasterTab(tab_name.lower()),
+            parent=self,
+        )
+        dialog.exec()
 
     def _toggle_item_active(self) -> None:
         item_id = self._selected_item_id()

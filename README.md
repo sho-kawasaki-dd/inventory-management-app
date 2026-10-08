@@ -32,24 +32,54 @@ uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventor
 
 ## アプリの起動
 
+Python 3.13 と uv をインストールした後、リポジトリのルートで依存関係を同期して起動します。
+
 ```sh
+uv sync --locked
 uv run python -m inventory_manager_mini
 ```
 
-Phase 0 時点では終了コード 0 で正常終了しますが、画面は表示しません。画面の起動シーケンスは Phase 2 で実装します。
+### Windows
 
-### Linux の通常起動
+PowerShell で実行します。
 
-Qt の実行に必要な OS パッケージをインストールしてから、依存関係を同期し、アプリを起動します。
+```powershell
+uv sync --locked
+uv run python -m inventory_manager_mini
+```
+
+### Linux
+
+Qt の実行に必要な OS パッケージをインストールしてから起動します。
 
 ```sh
 sudo apt-get update
 sudo apt-get install --yes libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libxcb-cursor0
-uv sync
+uv sync --locked
 uv run python -m inventory_manager_mini
 ```
 
 通常起動では `QT_QPA_PLATFORM=offscreen` を設定しません。
+
+### データ保存先
+
+既定では OS ごとのユーザーデータ領域に保存します。保存先を変更する場合は、起動前に `INVENTORY_MANAGER_MINI_DATA_DIR` を設定してください。DB・バックアップ・多重起動ロックは指定したディレクトリ直下に、ログはその `logs/` 配下に作成します。
+
+PowerShell:
+
+```powershell
+$env:INVENTORY_MANAGER_MINI_DATA_DIR = "$env:LOCALAPPDATA\InventoryManagerMini"
+uv run python -m inventory_manager_mini
+```
+
+Linux:
+
+```sh
+export INVENTORY_MANAGER_MINI_DATA_DIR="$HOME/.local/share/inventory-manager-mini"
+uv run python -m inventory_manager_mini
+```
+
+この環境変数は、テストや一時的な動作確認で通常の保存先とデータを分ける場合にも使えます。
 
 ### Linux のヘッドレステスト
 
@@ -58,6 +88,14 @@ GUI を表示できない環境でテストする場合は、通常起動とは�
 ```sh
 QT_QPA_PLATFORM=offscreen uv run pytest --cov
 uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
+```
+
+### 性能テスト
+
+性能テストは既定のテスト実行ではスキップされます。明示的に実行する場合は次を使います。5,000 件の品目と 100,000 件の履歴を使い、別プロセス起動・検索・絞り込み・ソートを計測します。
+
+```sh
+uv run pytest --run-perf tests/test_performance.py
 ```
 
 ## ディレクトリ構成

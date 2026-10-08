@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import ItemFilter, NewItem
@@ -9,6 +9,7 @@ from inventory_manager_mini.core.services import InventoryService, MasterService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.signals import DataBus
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def dialog_context(
 def _fill_required(dialog: ItemDialog) -> None:
     dialog.client_combo.setCurrentIndex(0)
     dialog.name_edit.setText("新しい品目")
-    dialog.category_combo.set_current_category_id(1)
+    dialog.category_picker.set_current_category_id(1)
     dialog.purchaser_combo.setCurrentIndex(0)
 
 
@@ -36,15 +37,21 @@ def test_new_item_dialog_validates_initial_staff_and_records_quantity(
 ) -> None:
     dialog = ItemDialog(dialog_context)
     qtbot.addWidget(dialog)
+    initial_quantity_spin = dialog.initial_quantity_spin
+    initial_staff_combo = dialog.initial_staff_combo
+    assert initial_quantity_spin is not None
+    assert initial_staff_combo is not None
+    assert dialog.quantity_label is None
+    assert dialog.last_purchase_label is None
     _fill_required(dialog)
 
     assert dialog.unit_label.text() == "個"
-    assert not dialog.initial_staff_combo.isEnabled()
+    assert not initial_staff_combo.isEnabled()
     assert _ok_button(dialog).isEnabled()
-    dialog.initial_quantity_spin.setValue(2)
-    assert dialog.initial_staff_combo.isEnabled()
+    initial_quantity_spin.setValue(2)
+    assert initial_staff_combo.isEnabled()
     assert not _ok_button(dialog).isEnabled()
-    dialog.initial_staff_combo.setCurrentIndex(1)
+    initial_staff_combo.setCurrentIndex(1)
     assert _ok_button(dialog).isEnabled()
 
     dialog._save()
@@ -53,6 +60,27 @@ def test_new_item_dialog_validates_initial_staff_and_records_quantity(
     assert item.quantity == 2
     assert movements[0].staff_id == 1
     assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_category_selected_via_picker_dialog_enables_ok(qtbot, dialog_context, monkeypatch) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    dialog.client_combo.setCurrentIndex(0)
+    dialog.name_edit.setText("新しい品目")
+    dialog.purchaser_combo.setCurrentIndex(0)
+    assert "カテゴリを選択してください" in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    def fake_exec(picker_dialog: CategoryPickerDialog) -> QDialog.DialogCode:
+        picker_dialog.tree.setCurrentItem(picker_dialog._items[1])
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(CategoryPickerDialog, "exec", fake_exec)
+    dialog.category_picker.open_dialog()
+
+    assert dialog.category_picker.current_category_id() == 1
+    assert "カテゴリを選択してください" not in dialog.error_label.text()
+    assert _ok_button(dialog).isEnabled()
 
 
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "https:///missing-host"])
@@ -74,6 +102,8 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     dialog_context.master.deactivate_purchaser(1)
     dialog = ItemDialog(dialog_context, item.id)
     qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
 
     assert dialog.client_combo.count() == 2
     assert dialog.client_combo.currentText() == "総務 (無効)"
@@ -83,8 +113,12 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert dialog.purchaser_combo.currentText() == "本部 (無効)"
     assert dialog.purchaser_combo.findData(3) == -1
     assert "変更する場合は有効なものを選択してください" in dialog.purchaser_notice.text()
+    assert dialog.initial_staff_combo is None
+    assert dialog.initial_staff_row is None
+    assert dialog.initial_quantity_spin is None
+    assert dialog.initial_quantity_row is None
     assert dialog.unit_label.text() == "個"
-    assert not dialog.initial_quantity_row.isVisible()
+    assert dialog.quantity_label is not None
     assert dialog.quantity_label.text() == "0 個"
     assert _ok_button(dialog).isEnabled()
     dialog.name_edit.setText("更新後")
@@ -160,6 +194,7 @@ def test_edit_purchase_info_and_dialog_size(qtbot, dialog_context) -> None:
     dialog.show()
     qtbot.waitExposed(dialog)
 
+    assert dialog.last_purchase_label is not None
     assert "個" in dialog.last_purchase_label.text()
     assert dialog.sizeHint().width() <= 1366
     assert dialog.sizeHint().height() <= 768

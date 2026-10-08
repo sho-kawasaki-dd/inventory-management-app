@@ -14,13 +14,22 @@ from inventory_manager_mini.core.services import BackupService
 from inventory_manager_mini.db import backup, migrations
 from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
 from inventory_manager_mini.db.connection import connect, connect_readonly
-from inventory_manager_mini.db.migrations import create_schema
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 
 
-def _create_inventory_database(path: Path, item_name: str, *, delete_journal: bool = False) -> None:
+def _create_inventory_database(
+    path: Path,
+    item_name: str,
+    *,
+    delete_journal: bool = False,
+    schema_version: int = SCHEMA_VERSION,
+) -> None:
     conn = sqlite3.connect(path, autocommit=True) if delete_journal else connect(path)
     try:
-        create_schema(conn)
+        if schema_version == 1:
+            create_schema(conn, migrations._SCHEMA_V1_DDL, version=1)
+        else:
+            create_schema(conn, version=schema_version)
         conn.executemany("INSERT INTO clients (id, name) VALUES (?, ?)", [(1, "クライアント")])
         conn.executemany("INSERT INTO purchasers (id, name) VALUES (?, ?)", [(1, "発注主体")])
         conn.executemany("INSERT INTO staff (id, name) VALUES (?, ?)", [(1, "担当者")])
@@ -207,9 +216,9 @@ def test_backup_service_inspects_schema_and_business_integrity(tmp_path: Path) -
     conn = connect(path)
     try:
         service = BackupService()
-        assert service.inspect_database(conn, 1) == []
+        assert service.inspect_database(conn, SCHEMA_VERSION) == []
         conn.execute("UPDATE items SET quantity = 1 WHERE id = 1")
-        reasons = service.inspect_database(conn, 1)
+        reasons = service.inspect_database(conn, SCHEMA_VERSION)
         assert any("在庫数が履歴合計と一致しません" in reason for reason in reasons)
         assert not conn.in_transaction
     finally:
@@ -233,7 +242,7 @@ def test_backup_service_stops_before_business_checks_when_schema_is_invalid(
         fail_if_business_check_runs,
     )
     try:
-        reasons = BackupService().inspect_database(conn, 1)
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
         assert any("スキーマ" in reason or "トリガー" in reason for reason in reasons)
     finally:
         conn.close()
@@ -247,7 +256,7 @@ def test_backup_service_rejects_invalid_settings_and_reversal_data(tmp_path: Pat
         "UPDATE settings SET value = ? WHERE key = ?", ("04", "fiscal_year_start_month")
     )
     try:
-        settings_reasons = BackupService().inspect_database(settings_conn, 1)
+        settings_reasons = BackupService().inspect_database(settings_conn, SCHEMA_VERSION)
         assert any("年度開始月" in reason for reason in settings_reasons)
     finally:
         settings_conn.close()
@@ -263,7 +272,7 @@ def test_backup_service_rejects_invalid_settings_and_reversal_data(tmp_path: Pat
         [(None,), (1,)],
     )
     try:
-        reversal_reasons = BackupService().inspect_database(reversal_conn, 1)
+        reversal_reasons = BackupService().inspect_database(reversal_conn, SCHEMA_VERSION)
         assert any("取り消し履歴が不正" in reason for reason in reversal_reasons)
     finally:
         reversal_conn.close()
@@ -278,7 +287,7 @@ def test_prepare_restore_preserves_source_and_cleans_temporary_database(
     service = BackupService()
 
     with service.prepare_restore(source_path) as prepared:
-        assert prepared.source_version == 1
+        assert prepared.source_version == SCHEMA_VERSION
         assert prepared.item_count == 1
         assert prepared.movement_count == 0
         assert prepared.last_moved_at is None
@@ -415,32 +424,22 @@ def test_prepare_restore_migrates_older_backup_in_temporary_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_path = tmp_path / "source-v1.db"
-    current_path = tmp_path / "current-v1.db"
-    _create_inventory_database(source_path, "旧版品目")
+    current_path = tmp_path / "current-v2.db"
+    _create_inventory_database(source_path, "旧版品目", schema_version=1)
     _create_inventory_database(current_path, "現行品目")
     source_hash = hashlib.sha256(source_path.read_bytes()).digest()
-    spec_conn = connect(tmp_path / "spec.db")
-    try:
-        create_schema(spec_conn)
-        spec_conn.execute("ALTER TABLE settings ADD COLUMN extra TEXT")
-        version_two_spec = migrations._read_schema_spec(spec_conn)
-    finally:
-        spec_conn.close()
-    monkeypatch.setattr(services, "SCHEMA_VERSION", 2)
-    monkeypatch.setattr(services, "MIGRATIONS", {2: "ALTER TABLE settings ADD COLUMN extra TEXT;"})
-    monkeypatch.setitem(migrations.SCHEMA_SPECS, 2, version_two_spec)
 
     with BackupService().prepare_restore(source_path) as prepared:
         BackupService().apply_restore(prepared, current_path, tmp_path / "backups")
         prepared_conn = connect_readonly(prepared.path)
         try:
-            assert prepared_conn.execute("PRAGMA user_version").fetchone() == (2,)
+            assert prepared_conn.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
             assert prepared_conn.execute("SELECT name FROM items").fetchone() == ("旧版品目",)
         finally:
             prepared_conn.close()
     restored_conn = connect_readonly(current_path)
     try:
-        assert restored_conn.execute("PRAGMA user_version").fetchone() == (2,)
+        assert restored_conn.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert restored_conn.execute("SELECT name FROM items").fetchone() == ("旧版品目",)
     finally:
         restored_conn.close()
@@ -452,7 +451,11 @@ def test_prepare_restore_rejects_invalid_version_schema_and_integrity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     source_path = tmp_path / f"{case}.db"
-    _create_inventory_database(source_path, "品目")
+    _create_inventory_database(
+        source_path,
+        "品目",
+        schema_version=1 if case == "unsupported_old" else SCHEMA_VERSION,
+    )
     if case == "zero":
         source_conn = sqlite3.connect(source_path, autocommit=True)
         source_conn.execute("PRAGMA user_version = 0")
@@ -481,21 +484,12 @@ def test_prepare_restore_rejects_failed_temporary_migration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_path = tmp_path / "source-v1.db"
-    _create_inventory_database(source_path, "旧版品目")
-    spec_conn = connect(tmp_path / "spec.db")
-    try:
-        create_schema(spec_conn)
-        spec_conn.execute("ALTER TABLE settings ADD COLUMN extra TEXT")
-        version_two_spec = migrations._read_schema_spec(spec_conn)
-    finally:
-        spec_conn.close()
-    monkeypatch.setattr(services, "SCHEMA_VERSION", 2)
+    _create_inventory_database(source_path, "旧版品目", schema_version=1)
     monkeypatch.setattr(
         services,
         "MIGRATIONS",
-        {2: "ALTER TABLE settings ADD COLUMN extra TEXT; INVALID SQL;"},
+        {2: "CREATE INDEX failed_migration ON missing_table(id);"},
     )
-    monkeypatch.setitem(migrations.SCHEMA_SPECS, 2, version_two_spec)
     source_hash = hashlib.sha256(source_path.read_bytes()).digest()
 
     with pytest.raises(InvalidBackupError, match="移行に失敗"):
