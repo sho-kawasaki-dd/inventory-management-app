@@ -115,8 +115,8 @@ def find_limit_violations(conn: sqlite3.Connection) -> list[str]:
     for item_id, quantity in conn.execute("SELECT id, quantity FROM items"):
         if type(quantity) is int and item_balances.get(int(item_id), 0) != quantity:
             violations.append(
-                f"items ID {item_id} の quantity={quantity} が履歴合計 "
-                f"{item_balances.get(int(item_id), 0)} と一致しません"
+                f"品目 {item_id} の在庫数が履歴合計と一致しません: "
+                f"在庫 {quantity}、履歴合計 {item_balances.get(int(item_id), 0)}"
             )
 
     return violations

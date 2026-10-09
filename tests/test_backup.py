@@ -541,6 +541,34 @@ def test_backup_rejects_aggregate_mismatch(tmp_path: Path) -> None:
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("delta", "unit_price"),
+    [(1.5, 100), (1, 1.5), ("abc", 100), (1, "abc")],
+    ids=["real-delta", "real-price", "text-delta", "text-price"],
+)
+def test_inspect_database_reports_non_integer_movements_as_reasons(
+    tmp_path: Path, delta: object, unit_price: object
+) -> None:
+    path = tmp_path / "non-integer-movement.db"
+    _create_inventory_database(path, "品目")
+    conn = connect(path)
+    try:
+        with unchecked_constraints(conn):
+            conn.execute(
+                "INSERT INTO stock_movements "
+                "(item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price) "
+                "VALUES (1, 1, 1, 1, 'in', ?, ?)",
+                (delta, unit_price),
+            )
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
+        assert any("stock_movements" in reason for reason in reasons)
+    finally:
+        conn.close()
+
+    with pytest.raises(InvalidBackupError):
+        BackupService().prepare_restore(path)
+
+
 def test_cancel_removes_prepared_restore_directory(tmp_path: Path) -> None:
     source_path = tmp_path / "source.db"
     _create_inventory_database(source_path, "復元品目")

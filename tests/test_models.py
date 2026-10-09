@@ -4,6 +4,10 @@ from typing import Any
 import pytest
 
 from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    MAX_MOVEMENT_AMOUNT,
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
     REASON_LABELS,
     Category,
     Client,
@@ -153,6 +157,13 @@ def test_dashboard_model_and_enum_values() -> None:
 def test_reason_labels_cover_every_reason() -> None:
     assert set(REASON_LABELS) == set(Reason)
     assert list(REASON_LABELS.values()) == ["入庫", "出庫", "返品", "廃棄", "棚卸"]
+
+
+def test_business_limits_match_the_development_plan() -> None:
+    assert MAX_STOCK_QUANTITY == 1_000_000
+    assert MAX_UNIT_PRICE == 10_000_000
+    assert MAX_MOVEMENT_AMOUNT == 100_000_000
+    assert MAX_AGGREGATE_VALUE == 1_000_000_000_000
 
 
 def test_model_instances_are_immutable() -> None:

@@ -6,7 +6,14 @@ from importlib.resources import files
 
 import pytest
 
+from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    MAX_MOVEMENT_AMOUNT,
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
+)
 from inventory_manager_mini.db.connection import connect_memory
+from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
 
 
 @pytest.fixture
@@ -171,6 +178,146 @@ def test_total_aggregate_checks_reject_invalid_values(
 ) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         schema_conn.execute(f"UPDATE total_aggregates SET {column} = ? WHERE id = 1", (value,))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"quantity": 0},
+        {"quantity": MAX_STOCK_QUANTITY},
+        {"reorder_threshold": MAX_STOCK_QUANTITY},
+        {"reorder_quantity": None},
+        {"reorder_quantity": 1},
+        {"reorder_quantity": MAX_STOCK_QUANTITY},
+        {"reference_price": None},
+        {"reference_price": 0},
+        {"reference_price": MAX_UNIT_PRICE},
+    ],
+)
+def test_item_checks_accept_values_up_to_the_business_limits(
+    schema_conn: sqlite3.Connection, values: dict[str, object]
+) -> None:
+    _insert_item(schema_conn, **values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", ["abc", -1, MAX_STOCK_QUANTITY + 1])
+def test_item_integer_columns_reject_text_and_out_of_range(
+    schema_conn: sqlite3.Connection, value: object
+) -> None:
+    for column in ("quantity", "reorder_threshold", "reorder_quantity"):
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_item(schema_conn, **{column: value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("reason", "delta", "unit_price"),
+    [
+        ("in", MAX_STOCK_QUANTITY, None),
+        ("in", MAX_STOCK_QUANTITY, 0),
+        ("in", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
+        ("return", -MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
+        ("adjust", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
+        ("adjust", -MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
+        ("out", -MAX_STOCK_QUANTITY, None),
+        ("out", -MAX_STOCK_QUANTITY, 0),
+        ("dispose", -MAX_STOCK_QUANTITY, 0),
+        ("out", -10_000, 10_000),
+        ("dispose", -10_000, 10_000),
+        ("out", -(MAX_MOVEMENT_AMOUNT // MAX_UNIT_PRICE), MAX_UNIT_PRICE),
+    ],
+)
+def test_movement_checks_accept_values_up_to_the_business_limits(
+    schema_conn: sqlite3.Connection,
+    reason: str,
+    delta: int,
+    unit_price: int | None,
+) -> None:
+    _insert_movement(schema_conn, reason=reason, delta=delta, unit_price=unit_price)
+
+
+@pytest.mark.parametrize(
+    ("reason", "delta", "unit_price"),
+    [
+        ("out", -(MAX_STOCK_QUANTITY + 1), None),
+        ("adjust", -(MAX_STOCK_QUANTITY + 1), None),
+        ("in", "abc", None),
+        ("in", 1, "abc"),
+        ("dispose", -10_001, 10_000),
+        ("out", -1, MAX_UNIT_PRICE + 1),
+    ],
+)
+def test_movement_checks_reject_values_beyond_the_business_limits(
+    schema_conn: sqlite3.Connection,
+    reason: str,
+    delta: object,
+    unit_price: object,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_movement(
+            schema_conn,
+            reason=reason,
+            delta=delta,  # type: ignore[arg-type]
+            unit_price=unit_price,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("delta", "unit_price", "accepted"),
+    [(10_000, 10_000, True), (10_001, 10_000, False)],
+)
+def test_reversal_of_out_or_dispose_keeps_the_amount_limit(
+    schema_conn: sqlite3.Connection, delta: int, unit_price: int, accepted: bool
+) -> None:
+    for reason in ("out", "dispose"):
+        schema_conn.execute("SAVEPOINT reversal_case")
+        try:
+            if accepted:
+                _insert_movement(
+                    schema_conn,
+                    reason=reason,
+                    delta=delta,
+                    unit_price=unit_price,
+                    reversal_of=1,
+                )
+            else:
+                with pytest.raises(sqlite3.IntegrityError):
+                    _insert_movement(
+                        schema_conn,
+                        reason=reason,
+                        delta=delta,
+                        unit_price=unit_price,
+                        reversal_of=1,
+                    )
+        finally:
+            schema_conn.execute("ROLLBACK TO reversal_case")
+            schema_conn.execute("RELEASE reversal_case")
+
+
+@pytest.mark.parametrize("column", AGGREGATE_COLUMNS)
+def test_total_aggregates_accept_zero_and_the_upper_limit(
+    schema_conn: sqlite3.Connection, column: str
+) -> None:
+    for value in (0, MAX_AGGREGATE_VALUE):
+        schema_conn.execute(f"UPDATE total_aggregates SET {column} = ? WHERE id = 1", (value,))
+    assert schema_conn.execute(f"SELECT {column} FROM total_aggregates").fetchone() == (
+        MAX_AGGREGATE_VALUE,
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            f"UPDATE total_aggregates SET {column} = ? WHERE id = 1", (MAX_AGGREGATE_VALUE + 1,)
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(f"UPDATE total_aggregates SET {column} = 'abc' WHERE id = 1")
+
+
+def test_total_aggregates_has_single_zero_initialized_row(
+    schema_conn: sqlite3.Connection,
+) -> None:
+    assert schema_conn.execute("SELECT * FROM total_aggregates").fetchall() == [(1, 0, 0, 0, 0, 0)]
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute("INSERT INTO total_aggregates (id) VALUES (2)")
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute("INSERT INTO total_aggregates (id) VALUES (1)")
 
 
 @pytest.mark.parametrize(

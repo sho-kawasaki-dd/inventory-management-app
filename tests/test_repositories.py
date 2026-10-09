@@ -13,13 +13,15 @@ from inventory_manager_mini.core.errors import (
     NegativeStockError,
     ValidationError,
 )
-from inventory_manager_mini.core.models import ItemFilter, ItemUpdate, Reason
+from inventory_manager_mini.core.models import MAX_AGGREGATE_VALUE, ItemFilter, ItemUpdate, Reason
 from inventory_manager_mini.db.connection import connect_memory
+from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
 from inventory_manager_mini.db.repositories import (
     ItemRepository,
     MasterRepository,
     MovementRepository,
     SettingsRepository,
+    TotalAggregatesRepository,
 )
 
 
@@ -471,3 +473,71 @@ def test_settings_repository_get_set_all(repository_conn: sqlite3.Connection) ->
     repo.set("fiscal_year_start_month", "10")
     repo.set("additional", "value")
     assert repo.all() == {"additional": "value", "fiscal_year_start_month": "10"}
+
+
+def test_total_aggregates_repository_starts_at_zero_and_applies_partial_deltas(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+    updated = repo.apply({"inbound_quantity": 5, "expenditure": 300})
+    assert updated == {
+        **dict.fromkeys(AGGREGATE_COLUMNS, 0),
+        "inbound_quantity": 5,
+        "expenditure": 300,
+    }
+    assert repo.get() == updated
+
+    repo.apply({"expenditure": -100})
+    assert repo.get()["expenditure"] == 200
+    assert repo.get()["inbound_quantity"] == 5
+
+
+def test_total_aggregates_repository_empty_deltas_change_nothing(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    repo.apply({"outbound_quantity": 2})
+    assert repo.apply({}) == repo.get()
+    assert repo.get()["outbound_quantity"] == 2
+
+
+def test_total_aggregates_repository_rejects_unknown_column_without_update(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValueError, match="未定義の集計項目"):
+        repo.apply({"inbound_quantity": 1, "unknown": 1})
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+
+def test_total_aggregates_repository_enforces_zero_and_upper_limit(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValidationError, match="disposal_amount"):
+        repo.apply({"disposal_amount": -1})
+
+    repo.apply({"expenditure": MAX_AGGREGATE_VALUE})
+    assert repo.get()["expenditure"] == MAX_AGGREGATE_VALUE
+    with pytest.raises(ValidationError, match="expenditure"):
+        repo.apply({"expenditure": 1})
+    assert repo.get()["expenditure"] == MAX_AGGREGATE_VALUE
+
+
+def test_total_aggregates_repository_does_not_partially_apply_invalid_deltas(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValidationError):
+        repo.apply({"inbound_quantity": 3, "disposed_quantity": -1})
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+
+def test_total_aggregates_repository_requires_the_single_row(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repository_conn.execute("DELETE FROM total_aggregates")
+    with pytest.raises(RuntimeError, match="集計管理レコード"):
+        TotalAggregatesRepository(repository_conn).get()

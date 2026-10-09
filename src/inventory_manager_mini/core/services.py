@@ -882,7 +882,11 @@ class BackupService:
             if reasons:
                 return reasons
 
-            reasons.extend(find_limit_violations(conn))
+            # 型・範囲違反があると後続の数値検査が例外になるため、違反があればここで返す
+            limit_violations = find_limit_violations(conn)
+            if limit_violations:
+                return limit_violations
+
             if version >= 3:
                 expected_aggregates = compute_aggregates(conn)
                 stored_row = conn.execute(
@@ -909,14 +913,7 @@ class BackupService:
                                 f"保存値 {stored_row[index]!r}、履歴 {expected_aggregates[column]}"
                             )
 
-            item_repository = ItemRepository(conn)
-            movement_repository = MovementRepository(conn)
-            for item_id, quantity, movement_total in item_repository.find_quantity_mismatches():
-                reasons.append(
-                    f"品目 {item_id} の在庫数が履歴合計と一致しません: "
-                    f"在庫 {quantity}、履歴合計 {movement_total}"
-                )
-            invalid_reversals = movement_repository.find_invalid_reversals()
+            invalid_reversals = MovementRepository(conn).find_invalid_reversals()
             if invalid_reversals:
                 reasons.append("取り消し履歴が不正です: " + ", ".join(map(str, invalid_reversals)))
             reasons.extend(SettingsService(conn).validate_all())
