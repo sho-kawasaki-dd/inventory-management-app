@@ -4,11 +4,12 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
@@ -184,12 +185,18 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
         window.stock_actions[Reason.RETURN],
         window.stock_actions[Reason.DISPOSE],
     ]
+    assert toolbar_actions[8].isSeparator()
+    assert toolbar_actions[9] is window.history_action
     assert window.table.actions()[:3] == item_actions
     assert window.table.actions()[3].isSeparator()
-    assert window.table.actions()[4:] == stock_actions
+    assert window.table.actions()[4:9] == stock_actions
+    assert window.table.actions()[9].isSeparator()
+    assert window.table.actions()[10] is window.history_action
     assert window.table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
     item_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "品目")
-    assert item_menu.actions() == item_actions
+    assert item_menu.actions()[:3] == item_actions
+    assert item_menu.actions()[3].isSeparator()
+    assert item_menu.actions()[4] is window.history_action
     stock_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "在庫")
     assert stock_menu.actions() == stock_actions
     assert [action.text() for action in stock_actions] == [
@@ -197,16 +204,61 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     ]
 
     assert window.new_action.isEnabled()
+    assert not window.history_action.isEnabled()
     assert all(not action.isEnabled() for action in stock_actions)
     _select_item(window, first.id)
     assert window.edit_action.isEnabled()
+    assert window.history_action.isEnabled()
     assert all(action.isEnabled() for action in stock_actions)
 
     window.inactive_checkbox.setChecked(True)
     _select_item(window, second.id)
     assert window.edit_action.isEnabled()
+    assert window.history_action.isEnabled()
     assert window.toggle_active_action.text() == "再有効化"
     assert all(not action.isEnabled() for action in stock_actions)
+
+
+def test_double_click_opens_history_for_clicked_item(window_with_items, monkeypatch) -> None:
+    window, _first, second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    window.show()
+    proxy_index = window.sort_model.mapFromSource(
+        window.item_model.index(window.item_model.row_of(second.id), 0)
+    )
+    opened_item_ids = []
+    edit_calls = []
+    monkeypatch.setattr(
+        HistoryDialog,
+        "exec",
+        lambda dialog: opened_item_ids.append(dialog.item_id) or QDialog.DialogCode.Rejected,
+    )
+    monkeypatch.setattr(window, "_open_item_dialog", lambda *_args: edit_calls.append(True))
+
+    window.table.doubleClicked.emit(proxy_index)
+
+    assert opened_item_ids == [second.id]
+    assert not edit_calls
+    assert window._selected_item_id() == second.id
+
+
+def test_history_reversal_refreshes_main_window_quantity(window_with_items, monkeypatch) -> None:
+    window, first, _second = window_with_items
+    movement = window.context.inventory.list_history(first.id)[0]
+
+    def reverse_on_exec(dialog: HistoryDialog) -> int:
+        window.context.inventory.reverse(movement.id, staff_id=1)
+        window.context.data_bus.data_changed.emit()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(HistoryDialog, "exec", reverse_on_exec)
+    _select_item(window, first.id)
+
+    window.history_action.trigger()
+
+    assert window.context.inventory.get_item(first.id).quantity == 0
+    assert window.item_model.row_at(window.item_model.row_of(first.id)).quantity == 0
+    assert window._selected_item_id() == first.id
 
 
 def test_stock_move_action_refreshes_quantity_and_preserves_selection(
