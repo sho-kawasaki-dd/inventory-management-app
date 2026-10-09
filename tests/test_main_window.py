@@ -6,9 +6,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
-from inventory_manager_mini.core.models import NewItem
+from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
 
@@ -166,22 +167,67 @@ def test_selection_actions_and_deactivate_reactivate(window_with_items, monkeypa
 
 def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_items) -> None:
     window, first, second = window_with_items
-    shared = [window.new_action, window.edit_action, window.toggle_active_action]
+    item_actions = [window.new_action, window.edit_action, window.toggle_active_action]
+    stock_actions = list(window.stock_actions.values())
 
-    assert window.toolbar.actions() == shared
-    assert window.table.actions() == shared
+    toolbar_actions = window.toolbar.actions()
+    assert toolbar_actions[:3] == item_actions
+    assert toolbar_actions[3].isSeparator()
+    assert toolbar_actions[4:6] == [
+        window.stock_actions[Reason.IN],
+        window.stock_actions[Reason.OUT],
+    ]
+    assert window.toolbar.widgetForAction(toolbar_actions[6]) is window.return_dispose_button
+    assert toolbar_actions[7] == window.stock_actions[Reason.ADJUST]
+    assert window.return_dispose_button.text() == "返品・廃棄"
+    assert window.return_dispose_menu.actions() == [
+        window.stock_actions[Reason.RETURN],
+        window.stock_actions[Reason.DISPOSE],
+    ]
+    assert window.table.actions()[:3] == item_actions
+    assert window.table.actions()[3].isSeparator()
+    assert window.table.actions()[4:] == stock_actions
     assert window.table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
     item_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "品目")
-    assert item_menu.actions() == shared
+    assert item_menu.actions() == item_actions
+    stock_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "在庫")
+    assert stock_menu.actions() == stock_actions
+    assert [action.text() for action in stock_actions] == [
+        REASON_LABELS[reason] for reason in Reason
+    ]
 
     assert window.new_action.isEnabled()
+    assert all(not action.isEnabled() for action in stock_actions)
     _select_item(window, first.id)
     assert window.edit_action.isEnabled()
+    assert all(action.isEnabled() for action in stock_actions)
 
     window.inactive_checkbox.setChecked(True)
     _select_item(window, second.id)
     assert window.edit_action.isEnabled()
     assert window.toggle_active_action.text() == "再有効化"
+    assert all(not action.isEnabled() for action in stock_actions)
+
+
+def test_stock_move_action_refreshes_quantity_and_preserves_selection(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, _second = window_with_items
+
+    def save_on_exec(dialog: StockMoveDialog) -> int:
+        dialog.staff_combo.setCurrentIndex(1)
+        dialog.quantity_spin.setValue(1)
+        dialog._save()
+        return dialog.result()
+
+    monkeypatch.setattr(StockMoveDialog, "exec", save_on_exec)
+    _select_item(window, first.id)
+
+    window.stock_actions[Reason.IN].trigger()
+
+    assert window.context.inventory.get_item(first.id).quantity == 2
+    assert window.item_model.row_at(window.item_model.row_of(first.id)).quantity == 2
+    assert window._selected_item_id() == first.id
 
 
 def test_data_changed_refreshes_master_options(window_with_items) -> None:

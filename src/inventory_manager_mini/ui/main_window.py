@@ -9,14 +9,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QTableView,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from inventory_manager_mini.core.models import ItemFilter
+from inventory_manager_mini.core.models import REASON_LABELS, ItemFilter, Reason
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.item_table_model import (
@@ -106,12 +108,30 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self.new_action)
         self.toolbar.addAction(self.edit_action)
         self.toolbar.addAction(self.toggle_active_action)
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.stock_actions[Reason.IN])
+        self.toolbar.addAction(self.stock_actions[Reason.OUT])
+        self.return_dispose_button = QToolButton(self.toolbar)
+        self.return_dispose_button.setText("返品・廃棄")
+        self.return_dispose_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.return_dispose_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.return_dispose_menu = QMenu(self.return_dispose_button)
+        self.return_dispose_menu.addAction(self.stock_actions[Reason.RETURN])
+        self.return_dispose_menu.addAction(self.stock_actions[Reason.DISPOSE])
+        self.return_dispose_button.setMenu(self.return_dispose_menu)
+        self.toolbar.addWidget(self.return_dispose_button)
+        self.toolbar.addAction(self.stock_actions[Reason.ADJUST])
 
     def _build_table_context_menu(self) -> None:
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
         self.table.addAction(self.new_action)
         self.table.addAction(self.edit_action)
         self.table.addAction(self.toggle_active_action)
+        separator = QAction(self.table)
+        separator.setSeparator(True)
+        self.table.addAction(separator)
+        for action in self.stock_actions.values():
+            self.table.addAction(action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -133,6 +153,16 @@ class MainWindow(QMainWindow):
         self.toggle_active_action = QAction("廃止", self)
         self.toggle_active_action.triggered.connect(self._toggle_item_active)
         item_menu.addAction(self.toggle_active_action)
+
+        self.stock_menu = self.menuBar().addMenu("在庫")
+        self.stock_actions: dict[Reason, QAction] = {}
+        for reason, label in REASON_LABELS.items():
+            action = QAction(label, self)
+            action.triggered.connect(
+                lambda _checked=False, value=reason: self._open_stock_move(value)
+            )
+            self.stock_actions[reason] = action
+            self.stock_menu.addAction(action)
 
         master_menu = self.menuBar().addMenu("マスタ")
         master_tabs = (
@@ -247,6 +277,9 @@ class MainWindow(QMainWindow):
         has_selection = item is not None
         self.edit_action.setEnabled(has_selection)
         self.toggle_active_action.setEnabled(has_selection)
+        can_move_stock = item is not None and item.is_active
+        for action in self.stock_actions.values():
+            action.setEnabled(can_move_stock)
         if item is not None:
             self.toggle_active_action.setText("廃止" if item.is_active else "再有効化")
 
@@ -257,6 +290,16 @@ class MainWindow(QMainWindow):
         item_id = self._selected_item_id()
         if item_id is not None:
             self._open_item_dialog(item_id)
+
+    def _open_stock_move(self, reason: Reason) -> None:
+        item_id = self._selected_item_id()
+        if item_id is None:
+            return
+        StockMoveDialog = import_module(
+            "inventory_manager_mini.ui.dialogs.stock_move_dialog"
+        ).StockMoveDialog
+        dialog = StockMoveDialog(self.context, reason, item_id=item_id, parent=self)
+        dialog.exec()
 
     def _open_item_dialog(self, item_id: int | None = None) -> None:
         ItemDialog = import_module("inventory_manager_mini.ui.dialogs.item_dialog").ItemDialog
