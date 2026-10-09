@@ -13,9 +13,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtWidgets import QDialogButtonBox
 
-from inventory_manager_mini.core.models import PeriodKind
+from inventory_manager_mini.core.models import PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
@@ -23,6 +24,7 @@ from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
 from scripts.generate_dummy_data import generate_database
@@ -350,3 +352,38 @@ def test_sort_changes_to_table_paint(qtbot, performance_window) -> None:
         results.append((label, elapsed))
         assert elapsed <= 0.3, f"{label} のソートから描画まで {elapsed:.3f} 秒"
     print("ソート: " + "、".join(f"{label} {elapsed:.3f} 秒" for label, elapsed in results))
+
+
+def test_inbound_save_to_table_paint(qtbot, performance_window) -> None:
+    window, probe = performance_window
+    item_id = 1
+    source_row = window.item_model.row_of(item_id)
+    assert source_row is not None
+    item = window.item_model.row_at(source_row)
+    assert item.reference_price is not None
+    proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
+    window.table.selectRow(proxy_index.row())
+
+    dialog = StockMoveDialog(window.context, Reason.IN, item_id=item_id, parent=window)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(dialog.staff_combo.findData(1))
+    dialog.quantity_spin.setValue(1)
+    dialog.unit_price_edit.setText(str(item.reference_price))
+    dialog.show()
+    qtbot.waitUntil(dialog.isVisible, timeout=2000)
+    ok_button = dialog.button_box.button(QDialogButtonBox.StandardButton.Ok)
+    assert ok_button.isEnabled()
+
+    window.item_model.modelReset.connect(probe.arm)
+    probe.arm()
+    started_at = time.perf_counter()
+    qtbot.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+    painted_at = _wait_for_paint(qtbot, probe)
+    elapsed = painted_at - started_at
+
+    refreshed_row = window.item_model.row_of(item_id)
+    assert refreshed_row is not None
+    assert window.item_model.row_at(refreshed_row).quantity == item.quantity + 1
+    assert window._selected_item_id() == item_id
+    print(f"入庫の保存から一覧再描画: {elapsed:.3f} 秒")
+    assert elapsed <= 0.5, f"入庫の保存から一覧再描画まで {elapsed:.3f} 秒かかりました"
