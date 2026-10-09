@@ -156,7 +156,7 @@
 
 #### A. 共通表示名
 
-- [ ] A0 で `core/models.py` に定義した `REASON_LABELS` を StockMoveDialog で利用する(`ui/labels.py` は作成しない)
+- [x] A0 で `core/models.py` に定義した `REASON_LABELS` を StockMoveDialog で利用する(`ui/labels.py` は作成しない)
 
 #### B. StockMoveDialog `ui/dialogs/stock_move_dialog.py`
 
