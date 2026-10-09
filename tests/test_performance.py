@@ -13,8 +13,9 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
+from PySide6.QtGui import QPaintEvent
+from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
 from inventory_manager_mini.core.models import PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
@@ -24,6 +25,8 @@ from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
+from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
@@ -55,14 +58,24 @@ class PaintProbe(QObject):
         self._generation = 0
         self._scheduled = False
         self.completed_at: float | None = None
+        self.required_region: QRect | None = None
 
     def arm(self) -> None:
         self._generation += 1
         self._scheduled = False
         self.completed_at = None
 
+    def require_paint_in(self, region: QRect) -> None:
+        self.required_region = region
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.Paint and self.completed_at is None and not self._scheduled:
+        if (
+            event.type() == QEvent.Type.Paint
+            and isinstance(event, QPaintEvent)
+            and self.completed_at is None
+            and not self._scheduled
+            and (self.required_region is None or event.region().intersects(self.required_region))
+        ):
             self._scheduled = True
             generation = self._generation
             QTimer.singleShot(0, lambda: self._complete_paint(generation))
@@ -387,3 +400,84 @@ def test_inbound_save_to_table_paint(qtbot, performance_window) -> None:
     assert window._selected_item_id() == item_id
     print(f"入庫の保存から一覧再描画: {elapsed:.3f} 秒")
     assert elapsed <= 0.5, f"入庫の保存から一覧再描画まで {elapsed:.3f} 秒かかりました"
+
+
+def test_reversal_save_to_table_paint(qtbot, performance_window, monkeypatch) -> None:
+    window, probe = performance_window
+    item_id = 1
+    original_row = window.item_model.row_of(item_id)
+    assert original_row is not None
+    original_item = window.item_model.row_at(original_row)
+    movement = window.context.inventory.receive(item_id, 1, 1)
+    window.refresh()
+    source_row = window.item_model.row_of(item_id)
+    assert source_row is not None
+    proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
+    window.table.selectRow(proxy_index.row())
+
+    history = HistoryDialog(window.context, item_id, window)
+    qtbot.addWidget(history)
+    available = window.screen().availableGeometry()
+    history.resize(min(600, available.width() - 32), min(460, available.height() - 64))
+    history.move(
+        window.frameGeometry().right() - history.width() + 1,
+        window.frameGeometry().bottom() - history.height() + 1,
+    )
+    history.setModal(True)
+    history.show()
+    qtbot.waitUntil(history.isVisible, timeout=2000)
+    movement_row = history.model.row_of(movement.id)
+    assert movement_row is not None
+    history.table.selectRow(movement_row)
+    assert history.reverse_button.isEnabled()
+    history_row_count = history.model.rowCount()
+
+    started_at: list[float] = []
+
+    def execute_reversal(dialog: ReversalDialog) -> QDialog.DialogCode:
+        dialog.staff_combo.setCurrentIndex(dialog.staff_combo.findData(1))
+        dialog.resize(min(520, available.width() - 32), min(420, available.height() - 64))
+        dialog.move(
+            window.frameGeometry().right() - dialog.width() + 1,
+            window.frameGeometry().bottom() - dialog.height() + 1,
+        )
+
+        def submit() -> None:
+            viewport = window.table.viewport()
+            viewport_global = QRect(viewport.mapToGlobal(QPoint(0, 0)), viewport.size())
+            left_edge = viewport_global.right() + 1
+            for overlay in (history, dialog):
+                overlay_rect = overlay.frameGeometry()
+                if viewport_global.intersects(overlay_rect):
+                    left_edge = min(left_edge, overlay_rect.left())
+            exposed_width = left_edge - viewport_global.left()
+            assert exposed_width >= 100, "一覧 viewport に非被覆領域がありません"
+            probe.require_paint_in(QRect(0, 0, exposed_width, viewport.height()))
+            probe.arm()
+            started_at.append(time.perf_counter())
+            qtbot.mouseClick(
+                dialog.button_box.button(QDialogButtonBox.StandardButton.Ok),
+                Qt.MouseButton.LeftButton,
+            )
+
+        QTimer.singleShot(0, submit)
+        return QDialog.exec(dialog)
+
+    monkeypatch.setattr(ReversalDialog, "exec", execute_reversal)
+    window.item_model.modelReset.connect(probe.arm)
+    history._open_reversal()
+    assert started_at
+    painted_at = _wait_for_paint(qtbot, probe)
+    elapsed = painted_at - started_at[0]
+
+    refreshed_row = window.item_model.row_of(item_id)
+    assert refreshed_row is not None
+    assert window.item_model.row_at(refreshed_row).quantity == original_item.quantity
+    assert window._selected_item_id() == item_id
+    assert history.isVisible()
+    assert history.model.rowCount() == history_row_count + 1
+    selected_row = history.table.currentIndex().row()
+    assert history.model.row_at(selected_row).id == movement.id
+    assert history.model.row_at(selected_row).is_reversed
+    print(f"取り消しの保存から一覧再描画: {elapsed:.3f} 秒")
+    assert elapsed <= 0.5, f"取り消しの保存から一覧再描画まで {elapsed:.3f} 秒かかりました"
