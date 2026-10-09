@@ -434,7 +434,7 @@ def test_reversal_save_to_table_paint(qtbot, performance_window, monkeypatch) ->
 
     started_at: list[float] = []
 
-    def execute_reversal(dialog: ReversalDialog) -> QDialog.DialogCode:
+    def execute_reversal(dialog: ReversalDialog) -> int:
         dialog.staff_combo.setCurrentIndex(dialog.staff_combo.findData(1))
         dialog.resize(min(520, available.width() - 32), min(420, available.height() - 64))
         dialog.move(
