@@ -227,13 +227,13 @@
 
 #### F. 履歴モデル `ui/models/movement_table_model.py`
 
-- [ ] `MovementTableModel(QAbstractTableModel)`: `set_rows(rows: list[MovementRow])` は `beginResetModel`/`endResetModel` で入れ替える。行は新しい順に並べ替えて保持する
-- [ ] 列: 履歴 ID、日時、種別、数量、単価、クライアント、発注主体、担当者、使用先、メモ、取り消し状態
-- [ ] `DisplayRole`: 日時は `timeutil.format_local`、種別は `REASON_LABELS`、数量は符号付き 3 桁区切り、単価は「1,234円」、`None` は空欄、取り消し状態は「取り消し済み」/「#ID の取り消し」/ 空欄
-- [ ] `TextAlignmentRole`: 履歴 ID・数量・単価は右寄せ
-- [ ] `ForegroundRole`: 取り消し行(`reversal_of` あり)と取り消し済み(`is_reversed`)の行はグレー
-- [ ] `row_at(row) -> MovementRow`、`row_of(movement_id) -> int | None`
-- [ ] `tests/test_movement_table_model.py`: 列見出し、新しい順、表示書式(ローカル日時・符号・円)、取り消し状態の表示、右寄せ、グレー表示、`row_of`
+- [x] `MovementTableModel(QAbstractTableModel)`: `set_rows(rows: list[MovementRow])` は `beginResetModel`/`endResetModel` で入れ替える。行は新しい順に並べ替えて保持する
+- [x] 列: 履歴 ID、日時、種別、数量、単価、クライアント、発注主体、担当者、使用先、メモ、取り消し状態
+- [x] `DisplayRole`: 日時は `timeutil.format_local`、種別は `REASON_LABELS`、数量は符号付き 3 桁区切り、単価は「1,234円」、`None` は空欄、取り消し状態は「取り消し済み」/「#ID の取り消し」/ 空欄
+- [x] `TextAlignmentRole`: 履歴 ID・数量・単価は右寄せ
+- [x] `ForegroundRole`: 取り消し行(`reversal_of` あり)と取り消し済み(`is_reversed`)の行はグレー
+- [x] `row_at(row) -> MovementRow`、`row_of(movement_id) -> int | None`
+- [x] `tests/test_movement_table_model.py`: 列見出し、新しい順、表示書式(ローカル日時・符号・円)、取り消し状態の表示、右寄せ、グレー表示、`row_of`
 
 #### G. HistoryDialog・ReversalDialog
 
