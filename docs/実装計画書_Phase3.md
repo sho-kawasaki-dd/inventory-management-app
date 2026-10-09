@@ -219,8 +219,8 @@
 
 #### E. 3a-2 の仕上げ
 
-- [ ] 開発計画書 6.2・6.3 に差異があれば同方針で改訂する(StockMoveDialog の入力補完なし、参考価格確認の 3 択など)
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov` が成功する
+- [x] 開発計画書 6.2・6.3 に差異があれば同方針で改訂する(StockMoveDialog の入力補完なし、参考価格確認の 3 択など)。6.2 は実装と一致。6.3 の StockMoveDialog の仕様を実装に合わせて具体化
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov` が成功する
 - [ ] 3a-2 の PR を作成し、CI 成功後にマージする
 
 ### 3b. 履歴・取り消し(`feature/phase3-history`)
