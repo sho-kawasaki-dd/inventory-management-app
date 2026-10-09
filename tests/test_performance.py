@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import queue
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -14,8 +15,12 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QObject, QTimer
 
+from inventory_manager_mini.core.models import PeriodKind
+from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
+from inventory_manager_mini.db import migrations
+from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.main_window import MainWindow
@@ -184,6 +189,83 @@ def test_startup_to_first_table_paint(performance_db: Path, tmp_path: Path) -> N
     elapsed = _run_startup_probe(data_dir)
     print(f"別プロセス起動から一覧初回描画: {elapsed:.3f} 秒")
     assert elapsed <= 3.0
+
+
+def test_service_save_with_large_history(performance_db: Path) -> None:
+    conn = connect(performance_db)
+    try:
+        service = InventoryService(conn)
+        started_at = time.perf_counter()
+        service.receive(1, 1, 1)
+        elapsed = time.perf_counter() - started_at
+        print(f"品目 5,000・履歴 100,000 件で入庫保存: {elapsed:.3f} 秒")
+        assert elapsed <= 0.5
+    finally:
+        conn.close()
+
+
+def test_report_annual_and_monthly_aggregation_with_large_history(
+    performance_db: Path,
+) -> None:
+    conn = connect(performance_db)
+    try:
+        reports = ReportService(conn)
+        fiscal_year = reports.current_fiscal_year()
+        results: list[tuple[str, float]] = []
+        for label, kind in (
+            ("年次", PeriodKind.ANNUAL),
+            ("月次", PeriodKind.MONTHLY),
+        ):
+            started_at = time.perf_counter()
+            reports.dashboard(fiscal_year, kind)
+            elapsed = time.perf_counter() - started_at
+            results.append((label, elapsed))
+            assert elapsed <= 2.0, f"{label}集計に {elapsed:.3f} 秒かかりました"
+        print(
+            "大規模履歴のレポート: "
+            + "、".join(f"{label} {elapsed:.3f} 秒" for label, elapsed in results)
+        )
+    finally:
+        conn.close()
+
+
+def test_v3_migration_with_large_history(performance_db: Path, tmp_path: Path) -> None:
+    source = sqlite3.connect(performance_db)
+    legacy_path = tmp_path / "legacy-v2.db"
+    legacy = sqlite3.connect(legacy_path, autocommit=True)
+    try:
+        legacy.executescript(migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL)
+        with transaction(legacy):
+            for table in (
+                "clients",
+                "purchasers",
+                "staff",
+                "categories",
+                "locations",
+                "items",
+                "stock_movements",
+            ):
+                rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                if rows:
+                    placeholders = ", ".join("?" for _ in rows[0])
+                    legacy.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
+            legacy.execute("PRAGMA user_version = 2")
+    finally:
+        source.close()
+        legacy.close()
+
+    started_at = time.perf_counter()
+    conn = open_database(
+        legacy_path,
+        tmp_path / "migration-backups",
+        backup_timestamp=lambda: "20261009_120000",
+    )
+    elapsed = time.perf_counter() - started_at
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM total_aggregates").fetchone() == (1,)
+    finally:
+        conn.close()
+    print(f"履歴 100,000 件の v3 移行(事前検査・バックアップ・集計初期化): {elapsed:.3f} 秒")
 
 
 def test_search_to_table_paint(qtbot, monkeypatch, performance_window) -> None:

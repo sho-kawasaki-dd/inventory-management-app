@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,10 +17,23 @@ from inventory_manager_mini.core.errors import (
     ReversalNotAllowedError,
     ValidationError,
 )
-from inventory_manager_mini.core.models import ItemFilter, ItemUpdate, NewItem, Reason
-from inventory_manager_mini.core.services import InventoryService, MasterService
-from inventory_manager_mini.db.connection import transaction
-from inventory_manager_mini.db.migrations import create_schema
+from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    MAX_MOVEMENT_AMOUNT,
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
+    ItemFilter,
+    ItemUpdate,
+    NewItem,
+    Reason,
+    StockMovement,
+)
+from inventory_manager_mini.core.services import BackupService, InventoryService, MasterService
+from inventory_manager_mini.db import repositories
+from inventory_manager_mini.db.connection import connect, transaction
+from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS, compute_aggregates
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from tests.conftest import unchecked_constraints
 
 
 def _new_item(**kwargs: object) -> NewItem:
@@ -322,6 +338,7 @@ def test_commit_failure_rolls_back_movement_and_quantity() -> None:
 
         assert service.get_item(item.id).quantity == 3  # type: ignore[union-attr]
         assert len(service.list_history(item.id)) == 1
+        assert service.aggregates.get()["inbound_quantity"] == 0
         assert not conn.in_transaction
     finally:
         conn.close()
@@ -330,3 +347,609 @@ def test_commit_failure_rolls_back_movement_and_quantity() -> None:
 def test_item_filter_is_forwarded_to_repository(inventory: InventoryService) -> None:
     inventory.create_item(_new_item(name="保管品"))
     assert [row.name for row in inventory.list_items(ItemFilter(text="保管"))] == ["保管品"]
+
+
+def test_service_accepts_numeric_limits_and_rejects_values_above_them(
+    inventory: InventoryService,
+) -> None:
+    item = inventory.create_item(
+        _new_item(
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reorder_threshold=MAX_STOCK_QUANTITY,
+            reorder_quantity=MAX_STOCK_QUANTITY,
+            reference_price=MAX_UNIT_PRICE,
+        )
+    )
+    assert item.quantity == MAX_STOCK_QUANTITY
+    with pytest.raises(ValidationError, match="初期数量"):
+        inventory.create_item(_new_item(name="超過品", initial_quantity=MAX_STOCK_QUANTITY + 1))
+    with pytest.raises(ValidationError, match="参考価格"):
+        inventory.update_item(_update_item(item, reference_price=MAX_UNIT_PRICE + 1))
+    with pytest.raises(ValidationError, match="数量"):
+        inventory.receive(item.id, 1, MAX_STOCK_QUANTITY + 1)
+    with pytest.raises(ValidationError, match="在庫数が上限"):
+        inventory.receive(item.id, 1, 1)
+
+
+def test_issue_amount_limit_is_exact_and_failure_is_atomic(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    exact_item = inventory.create_item(
+        _new_item(
+            name="上限品",
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reference_price=10_000,
+        )
+    )
+    before = inventory.aggregates.get()
+    movement = inventory.issue(exact_item.id, 1, 10_000, "用途")
+    assert movement.unit_price is not None
+    assert abs(movement.delta) * movement.unit_price == MAX_MOVEMENT_AMOUNT
+    assert inventory.aggregates.get()["expenditure"] == before["expenditure"] + MAX_MOVEMENT_AMOUNT
+
+    disposed_item = inventory.create_item(
+        _new_item(
+            name="超過廃棄金額品",
+            initial_quantity=10_000,
+            initial_staff_id=1,
+            reference_price=10_001,
+        )
+    )
+    with pytest.raises(ValidationError, match="1 操作の金額"):
+        inventory.dispose(disposed_item.id, 1, 10_000)
+
+    rejected_item = inventory.create_item(
+        _new_item(
+            name="超過金額品",
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reference_price=10_001,
+        )
+    )
+    quantity_before = inventory.get_item(rejected_item.id).quantity  # type: ignore[union-attr]
+    movement_count = seeded_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0]
+    aggregates_before = inventory.aggregates.get()
+    with pytest.raises(ValidationError, match="1 操作の金額"):
+        inventory.issue(rejected_item.id, 1, 10_000, "用途")
+    assert inventory.get_item(rejected_item.id).quantity == quantity_before  # type: ignore[union-attr]
+    assert (
+        seeded_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0] == movement_count
+    )
+    assert inventory.aggregates.get() == aggregates_before
+
+
+def test_amount_limit_does_not_apply_to_initial_receipt_return_or_stocktake(
+    inventory: InventoryService,
+) -> None:
+    initial_item = inventory.create_item(
+        _new_item(
+            name="初期数量",
+            initial_quantity=10_000,
+            initial_staff_id=1,
+            reference_price=10_001,
+        )
+    )
+    receipt_item = inventory.create_item(_new_item(name="入庫", reference_price=10_001))
+    return_item = inventory.create_item(
+        _new_item(
+            name="返品",
+            initial_quantity=10_000,
+            initial_staff_id=1,
+            reference_price=10_001,
+        )
+    )
+    stocktake_item = inventory.create_item(_new_item(name="棚卸", reference_price=10_001))
+
+    assert inventory.get_item(initial_item.id).quantity == 10_000  # type: ignore[union-attr]
+    assert inventory.receive(receipt_item.id, 1, 10_000).unit_price == 10_001
+    assert inventory.return_to_supplier(return_item.id, 1, 10_000).delta == -10_000
+    assert inventory.stocktake(stocktake_item.id, 1, 100_000).delta == 100_000
+
+
+def test_aggregate_limit_failure_rolls_back_stock_history_and_totals(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(_new_item())
+    seeded_conn.execute(
+        "UPDATE total_aggregates SET inbound_quantity = ? WHERE id = 1",
+        (MAX_AGGREGATE_VALUE - 1,),
+    )
+    inventory.receive(item.id, 1, 1, unit_price=250, update_reference_price=True)
+    before_history = len(inventory.list_history(item.id))
+    with pytest.raises(ValidationError, match="集計値"):
+        inventory.receive(item.id, 1, 1, unit_price=300, update_reference_price=True)
+    assert inventory.get_item(item.id).quantity == 1  # type: ignore[union-attr]
+    assert inventory.get_item(item.id).reference_price == 250  # type: ignore[union-attr]
+    assert len(inventory.list_history(item.id)) == before_history
+    assert inventory.aggregates.get()["inbound_quantity"] == MAX_AGGREGATE_VALUE
+
+
+def test_reversal_block_reason_and_reverse_enforce_quantity_limit(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=1, initial_staff_id=1))
+    movement = inventory.issue(item.id, 1, 1, "用途")
+    seeded_conn.execute("UPDATE items SET quantity = ? WHERE id = ?", (MAX_STOCK_QUANTITY, item.id))
+    expected = "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません"
+    assert inventory.reversal_block_reason(movement.id) == expected
+    with pytest.raises(ValidationError, match="取り消し後の在庫数が上限"):
+        inventory.reverse(movement.id, 2)
+
+
+def _snapshot(conn: sqlite3.Connection) -> dict[str, list[tuple[object, ...]]]:
+    return {
+        table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")]
+        for table in ("categories", "items", "stock_movements", "total_aggregates")
+    }
+
+
+def _run_operation(
+    inventory: InventoryService, operation: str, item_id: int, quantity: Any
+) -> StockMovement:
+    if operation == "receive":
+        return inventory.receive(item_id, 1, quantity)
+    if operation == "issue":
+        return inventory.issue(item_id, 1, quantity, "用途")
+    if operation == "return":
+        return inventory.return_to_supplier(item_id, 1, quantity)
+    if operation == "dispose":
+        return inventory.dispose(item_id, 1, quantity)
+    return inventory.stocktake(item_id, 1, quantity)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "accepted"),
+    [
+        ("initial_quantity", 0, True),
+        ("initial_quantity", 1, True),
+        ("initial_quantity", MAX_STOCK_QUANTITY - 1, True),
+        ("initial_quantity", MAX_STOCK_QUANTITY, True),
+        ("initial_quantity", -1, False),
+        ("initial_quantity", MAX_STOCK_QUANTITY + 1, False),
+        ("reorder_threshold", 0, True),
+        ("reorder_threshold", MAX_STOCK_QUANTITY, True),
+        ("reorder_threshold", -1, False),
+        ("reorder_threshold", MAX_STOCK_QUANTITY + 1, False),
+        ("reorder_quantity", None, True),
+        ("reorder_quantity", 1, True),
+        ("reorder_quantity", MAX_STOCK_QUANTITY, True),
+        ("reorder_quantity", 0, False),
+        ("reorder_quantity", MAX_STOCK_QUANTITY + 1, False),
+        ("reference_price", None, True),
+        ("reference_price", 0, True),
+        ("reference_price", MAX_UNIT_PRICE, True),
+        ("reference_price", -1, False),
+        ("reference_price", MAX_UNIT_PRICE + 1, False),
+    ],
+)
+def test_create_item_numeric_boundaries(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    field: str,
+    value: int | None,
+    accepted: bool,
+) -> None:
+    kwargs: dict[str, object] = {field: value}
+    if field == "initial_quantity":
+        kwargs["initial_staff_id"] = 1
+    before = _snapshot(seeded_conn)
+
+    if accepted:
+        item = inventory.create_item(_new_item(**kwargs))
+        assert getattr(item, "quantity" if field == "initial_quantity" else field) == value
+    else:
+        with pytest.raises(ValidationError):
+            inventory.create_item(_new_item(**kwargs))
+        assert _snapshot(seeded_conn) == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "accepted"),
+    [
+        ("reorder_threshold", 0, True),
+        ("reorder_threshold", MAX_STOCK_QUANTITY, True),
+        ("reorder_threshold", MAX_STOCK_QUANTITY + 1, False),
+        ("reorder_quantity", None, True),
+        ("reorder_quantity", MAX_STOCK_QUANTITY, True),
+        ("reorder_quantity", 0, False),
+        ("reorder_quantity", MAX_STOCK_QUANTITY + 1, False),
+        ("reference_price", None, True),
+        ("reference_price", 0, True),
+        ("reference_price", MAX_UNIT_PRICE, True),
+        ("reference_price", -1, False),
+        ("reference_price", MAX_UNIT_PRICE + 1, False),
+    ],
+)
+def test_update_item_numeric_boundaries(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    field: str,
+    value: int | None,
+    accepted: bool,
+) -> None:
+    item = inventory.create_item(_new_item())
+    before = _snapshot(seeded_conn)
+
+    if accepted:
+        assert getattr(inventory.update_item(_update_item(item, **{field: value})), field) == value
+    else:
+        with pytest.raises(ValidationError):
+            inventory.update_item(_update_item(item, **{field: value}))
+        assert _snapshot(seeded_conn) == before
+
+
+@pytest.mark.parametrize("bad", [True, 1.5, "1", None])
+def test_stock_operations_reject_non_integer_quantities(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection, bad: Any
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=5, initial_staff_id=1))
+    before = _snapshot(seeded_conn)
+
+    for operation in ("receive", "issue", "return", "dispose", "stocktake"):
+        with pytest.raises(ValidationError):
+            _run_operation(inventory, operation, item.id, bad)
+    for unit_price in (True, 1.5, "1"):
+        with pytest.raises(ValidationError):
+            inventory.receive(item.id, 1, 1, unit_price=unit_price)  # type: ignore[arg-type]
+
+    assert _snapshot(seeded_conn) == before
+
+
+@pytest.mark.parametrize(
+    ("operation", "quantity"),
+    [
+        *[
+            (name, quantity)
+            for name in ("receive", "issue", "return", "dispose")
+            for quantity in (0, -1, MAX_STOCK_QUANTITY + 1)
+        ],
+        ("stocktake", -1),
+        ("stocktake", MAX_STOCK_QUANTITY + 1),
+    ],
+)
+def test_stock_operations_reject_out_of_range_quantities_without_changes(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    operation: str,
+    quantity: int,
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=5, initial_staff_id=1))
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(ValidationError):
+        _run_operation(inventory, operation, item.id, quantity)
+
+    assert _snapshot(seeded_conn) == before
+
+
+def test_stock_operations_accept_quantities_up_to_the_limit(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    received = inventory.create_item(_new_item(name="入庫"))
+    assert _run_operation(inventory, "receive", received.id, MAX_STOCK_QUANTITY).delta == (
+        MAX_STOCK_QUANTITY
+    )
+    stepwise = inventory.create_item(_new_item(name="段階入庫"))
+    inventory.receive(stepwise.id, 1, MAX_STOCK_QUANTITY - 1)
+    inventory.receive(stepwise.id, 1, 1)
+    assert inventory.get_item(stepwise.id).quantity == MAX_STOCK_QUANTITY  # type: ignore[union-attr]
+
+    for operation in ("issue", "return", "dispose"):
+        item = inventory.create_item(
+            _new_item(
+                name=operation,
+                initial_quantity=MAX_STOCK_QUANTITY,
+                initial_staff_id=1,
+                reference_price=None,
+            )
+        )
+        movement = _run_operation(inventory, operation, item.id, MAX_STOCK_QUANTITY)
+        assert movement.delta == -MAX_STOCK_QUANTITY
+        assert inventory.get_item(item.id).quantity == 0  # type: ignore[union-attr]
+
+    counted = inventory.create_item(_new_item(name="棚卸"))
+    assert inventory.stocktake(counted.id, 1, MAX_STOCK_QUANTITY).delta == MAX_STOCK_QUANTITY
+    assert inventory.stocktake(counted.id, 1, 0).delta == -MAX_STOCK_QUANTITY
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+
+
+def test_receive_unit_price_boundaries_and_none_versus_zero(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(_new_item(reference_price=100))
+    assert inventory.receive(item.id, 1, 1, unit_price=MAX_UNIT_PRICE).unit_price == MAX_UNIT_PRICE
+    assert inventory.receive(item.id, 1, 1, unit_price=0).unit_price == 0
+    assert inventory.receive(item.id, 1, 1).unit_price == 100
+
+    before = _snapshot(seeded_conn)
+    for bad in (MAX_UNIT_PRICE + 1, -1):
+        with pytest.raises(ValidationError):
+            inventory.receive(item.id, 1, 1, unit_price=bad, update_reference_price=True)
+    assert _snapshot(seeded_conn) == before
+
+    inventory.receive(item.id, 1, 1, unit_price=0, update_reference_price=True)
+    assert inventory.get_item(item.id).reference_price == 0  # type: ignore[union-attr]
+
+
+def test_applied_reference_price_is_validated_when_unit_price_is_omitted(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=5, initial_staff_id=1, reference_price=100)
+    )
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.execute(
+            "UPDATE items SET reference_price = ? WHERE id = ?", (MAX_UNIT_PRICE + 1, item.id)
+        )
+    before = _snapshot(seeded_conn)
+
+    for operation in ("receive", "issue", "return", "dispose"):
+        with pytest.raises(ValidationError, match="適用単価"):
+            _run_operation(inventory, operation, item.id, 1)
+    with pytest.raises(ValidationError):
+        inventory.stocktake(item.id, 1, 3)
+    assert _snapshot(seeded_conn) == before
+
+    assert inventory.receive(item.id, 1, 1, unit_price=10).unit_price == 10
+
+
+def test_amount_limit_is_exact_for_dispose_none_zero_and_reversal(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    disposed_item = inventory.create_item(
+        _new_item(
+            name="廃棄上限",
+            initial_quantity=10_000,
+            initial_staff_id=1,
+            reference_price=10_000,
+        )
+    )
+    disposal = inventory.dispose(disposed_item.id, 1, 10_000)
+    assert abs(disposal.delta) * (disposal.unit_price or 0) == MAX_MOVEMENT_AMOUNT
+    assert inventory.aggregates.get()["disposal_amount"] == MAX_MOVEMENT_AMOUNT
+    inventory.reverse(disposal.id, 2)
+    assert inventory.aggregates.get()["disposal_amount"] == 0
+
+    unpriced = inventory.create_item(
+        _new_item(
+            name="単価なし",
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reference_price=None,
+        )
+    )
+    zero_priced = inventory.create_item(
+        _new_item(
+            name="0円",
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reference_price=0,
+        )
+    )
+    assert inventory.issue(unpriced.id, 1, MAX_STOCK_QUANTITY, "用途").unit_price is None
+    assert inventory.dispose(zero_priced.id, 1, MAX_STOCK_QUANTITY).unit_price == 0
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+    assert inventory.aggregates.get()["expenditure"] == 0
+
+
+def test_zero_difference_stocktake_is_recorded_without_changing_totals(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=3, initial_staff_id=1, reference_price=100)
+    )
+    before = inventory.aggregates.get()
+
+    movement = inventory.stocktake(item.id, 1, 3)
+
+    assert (movement.delta, movement.unit_price) == (0, 100)
+    assert inventory.aggregates.get() == before
+    assert inventory.reversal_block_reason(movement.id) == "差分 0 の棚卸履歴は取り消せません"
+
+
+@pytest.mark.parametrize(
+    ("column", "reference_price", "initial", "within", "exceeding"),
+    [
+        ("inbound_quantity", None, 0, ("receive", 100), ("receive", 1)),
+        ("outbound_quantity", None, 200, ("issue", 100), ("issue", 1)),
+        ("disposed_quantity", None, 200, ("dispose", 100), ("dispose", 1)),
+        ("expenditure", 2, 200, ("issue", 50), ("issue", 1)),
+        ("disposal_amount", 2, 200, ("dispose", 50), ("dispose", 1)),
+    ],
+)
+def test_each_aggregate_is_limited_independently_and_failure_is_atomic(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+    reference_price: int | None,
+    initial: int,
+    within: tuple[str, int],
+    exceeding: tuple[str, int],
+) -> None:
+    monkeypatch.setattr(repositories, "MAX_AGGREGATE_VALUE", 100)
+    item = inventory.create_item(
+        _new_item(
+            initial_quantity=initial,
+            initial_staff_id=1 if initial else None,
+            reference_price=reference_price,
+        )
+    )
+
+    _run_operation(inventory, within[0], item.id, within[1])
+    assert inventory.aggregates.get()[column] == 100
+    before = _snapshot(seeded_conn)
+    with pytest.raises(ValidationError, match=column):
+        _run_operation(inventory, exceeding[0], item.id, exceeding[1])
+
+    assert _snapshot(seeded_conn) == before
+
+
+def test_expenditure_and_disposal_amount_are_not_added_together(
+    inventory: InventoryService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(repositories, "MAX_AGGREGATE_VALUE", 100)
+    item = inventory.create_item(
+        _new_item(initial_quantity=200, initial_staff_id=1, reference_price=2)
+    )
+
+    inventory.issue(item.id, 1, 50, "用途")
+    inventory.dispose(item.id, 1, 50)
+
+    totals = inventory.aggregates.get()
+    assert (totals["expenditure"], totals["disposal_amount"]) == (100, 100)
+
+
+def test_reverse_fails_atomically_when_totals_would_become_negative(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=10, initial_staff_id=1, reference_price=100)
+    )
+    movement = inventory.issue(item.id, 1, 2, "用途")
+    seeded_conn.execute("UPDATE total_aggregates SET outbound_quantity = 0, expenditure = 0")
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(ValidationError, match="outbound_quantity"):
+        inventory.reverse(movement.id, 2)
+
+    assert _snapshot(seeded_conn) == before
+
+
+def test_price_edit_changes_neither_totals_nor_past_history(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=10, initial_staff_id=1, reference_price=100)
+    )
+    issue = inventory.issue(item.id, 1, 2, "用途")
+    inventory.dispose(item.id, 1, 1)
+    totals_before = inventory.aggregates.get()
+    history_before = [(row.id, row.unit_price) for row in inventory.list_history(item.id)]
+
+    inventory.update_item(_update_item(item, reference_price=999))
+
+    assert inventory.aggregates.get() == totals_before
+    assert [(row.id, row.unit_price) for row in inventory.list_history(item.id)] == history_before
+    assert inventory.reverse(issue.id, 2).unit_price == 100
+    assert inventory.issue(item.id, 1, 1, "改定後").unit_price == 999
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["create_item", "receive_with_price", "issue", "dispose", "return", "stocktake", "reverse"],
+)
+def test_failure_after_partial_writes_rolls_back_every_operation(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=10, initial_staff_id=1, reference_price=100)
+    )
+    issued = inventory.issue(item.id, 1, 2, "用途")
+    actions: dict[str, Callable[[], object]] = {
+        "create_item": lambda: inventory.create_item(
+            _new_item(name="新規", initial_quantity=3, initial_staff_id=1)
+        ),
+        "receive_with_price": lambda: inventory.receive(
+            item.id, 1, 1, unit_price=250, update_reference_price=True
+        ),
+        "issue": lambda: inventory.issue(item.id, 1, 1, "用途"),
+        "dispose": lambda: inventory.dispose(item.id, 1, 1),
+        "return": lambda: inventory.return_to_supplier(item.id, 1, 1),
+        "stocktake": lambda: inventory.stocktake(item.id, 1, 4),
+        "reverse": lambda: inventory.reverse(issued.id, 2),
+    }
+    before = _snapshot(seeded_conn)
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected failure")
+
+    # 履歴 INSERT・数量更新の後で失敗させる(品目登録は数量更新、それ以外は集計更新)
+    target = inventory.items if operation == "create_item" else inventory.aggregates
+    monkeypatch.setattr(target, "add_quantity" if operation == "create_item" else "apply", fail)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        actions[operation]()
+
+    assert not seeded_conn.in_transaction
+    assert _snapshot(seeded_conn) == before
+
+
+class _CommitFailConnection(sqlite3.Connection):
+    fail_next_commit = False
+
+    def execute(self, sql: str, parameters: object = (), /) -> sqlite3.Cursor:
+        if self.fail_next_commit and sql == "COMMIT":
+            self.fail_next_commit = False
+            raise sqlite3.OperationalError("commit failed")
+        return super().execute(sql, parameters)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("failure", ["amount-limit", "aggregate-limit", "injected", "commit"])
+def test_failed_operations_leave_a_consistent_database_after_reconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    path = tmp_path / "inventory.db"
+    conn = sqlite3.connect(path, autocommit=True, factory=_CommitFailConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    create_schema(conn)
+    master = MasterService(conn)
+    staff = master.add_staff("担当")
+    inventory = InventoryService(conn)
+    item = inventory.create_item(
+        NewItem(
+            client_id=master.add_client("総務").id,
+            purchaser_id=master.add_purchaser("本部").id,
+            name="品目",
+            category_id=master.add_category("備品", "TO").id,
+            initial_quantity=10_000,
+            initial_staff_id=staff.id,
+            reference_price=10_001,
+        )
+    )
+    inventory.receive(item.id, staff.id, 5)
+    before = _snapshot(conn)
+    try:
+        if failure == "amount-limit":
+            with pytest.raises(ValidationError, match="1 操作の金額"):
+                inventory.issue(item.id, staff.id, 10_000, "用途")
+        elif failure == "aggregate-limit":
+            monkeypatch.setattr(repositories, "MAX_AGGREGATE_VALUE", 5)
+            with pytest.raises(ValidationError, match="inbound_quantity"):
+                inventory.receive(item.id, staff.id, 1)
+        elif failure == "injected":
+
+            def fail(*args: object, **kwargs: object) -> None:
+                raise RuntimeError("injected failure")
+
+            monkeypatch.setattr(inventory.aggregates, "apply", fail)
+            with pytest.raises(RuntimeError, match="injected failure"):
+                inventory.receive(item.id, staff.id, 1, unit_price=300, update_reference_price=True)
+        else:
+            assert isinstance(conn, _CommitFailConnection)
+            conn.fail_next_commit = True
+            with pytest.raises(sqlite3.OperationalError, match="commit failed"):
+                inventory.receive(item.id, staff.id, 1, unit_price=300, update_reference_price=True)
+        assert _snapshot(conn) == before
+    finally:
+        conn.close()
+
+    reopened = connect(path)
+    try:
+        assert _snapshot(reopened) == before
+        stored = {
+            column: reopened.execute(f"SELECT {column} FROM total_aggregates").fetchone()[0]
+            for column in AGGREGATE_COLUMNS
+        }
+        assert stored == compute_aggregates(reopened)
+        assert BackupService().inspect_database(reopened, SCHEMA_VERSION) == []
+    finally:
+        reopened.close()

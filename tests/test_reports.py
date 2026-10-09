@@ -4,10 +4,14 @@ import sqlite3
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from inventory_manager_mini.core import reports
+from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import GroupBy, ItemUpdate, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
 from inventory_manager_mini.core.services import InventoryService, SettingsService
-from tests.conftest import FixedClock
+from tests.conftest import FixedClock, unchecked_constraints
 
 
 def _create_item(
@@ -174,9 +178,11 @@ def test_dashboard_excludes_returns_adjustments_and_reversed_unpriced_issues(
     priced_id = _create_item(inventory, name="単価あり", reference_price=50)
     inventory.issue(priced_id, 1, 2, "費用")
     inventory.dispose(priced_id, 1, 1)
+    zero_price_id = _create_item(inventory, name="0円", reference_price=0)
+    inventory.issue(zero_price_id, 1, 1, "0円費用")
 
     row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
-    assert row.outbound_quantity == 4
+    assert row.outbound_quantity == 5
     assert row.expenditure == 100
     assert row.unpriced_issue_count == 1
     assert row.disposed_quantity == 1
@@ -246,3 +252,147 @@ def test_changing_fiscal_year_start_month_changes_annual_periods(
     assert report.dashboard(2027, PeriodKind.ANNUAL)[0].inbound_quantity == 3
     settings.set_fiscal_year_start_month(1)
     assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 5
+
+
+def _new_report_item(
+    inventory: InventoryService, name: str, *, quantity: int = 0, price: int | None = None
+) -> int:
+    return inventory.create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name=name,
+            category_id=2,
+            initial_quantity=quantity,
+            initial_staff_id=1 if quantity else None,
+            reference_price=price,
+        )
+    ).id
+
+
+def _record(inventory: InventoryService, kind: str, item_id: int, quantity: int) -> None:
+    if kind == "receive":
+        inventory.receive(item_id, 1, quantity)
+    elif kind == "issue":
+        inventory.issue(item_id, 1, quantity, "用途")
+    else:
+        inventory.dispose(item_id, 1, quantity)
+
+
+def test_dashboard_judges_limits_by_final_totals_not_row_order(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reports, "MAX_AGGREGATE_VALUE", 100)
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _new_report_item(inventory, "順序")
+    first = inventory.receive(item_id, 1, 60)
+    inventory.receive(item_id, 1, 60)
+    inventory.reverse(first.id, 1)
+
+    # 同一時刻の行は ID 順に並ぶため、途中合計は 120 まで達するが最終値は 60
+    assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 60
+
+
+@pytest.mark.parametrize(
+    ("kind", "price", "at_limit", "metric"),
+    [
+        ("receive", None, 100, "inbound_quantity"),
+        ("issue", None, 100, "outbound_quantity"),
+        ("issue", 2, 50, "expenditure"),
+        ("dispose", None, 100, "disposed_quantity"),
+        ("dispose", 2, 50, "disposal_amount"),
+    ],
+)
+def test_dashboard_accepts_totals_at_the_limit_and_rejects_beyond(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    price: int | None,
+    at_limit: int,
+    metric: str,
+) -> None:
+    monkeypatch.setattr(reports, "MAX_AGGREGATE_VALUE", 100)
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _new_report_item(inventory, "上限", quantity=200, price=price)
+
+    _record(inventory, kind, item_id, at_limit)
+    for period_kind in (PeriodKind.ANNUAL, PeriodKind.MONTHLY):
+        rows = report.dashboard(2026, period_kind)
+        assert max(getattr(row, metric) for row in rows) == 100
+
+    _record(inventory, kind, item_id, 1)
+    for period_kind in (PeriodKind.ANNUAL, PeriodKind.MONTHLY):
+        with pytest.raises(ValidationError, match="集計値"):
+            report.dashboard(2026, period_kind)
+
+
+def test_dashboard_sums_beyond_int64_with_python_integers(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item_id = _new_report_item(inventory, "巨大")
+    huge_price = 9 * 10**18
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.executemany(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, reason, "
+            "delta, unit_price, used_for, moved_at) "
+            "VALUES (?, 1, 1, 1, 'out', -1, ?, '巨大', '2026-01-15 12:00:00')",
+            [(item_id, huge_price)] * 10,
+        )
+    with pytest.raises(sqlite3.OperationalError):
+        seeded_conn.execute("SELECT SUM(unit_price) FROM stock_movements").fetchone()
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+
+    with pytest.raises(ValidationError, match="集計値"):
+        report.dashboard(2026, PeriodKind.ANNUAL)
+
+    monkeypatch.setattr(reports, "MAX_AGGREGATE_VALUE", 10**30)
+    row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    assert type(row.expenditure) is int
+    assert row.expenditure == 10 * huge_price
+
+
+def test_monthly_annual_and_total_aggregates_agree_across_months(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _new_report_item(inventory, "月次", price=10)
+    july_issue = None
+    for moment in (
+        datetime(2025, 4, 10, tzinfo=UTC),
+        datetime(2025, 7, 20, tzinfo=UTC),
+        datetime(2025, 12, 31, 16, 0, tzinfo=UTC),
+        datetime(2026, 3, 5, tzinfo=UTC),
+    ):
+        fixed_clock.current = moment
+        inventory.receive(item_id, 1, 20)
+        issue = inventory.issue(item_id, 1, 3, "用途")
+        inventory.dispose(item_id, 1, 2)
+        if moment.month == 7:
+            july_issue = issue
+    assert july_issue is not None
+    fixed_clock.current = datetime(2026, 3, 20, tzinfo=UTC)
+    inventory.reverse(july_issue.id, 1)
+
+    monthly = report.dashboard(2026, PeriodKind.MONTHLY)
+    annual = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    totals = inventory.aggregates.get()
+    for field in (
+        "inbound_quantity",
+        "outbound_quantity",
+        "expenditure",
+        "disposed_quantity",
+        "disposal_amount",
+    ):
+        assert sum(getattr(row, field) for row in monthly) == getattr(annual, field)
+        assert getattr(annual, field) == totals[field]
+    assert next(row for row in monthly if row.period_label == "2025年7月").outbound_quantity == 0

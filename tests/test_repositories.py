@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
 from importlib.resources import files
+from typing import Any
 
 import pytest
 
@@ -13,13 +14,22 @@ from inventory_manager_mini.core.errors import (
     NegativeStockError,
     ValidationError,
 )
-from inventory_manager_mini.core.models import ItemFilter, ItemUpdate, Reason
+from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
+    ItemFilter,
+    ItemUpdate,
+    Reason,
+)
 from inventory_manager_mini.db.connection import connect_memory
+from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
 from inventory_manager_mini.db.repositories import (
     ItemRepository,
     MasterRepository,
     MovementRepository,
     SettingsRepository,
+    TotalAggregatesRepository,
 )
 
 
@@ -202,6 +212,10 @@ def test_item_repository_quantity_update_and_integrity_errors(
     with pytest.raises(NegativeStockError) as error:
         repo.add_quantity(1, -2)
     assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+
+    repository_conn.execute("UPDATE items SET quantity = 1000000 WHERE id = 1")
+    with pytest.raises(ValidationError, match="在庫数が上限"):
+        repo.add_quantity(1, 1)
 
     with pytest.raises(ValidationError) as duplicate:
         _insert_repository_item(repo, code="ST-0001")
@@ -467,3 +481,187 @@ def test_settings_repository_get_set_all(repository_conn: sqlite3.Connection) ->
     repo.set("fiscal_year_start_month", "10")
     repo.set("additional", "value")
     assert repo.all() == {"additional": "value", "fiscal_year_start_month": "10"}
+
+
+def test_total_aggregates_repository_starts_at_zero_and_applies_partial_deltas(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+    updated = repo.apply({"inbound_quantity": 5, "expenditure": 300})
+    assert updated == {
+        **dict.fromkeys(AGGREGATE_COLUMNS, 0),
+        "inbound_quantity": 5,
+        "expenditure": 300,
+    }
+    assert repo.get() == updated
+
+    repo.apply({"expenditure": -100})
+    assert repo.get()["expenditure"] == 200
+    assert repo.get()["inbound_quantity"] == 5
+
+
+def test_total_aggregates_repository_empty_deltas_change_nothing(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    repo.apply({"outbound_quantity": 2})
+    assert repo.apply({}) == repo.get()
+    assert repo.get()["outbound_quantity"] == 2
+
+
+def test_total_aggregates_repository_rejects_unknown_column_without_update(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValueError, match="未定義の集計項目"):
+        repo.apply({"inbound_quantity": 1, "unknown": 1})
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+
+def test_total_aggregates_repository_enforces_zero_and_upper_limit(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValidationError, match="disposal_amount"):
+        repo.apply({"disposal_amount": -1})
+
+    repo.apply({"expenditure": MAX_AGGREGATE_VALUE})
+    assert repo.get()["expenditure"] == MAX_AGGREGATE_VALUE
+    with pytest.raises(ValidationError, match="expenditure"):
+        repo.apply({"expenditure": 1})
+    assert repo.get()["expenditure"] == MAX_AGGREGATE_VALUE
+
+
+def test_total_aggregates_repository_does_not_partially_apply_invalid_deltas(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = TotalAggregatesRepository(repository_conn)
+    with pytest.raises(ValidationError):
+        repo.apply({"inbound_quantity": 3, "disposed_quantity": -1})
+    assert repo.get() == dict.fromkeys(AGGREGATE_COLUMNS, 0)
+
+
+def test_total_aggregates_repository_requires_the_single_row(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repository_conn.execute("DELETE FROM total_aggregates")
+    with pytest.raises(RuntimeError, match="集計管理レコード"):
+        TotalAggregatesRepository(repository_conn).get()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"reorder_threshold": MAX_STOCK_QUANTITY + 1},
+        {"reorder_quantity": 0},
+        {"reorder_quantity": MAX_STOCK_QUANTITY + 1},
+        {"reference_price": MAX_UNIT_PRICE + 1},
+        {"reference_price": -1},
+    ],
+)
+def test_item_repository_converts_limit_violations_to_validation_errors(
+    repository_conn: sqlite3.Connection, values: dict[str, int]
+) -> None:
+    repo = ItemRepository(repository_conn)
+    arguments: dict[str, Any] = {
+        "client_id": 1,
+        "purchaser_id": 1,
+        "code": "ST-0001",
+        "name": "上限検査",
+        "category_id": 2,
+        "location_id": 1,
+        "reorder_threshold": 0,
+        "reorder_quantity": None,
+        "purchase_url": None,
+        "supplier": None,
+        "manufacturer_part_number": None,
+        "application": None,
+        "reference_price": None,
+        "note": None,
+    }
+    arguments.update(values)
+
+    with pytest.raises(ValidationError) as error:
+        repo.insert(**arguments)
+    assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+    assert repository_conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+    item_id = _insert_repository_item(repo, code="ST-0002")
+    update = ItemUpdate(
+        id=item_id,
+        **{
+            key: arguments[key]
+            for key in (
+                "client_id",
+                "purchaser_id",
+                "name",
+                "category_id",
+                "location_id",
+                "reorder_threshold",
+                "reorder_quantity",
+                "purchase_url",
+                "supplier",
+                "manufacturer_part_number",
+                "application",
+                "reference_price",
+                "note",
+            )
+        },
+    )
+    with pytest.raises(ValidationError) as update_error:
+        repo.update(update)
+    assert isinstance(update_error.value.__cause__, sqlite3.IntegrityError)
+
+
+@pytest.mark.parametrize(
+    ("reason", "delta", "unit_price"),
+    [
+        (Reason.IN, MAX_STOCK_QUANTITY + 1, None),
+        (Reason.OUT, -(MAX_STOCK_QUANTITY + 1), None),
+        (Reason.IN, 1, MAX_UNIT_PRICE + 1),
+        (Reason.OUT, -10_001, 10_000),
+        (Reason.DISPOSE, -10_001, 10_000),
+    ],
+)
+def test_movement_repository_converts_limit_violations_to_validation_errors(
+    repository_conn: sqlite3.Connection,
+    reason: Reason,
+    delta: int,
+    unit_price: int | None,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    repo = MovementRepository(repository_conn)
+
+    with pytest.raises(ValidationError) as error:
+        repo.insert(
+            item_id=1,
+            client_id=1,
+            purchaser_id=1,
+            staff_id=1,
+            reason=reason,
+            delta=delta,
+            unit_price=unit_price,
+            used_for=None,
+            reversal_of=None,
+            note=None,
+            moved_at="2026-01-01 00:00:00",
+        )
+
+    assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+    assert repository_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0] == 0
+
+
+def test_item_repository_quantity_boundaries(repository_conn: sqlite3.Connection) -> None:
+    repo = ItemRepository(repository_conn)
+    _insert_item(repository_conn, item_id=1, quantity=MAX_STOCK_QUANTITY - 1)
+    repo.add_quantity(1, 1)
+    assert repo.get(1).quantity == MAX_STOCK_QUANTITY  # type: ignore[union-attr]
+    repo.add_quantity(1, -MAX_STOCK_QUANTITY)
+    assert repo.get(1).quantity == 0  # type: ignore[union-attr]
+    with pytest.raises(NegativeStockError):
+        repo.add_quantity(1, -1)
+    with pytest.raises(ValidationError, match="在庫数が上限"):
+        repo.add_quantity(1, MAX_STOCK_QUANTITY + 1)
+    assert repo.get(1).quantity == 0  # type: ignore[union-attr]

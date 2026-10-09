@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,6 +14,15 @@ from inventory_manager_mini.core.services import (
 )
 from inventory_manager_mini.db.connection import connect_memory
 from inventory_manager_mini.db.migrations import create_schema
+
+
+@contextmanager
+def unchecked_constraints(conn: sqlite3.Connection) -> Iterator[None]:
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    try:
+        yield
+    finally:
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

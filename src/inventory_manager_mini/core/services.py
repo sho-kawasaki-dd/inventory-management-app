@@ -20,10 +20,12 @@ from inventory_manager_mini.core.errors import (
     PrefixLockedError,
     RestoreError,
     ReversalNotAllowedError,
-    UnsupportedSchemaError,
     ValidationError,
 )
 from inventory_manager_mini.core.models import (
+    MAX_MOVEMENT_AMOUNT,
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
     Category,
     Client,
     Item,
@@ -51,18 +53,22 @@ from inventory_manager_mini.db.connection import (
     read_transaction,
     transaction,
 )
+from inventory_manager_mini.db.integrity import compute_aggregates, find_limit_violations
 from inventory_manager_mini.db.migrations import (
     MIGRATIONS,
     MIN_SUPPORTED_SCHEMA_VERSION,
     SCHEMA_VERSION,
     check_migration_path,
+    check_migration_prechecks,
     inspect_schema,
+    migrate_schema,
 )
 from inventory_manager_mini.db.repositories import (
     ItemRepository,
     MasterRepository,
     MovementRepository,
     SettingsRepository,
+    TotalAggregatesRepository,
 )
 
 _PREFIX_PATTERN = re.compile(r"^[A-Z0-9]{2,5}$")
@@ -97,14 +103,18 @@ def _required_text(value: str, label: str) -> str:
     return normalized
 
 
-def _integer(value: int, label: str, minimum: int) -> int:
-    if type(value) is not int or value < minimum:
-        raise ValidationError(f"{label}は{minimum}以上の整数で指定してください")
+def _integer(value: int, label: str, minimum: int, maximum: int | None = None) -> int:
+    if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+        if maximum is None:
+            raise ValidationError(f"{label}は{minimum}以上の整数で指定してください")
+        raise ValidationError(f"{label}は{minimum}〜{maximum:,}の整数で指定してください")
     return value
 
 
-def _optional_integer(value: int | None, label: str, minimum: int) -> int | None:
-    return None if value is None else _integer(value, label, minimum)
+def _optional_integer(
+    value: int | None, label: str, minimum: int, maximum: int | None = None
+) -> int | None:
+    return None if value is None else _integer(value, label, minimum, maximum)
 
 
 def _prefix(value: str) -> str:
@@ -135,15 +145,17 @@ def _normalize_new_item(new: NewItem) -> NewItem:
         name=_required_text(new.name, "品名"),
         category_id=_integer(new.category_id, "カテゴリ ID", 1),
         location_id=_optional_integer(new.location_id, "保管場所 ID", 1),
-        initial_quantity=_integer(new.initial_quantity, "初期数量", 0),
+        initial_quantity=_integer(new.initial_quantity, "初期数量", 0, MAX_STOCK_QUANTITY),
         initial_staff_id=_optional_integer(new.initial_staff_id, "担当者 ID", 1),
-        reorder_threshold=_integer(new.reorder_threshold, "在庫閾値", 0),
-        reorder_quantity=_optional_integer(new.reorder_quantity, "推奨発注数", 1),
+        reorder_threshold=_integer(new.reorder_threshold, "在庫閾値", 0, MAX_STOCK_QUANTITY),
+        reorder_quantity=_optional_integer(
+            new.reorder_quantity, "推奨発注数", 1, MAX_STOCK_QUANTITY
+        ),
         purchase_url=validate_purchase_url(new.purchase_url),
         supplier=_normalize_optional(new.supplier, "仕入先"),
         manufacturer_part_number=_normalize_optional(new.manufacturer_part_number, "メーカー型番"),
         application=_normalize_optional(new.application, "用途"),
-        reference_price=_optional_integer(new.reference_price, "参考価格", 0),
+        reference_price=_optional_integer(new.reference_price, "参考価格", 0, MAX_UNIT_PRICE),
         note=_normalize_optional(new.note, "備考"),
     )
 
@@ -156,15 +168,17 @@ def _normalize_item_update(update: ItemUpdate) -> ItemUpdate:
         name=_required_text(update.name, "品名"),
         category_id=_integer(update.category_id, "カテゴリ ID", 1),
         location_id=_optional_integer(update.location_id, "保管場所 ID", 1),
-        reorder_threshold=_integer(update.reorder_threshold, "在庫閾値", 0),
-        reorder_quantity=_optional_integer(update.reorder_quantity, "推奨発注数", 1),
+        reorder_threshold=_integer(update.reorder_threshold, "在庫閾値", 0, MAX_STOCK_QUANTITY),
+        reorder_quantity=_optional_integer(
+            update.reorder_quantity, "推奨発注数", 1, MAX_STOCK_QUANTITY
+        ),
         purchase_url=validate_purchase_url(update.purchase_url),
         supplier=_normalize_optional(update.supplier, "仕入先"),
         manufacturer_part_number=_normalize_optional(
             update.manufacturer_part_number, "メーカー型番"
         ),
         application=_normalize_optional(update.application, "用途"),
-        reference_price=_optional_integer(update.reference_price, "参考価格", 0),
+        reference_price=_optional_integer(update.reference_price, "参考価格", 0, MAX_UNIT_PRICE),
         note=_normalize_optional(update.note, "備考"),
     )
 
@@ -180,6 +194,7 @@ class InventoryService:
         self.items = ItemRepository(conn)
         self.movements = MovementRepository(conn)
         self.masters = MasterRepository(conn)
+        self.aggregates = TotalAggregatesRepository(conn)
 
     def create_item(self, new: NewItem) -> Item:
         value = _normalize_new_item(new)
@@ -281,7 +296,7 @@ class InventoryService:
         return self._change_stock(
             item_id,
             staff_id,
-            _integer(quantity, "数量", 1),
+            _integer(quantity, "数量", 1, MAX_STOCK_QUANTITY),
             Reason.IN,
             actual_price,
             None,
@@ -301,7 +316,7 @@ class InventoryService:
         return self._change_stock(
             item_id,
             staff_id,
-            -_integer(quantity, "数量", 1),
+            -_integer(quantity, "数量", 1, MAX_STOCK_QUANTITY),
             Reason.OUT,
             None,
             normalized_used_for,
@@ -314,7 +329,7 @@ class InventoryService:
         return self._change_stock(
             item_id,
             staff_id,
-            -_integer(quantity, "数量", 1),
+            -_integer(quantity, "数量", 1, MAX_STOCK_QUANTITY),
             Reason.RETURN,
             None,
             None,
@@ -327,7 +342,7 @@ class InventoryService:
         return self._change_stock(
             item_id,
             staff_id,
-            -_integer(quantity, "数量", 1),
+            -_integer(quantity, "数量", 1, MAX_STOCK_QUANTITY),
             Reason.DISPOSE,
             None,
             None,
@@ -341,7 +356,7 @@ class InventoryService:
         actual_quantity: int,
         note: str | None = None,
     ) -> StockMovement:
-        actual = _integer(actual_quantity, "棚卸後の数量", 0)
+        actual = _integer(actual_quantity, "棚卸後の数量", 0, MAX_STOCK_QUANTITY)
         normalized_note = _normalize_optional(note, "備考")
         with transaction(self.conn):
             item = self._require_active_item(item_id)
@@ -373,6 +388,10 @@ class InventoryService:
             delta = -original.delta
             if item.quantity + delta < 0:
                 raise NegativeStockError("取り消し後の在庫数が負になるため実行できません")
+            if item.quantity + delta > MAX_STOCK_QUANTITY:
+                raise ValidationError(
+                    "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません"
+                )
             return self._record_movement(
                 item,
                 staff.id,
@@ -393,21 +412,25 @@ class InventoryService:
         return self.movements.list_all()
 
     def reversal_block_reason(self, movement_id: int) -> str | None:
-        original = self.movements.get(movement_id)
-        if original is None:
-            return "履歴が見つかりません"
-        if original.reversal_of is not None:
-            return "取り消し行は取り消せません"
-        if self.movements.is_reversed(original.id):
-            return "この履歴はすでに取り消されています"
-        if original.reason is Reason.ADJUST and original.delta == 0:
-            return "差分 0 の棚卸履歴は取り消せません"
-        item = self.items.get(original.item_id)
-        if item is None or not item.is_active:
-            return "廃止品目の履歴は取り消せません"
-        if item.quantity - original.delta < 0:
-            return "取り消し後の在庫数が負になるため実行できません"
-        return None
+        with read_transaction(self.conn):
+            original = self.movements.get(movement_id)
+            if original is None:
+                return "履歴が見つかりません"
+            if original.reversal_of is not None:
+                return "取り消し行は取り消せません"
+            if self.movements.is_reversed(original.id):
+                return "この履歴はすでに取り消されています"
+            if original.reason is Reason.ADJUST and original.delta == 0:
+                return "差分 0 の棚卸履歴は取り消せません"
+            item = self.items.get(original.item_id)
+            if item is None or not item.is_active:
+                return "廃止品目の履歴は取り消せません"
+            resulting_quantity = item.quantity - original.delta
+            if resulting_quantity < 0:
+                return "取り消し後の在庫数が負になるため実行できません"
+            if resulting_quantity > MAX_STOCK_QUANTITY:
+                return "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません"
+            return None
 
     def _change_stock(
         self,
@@ -426,7 +449,17 @@ class InventoryService:
             staff = self._require_active_staff(staff_id)
             if item.quantity + delta < 0:
                 raise NegativeStockError("在庫数が負になるため実行できません")
+            resulting_quantity = item.quantity + delta
+            if resulting_quantity > MAX_STOCK_QUANTITY:
+                raise ValidationError("操作後の在庫数が上限(1,000,000)を超えます")
             effective_price = item.reference_price if unit_price is None else unit_price
+            effective_price = _optional_integer(effective_price, "適用単価", 0, MAX_UNIT_PRICE)
+            if (
+                reason in {Reason.OUT, Reason.DISPOSE}
+                and effective_price is not None
+                and abs(delta) * effective_price > MAX_MOVEMENT_AMOUNT
+            ):
+                raise ValidationError("1 操作の金額が上限(100,000,000円)を超えます")
             if (
                 reason is Reason.IN
                 and update_reference_price
@@ -474,7 +507,24 @@ class InventoryService:
             moved_at=utc_now_str(self.clock()),
         )
         self.items.add_quantity(item.id, delta)
+        self.aggregates.apply(self._aggregate_deltas(reason, delta, unit_price))
         return movement
+
+    @staticmethod
+    def _aggregate_deltas(reason: Reason, delta: int, unit_price: int | None) -> dict[str, int]:
+        if reason is Reason.IN:
+            return {"inbound_quantity": delta}
+        if reason is Reason.OUT:
+            changes = {"outbound_quantity": -delta}
+            if unit_price is not None:
+                changes["expenditure"] = -delta * unit_price
+            return changes
+        if reason is Reason.DISPOSE:
+            changes = {"disposed_quantity": -delta}
+            if unit_price is not None:
+                changes["disposal_amount"] = -delta * unit_price
+            return changes
+        return {}
 
     def _require_item(self, item_id: int) -> Item:
         item = self.items.get(item_id)
@@ -807,6 +857,9 @@ class BackupService:
         return local_timestamp_for_filename(now=self.clock(), tz=self.tz)
 
     def create_backup(self, conn: sqlite3.Connection, dest_dir: Path) -> Path:
+        reasons = self.inspect_database(conn, SCHEMA_VERSION)
+        if reasons:
+            raise ValidationError("バックアップを作成できません: " + "、".join(reasons[:20]))
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / f"inventory_{self._timestamp()}.db"
@@ -829,14 +882,38 @@ class BackupService:
             if reasons:
                 return reasons
 
-            item_repository = ItemRepository(conn)
-            movement_repository = MovementRepository(conn)
-            for item_id, quantity, movement_total in item_repository.find_quantity_mismatches():
-                reasons.append(
-                    f"品目 {item_id} の在庫数が履歴合計と一致しません: "
-                    f"在庫 {quantity}、履歴合計 {movement_total}"
-                )
-            invalid_reversals = movement_repository.find_invalid_reversals()
+            # 型・範囲違反があると後続の数値検査が例外になるため、違反があればここで返す
+            limit_violations = find_limit_violations(conn)
+            if limit_violations:
+                return limit_violations
+
+            if version >= 3:
+                expected_aggregates = compute_aggregates(conn)
+                stored_row = conn.execute(
+                    "SELECT inbound_quantity, outbound_quantity, disposed_quantity, "
+                    "expenditure, disposal_amount FROM total_aggregates WHERE id = 1"
+                ).fetchone()
+                if stored_row is None:
+                    reasons.append("集計管理テーブルの初期レコードがありません")
+                else:
+                    columns = (
+                        "inbound_quantity",
+                        "outbound_quantity",
+                        "disposed_quantity",
+                        "expenditure",
+                        "disposal_amount",
+                    )
+                    for index, column in enumerate(columns):
+                        if (
+                            type(stored_row[index]) is not int
+                            or stored_row[index] != expected_aggregates[column]
+                        ):
+                            reasons.append(
+                                f"集計管理テーブルの {column} が履歴と一致しません: "
+                                f"保存値 {stored_row[index]!r}、履歴 {expected_aggregates[column]}"
+                            )
+
+            invalid_reversals = MovementRepository(conn).find_invalid_reversals()
             if invalid_reversals:
                 reasons.append("取り消し履歴が不正です: " + ", ".join(map(str, invalid_reversals)))
             reasons.extend(SettingsService(conn).validate_all())
@@ -871,10 +948,19 @@ class BackupService:
             if source_version > SCHEMA_VERSION:
                 raise InvalidBackupError((f"スキーマ版 {source_version} は新しすぎます",))
 
-            reasons = inspect_schema(source_conn, source_version)
-            reasons.extend(check_sqlite_integrity(source_conn))
+            reasons = self.inspect_database(source_conn, source_version)
             if reasons:
                 raise InvalidBackupError(tuple(reasons))
+            if source_version < SCHEMA_VERSION:
+                try:
+                    check_migration_path(source_version, SCHEMA_VERSION, MIGRATIONS)
+                    check_migration_prechecks(
+                        source_conn, source_version, SCHEMA_VERSION, MIGRATIONS
+                    )
+                except Exception as error:
+                    raise InvalidBackupError(
+                        (f"復元用データベースの移行に失敗しました (事前検査): {error}",)
+                    ) from error
 
             source_item_count = int(source_conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
             source_movement_count = int(
@@ -890,19 +976,9 @@ class BackupService:
 
             if source_version < SCHEMA_VERSION:
                 try:
-                    check_migration_path(source_version, SCHEMA_VERSION, MIGRATIONS)
                     migration_conn = connect(temp_path)
                     try:
-                        for target_version in range(source_version + 1, SCHEMA_VERSION + 1):
-                            with transaction(migration_conn):
-                                migration_conn.executescript(MIGRATIONS[target_version])
-                                migration_reasons = inspect_schema(migration_conn, target_version)
-                                if migration_reasons:
-                                    raise UnsupportedSchemaError(
-                                        "移行後のスキーマ検査に失敗しました: "
-                                        + "、".join(migration_reasons)
-                                    )
-                                migration_conn.execute(f"PRAGMA user_version = {target_version}")
+                        migrate_schema(migration_conn, source_version, SCHEMA_VERSION, MIGRATIONS)
                     finally:
                         migration_conn.close()
                 except Exception as error:

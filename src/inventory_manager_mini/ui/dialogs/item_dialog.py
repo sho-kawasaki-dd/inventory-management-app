@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QLocale, QUrl
 from PySide6.QtGui import QDesktopServices, QIntValidator
 from PySide6.QtWidgets import (
     QComboBox,
@@ -20,7 +20,12 @@ from PySide6.QtWidgets import (
 )
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import ItemUpdate, NewItem
+from inventory_manager_mini.core.models import (
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
+    ItemUpdate,
+    NewItem,
+)
 from inventory_manager_mini.core.services import validate_purchase_url
 from inventory_manager_mini.core.timeutil import local_date
 from inventory_manager_mini.ui.context import AppContext
@@ -39,6 +44,7 @@ class ItemDialog(QDialog):
         self.context = context
         self.item_id = item_id
         self.item = None
+        self._threshold_out_of_range: int | None = None
         self.setWindowTitle("品目の登録" if item_id is None else "品目の編集")
         self.setMinimumSize(620, 480)
 
@@ -103,7 +109,7 @@ class ItemDialog(QDialog):
         self.last_purchase_row: QLabel | None = None
         if self.item is None:
             self.initial_quantity_spin = QSpinBox(form_widget)
-            self.initial_quantity_spin.setRange(0, 2_147_483_647)
+            self.initial_quantity_spin.setRange(0, MAX_STOCK_QUANTITY)
             self.initial_quantity_row = self.initial_quantity_spin
             self.initial_staff_combo = QComboBox(form_widget)
             self.initial_staff_combo.addItem("選択してください", None)
@@ -119,11 +125,11 @@ class ItemDialog(QDialog):
             form.addRow("現在数量", self.quantity_label)
 
         self.threshold_spin = QSpinBox(form_widget)
-        self.threshold_spin.setRange(0, 2_147_483_647)
+        self.threshold_spin.setRange(0, MAX_STOCK_QUANTITY)
         self.threshold_spin.setValue(0)
         form.addRow("閾値", self.threshold_spin)
 
-        self.reorder_quantity_edit = self._integer_edit(1)
+        self.reorder_quantity_edit = self._integer_edit(1, MAX_STOCK_QUANTITY)
         form.addRow("推奨発注数", self.reorder_quantity_edit)
 
         purchasing_row = QWidget(form_widget)
@@ -145,7 +151,7 @@ class ItemDialog(QDialog):
 
         self.supplier_edit = QLineEdit(form_widget)
         form.addRow("仕入先", self.supplier_edit)
-        self.reference_price_edit = self._integer_edit(0)
+        self.reference_price_edit = self._integer_edit(0, MAX_UNIT_PRICE)
         form.addRow("参考価格", self.reference_price_edit)
         self.note_edit = QPlainTextEdit(form_widget)
         self.note_edit.setMaximumHeight(100)
@@ -171,9 +177,13 @@ class ItemDialog(QDialog):
         self.resize(760, 700)
 
     @staticmethod
-    def _integer_edit(minimum: int) -> QLineEdit:
+    def _integer_edit(minimum: int, maximum: int) -> QLineEdit:
         edit = QLineEdit()
-        edit.setValidator(QIntValidator(minimum, 2_147_483_647, edit))
+        locale = QLocale.c()
+        locale.setNumberOptions(locale.numberOptions() | QLocale.NumberOption.RejectGroupSeparator)
+        validator = QIntValidator(minimum, maximum, edit)
+        validator.setLocale(locale)
+        edit.setValidator(validator)
         edit.setMaximumWidth(220)
         return edit
 
@@ -238,7 +248,18 @@ class ItemDialog(QDialog):
         self.application_edit.setText(item.application or "")
         self.category_picker.set_current_category_id(item.category_id)
         self.location_combo.setCurrentIndex(self.location_combo.findData(item.location_id))
-        self.threshold_spin.setValue(item.reorder_threshold)
+        threshold = item.reorder_threshold
+        if not 0 <= threshold <= MAX_STOCK_QUANTITY:
+            self._threshold_out_of_range = threshold
+            spinbox_minimum = -(2**31)
+            spinbox_maximum = 2**31 - 1
+            if spinbox_minimum <= threshold <= spinbox_maximum:
+                self.threshold_spin.setRange(min(0, threshold), max(MAX_STOCK_QUANTITY, threshold))
+                self.threshold_spin.setValue(threshold)
+            else:
+                self.threshold_spin.setEnabled(False)
+        else:
+            self.threshold_spin.setValue(threshold)
         self.reorder_quantity_edit.setText(
             "" if item.reorder_quantity is None else str(item.reorder_quantity)
         )
@@ -272,7 +293,7 @@ class ItemDialog(QDialog):
             self.initial_quantity_spin.valueChanged.connect(self._validate)
         if self.initial_staff_combo is not None:
             self.initial_staff_combo.currentIndexChanged.connect(self._validate)
-        self.threshold_spin.valueChanged.connect(self._validate)
+        self.threshold_spin.valueChanged.connect(self._threshold_changed)
         self.reorder_quantity_edit.textChanged.connect(self._validate)
         self.purchaser_combo.currentIndexChanged.connect(self._validate)
         self.purchase_url_edit.textChanged.connect(self._validate)
@@ -286,6 +307,14 @@ class ItemDialog(QDialog):
         self.initial_staff_combo.setEnabled(enabled)
         if not enabled:
             self.initial_staff_combo.setCurrentIndex(0)
+
+    def _threshold_changed(self, value: int) -> None:
+        if 0 <= value <= MAX_STOCK_QUANTITY:
+            self._threshold_out_of_range = None
+            self.threshold_spin.setRange(0, MAX_STOCK_QUANTITY)
+        else:
+            self._threshold_out_of_range = value
+        self._validate()
 
     def _validate(self, *_args) -> None:
         messages: list[str] = []
@@ -307,6 +336,15 @@ class ItemDialog(QDialog):
             messages.append("カテゴリを選択してください")
         if self.purchaser_combo.currentData() is None:
             messages.append("発注主体を選択してください")
+        if self._threshold_out_of_range is not None:
+            messages.append(
+                f"閾値が 0〜{MAX_STOCK_QUANTITY:,} の範囲外です "
+                f"(現在値: {self._threshold_out_of_range})。範囲内の値に修正してください"
+            )
+        if not self._has_valid_optional_integer(self.reorder_quantity_edit):
+            messages.append("推奨発注数は 1〜1,000,000 の整数で指定してください")
+        if not self._has_valid_optional_integer(self.reference_price_edit):
+            messages.append("参考価格は 0〜10,000,000 の整数で指定してください")
         if self.item_id is None:
             assert self.initial_quantity_spin is not None
         if (
@@ -388,4 +426,13 @@ class ItemDialog(QDialog):
     @staticmethod
     def _optional_integer(edit: QLineEdit) -> int | None:
         text = edit.text().strip()
-        return None if not text else int(text)
+        if not text:
+            return None
+        value, valid = QLocale.c().toInt(text)
+        if not valid:
+            raise ValueError("整数を変換できません")
+        return value
+
+    @staticmethod
+    def _has_valid_optional_integer(edit: QLineEdit) -> bool:
+        return not edit.text() or edit.hasAcceptableInput()
