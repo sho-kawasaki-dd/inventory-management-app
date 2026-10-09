@@ -284,3 +284,16 @@ def test_find_limit_violations_skips_aggregation_after_numeric_violation(
     violations = find_limit_violations(seeded_conn)
 
     assert any("delta" in text for text in violations)
+
+
+def test_unchecked_constraints_restores_checks_after_an_exception(
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    with pytest.raises(RuntimeError), unchecked_constraints(seeded_conn):
+        assert seeded_conn.execute("PRAGMA ignore_check_constraints").fetchone() == (1,)
+        raise RuntimeError("body failure")
+
+    assert seeded_conn.execute("PRAGMA ignore_check_constraints").fetchone() == (0,)
+    with pytest.raises(sqlite3.IntegrityError):
+        _create_item_directly(seeded_conn)
+        seeded_conn.execute("UPDATE items SET quantity = -1")

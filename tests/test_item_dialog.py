@@ -16,6 +16,7 @@ from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
+from tests.conftest import unchecked_constraints
 
 
 @pytest.fixture
@@ -248,3 +249,177 @@ def test_numeric_inputs_match_business_limits_and_reject_group_separators(
     dialog.reference_price_edit.setText("1,000")
     assert not dialog.reference_price_edit.hasAcceptableInput()
     assert not _ok_button(dialog).isEnabled()
+
+
+@pytest.mark.parametrize("text", ["0", "1000001", "-1", "1,000", "abc"])
+def test_invalid_reorder_quantity_disables_ok(qtbot, dialog_context, text: str) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    _fill_required(dialog)
+    assert _ok_button(dialog).isEnabled()
+
+    dialog.reorder_quantity_edit.setText(text)
+
+    assert not _ok_button(dialog).isEnabled()
+    assert "推奨発注数" in dialog.error_label.text()
+    dialog.reorder_quantity_edit.setText("1")
+    assert _ok_button(dialog).isEnabled()
+
+
+def test_new_item_saves_values_at_the_business_limits(qtbot, dialog_context) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    _fill_required(dialog)
+    assert dialog.initial_quantity_spin is not None
+    assert dialog.initial_staff_combo is not None
+    dialog.initial_quantity_spin.setValue(MAX_STOCK_QUANTITY)
+    dialog.initial_staff_combo.setCurrentIndex(1)
+    dialog.threshold_spin.setValue(MAX_STOCK_QUANTITY)
+    dialog.reorder_quantity_edit.setText(str(MAX_STOCK_QUANTITY))
+    dialog.reference_price_edit.setText(str(MAX_UNIT_PRICE))
+    assert _ok_button(dialog).isEnabled()
+
+    dialog._save()
+
+    item = dialog_context.inventory.list_items(ItemFilter())[0]
+    assert (
+        item.quantity,
+        item.reorder_threshold,
+        item.reorder_quantity,
+        item.reference_price,
+    ) == (MAX_STOCK_QUANTITY, MAX_STOCK_QUANTITY, MAX_STOCK_QUANTITY, MAX_UNIT_PRICE)
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_edit_dialog_keeps_values_at_the_business_limits_without_rounding(
+    qtbot, dialog_context
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name="上限品目",
+            category_id=1,
+            initial_quantity=MAX_STOCK_QUANTITY,
+            initial_staff_id=1,
+            reorder_threshold=MAX_STOCK_QUANTITY,
+            reorder_quantity=MAX_STOCK_QUANTITY,
+            reference_price=MAX_UNIT_PRICE,
+        )
+    )
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert dialog.quantity_label is not None
+    assert dialog.quantity_label.text() == f"{MAX_STOCK_QUANTITY:,} 個"
+    assert dialog.threshold_spin.value() == MAX_STOCK_QUANTITY
+    assert dialog.reorder_quantity_edit.text() == str(MAX_STOCK_QUANTITY)
+    assert dialog.reference_price_edit.text() == str(MAX_UNIT_PRICE)
+    assert _ok_button(dialog).isEnabled()
+
+    dialog.name_edit.setText("上限品目(改)")
+    dialog._save()
+
+    saved = dialog_context.inventory.get_item(item.id)
+    assert saved is not None
+    assert saved.name == "上限品目(改)"
+    assert (
+        saved.quantity,
+        saved.reorder_threshold,
+        saved.reorder_quantity,
+        saved.reference_price,
+    ) == (MAX_STOCK_QUANTITY, MAX_STOCK_QUANTITY, MAX_STOCK_QUANTITY, MAX_UNIT_PRICE)
+
+
+def test_edit_dialog_shows_out_of_range_reference_price_without_rounding(
+    qtbot, dialog_context, seeded_conn
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="異常価格", category_id=1)
+    )
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.execute(
+            "UPDATE items SET reference_price = ? WHERE id = ?", (MAX_UNIT_PRICE + 1, item.id)
+        )
+
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert dialog.reference_price_edit.text() == str(MAX_UNIT_PRICE + 1)
+    assert not _ok_button(dialog).isEnabled()
+    assert "参考価格" in dialog.error_label.text()
+    dialog._save()
+    assert dialog_context.inventory.get_item(item.id).reference_price == MAX_UNIT_PRICE + 1  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("threshold", [-1, MAX_STOCK_QUANTITY + 1])
+def test_edit_dialog_blocks_and_preserves_out_of_range_threshold(
+    qtbot, dialog_context, seeded_conn, threshold: int
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="異常閾値", category_id=1)
+    )
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.execute(
+            "UPDATE items SET reorder_threshold = ? WHERE id = ?", (threshold, item.id)
+        )
+
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert dialog.threshold_spin.value() == threshold
+    assert not _ok_button(dialog).isEnabled()
+    assert f"現在値: {threshold}" in dialog.error_label.text()
+    dialog._save()
+    assert dialog_context.inventory.get_item(item.id).reorder_threshold == threshold  # type: ignore[union-attr]
+    assert dialog.result() == dialog.DialogCode.Rejected
+
+
+def test_edit_dialog_enables_save_after_correcting_out_of_range_threshold(
+    qtbot, dialog_context, seeded_conn
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="異常閾値", category_id=1)
+    )
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.execute(
+            "UPDATE items SET reorder_threshold = ? WHERE id = ?",
+            (MAX_STOCK_QUANTITY + 1, item.id),
+        )
+
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+    assert not _ok_button(dialog).isEnabled()
+
+    dialog.threshold_spin.setValue(MAX_STOCK_QUANTITY)
+
+    assert _ok_button(dialog).isEnabled()
+    assert "閾値が" not in dialog.error_label.text()
+    dialog.name_edit.setText("閾値修正済み")
+    dialog._save()
+    saved = dialog_context.inventory.get_item(item.id)
+    assert saved is not None
+    assert saved.name == "閾値修正済み"
+    assert saved.reorder_threshold == MAX_STOCK_QUANTITY
+
+
+def test_edit_dialog_warns_when_threshold_exceeds_spinbox_integer_range(
+    qtbot, dialog_context, seeded_conn
+) -> None:
+    threshold = 2**40
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="巨大閾値", category_id=1)
+    )
+    with unchecked_constraints(seeded_conn):
+        seeded_conn.execute(
+            "UPDATE items SET reorder_threshold = ? WHERE id = ?", (threshold, item.id)
+        )
+
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert not dialog.threshold_spin.isEnabled()
+    assert not _ok_button(dialog).isEnabled()
+    assert f"現在値: {threshold}" in dialog.error_label.text()
+    dialog._save()
+    assert dialog_context.inventory.get_item(item.id).reorder_threshold == threshold  # type: ignore[union-attr]

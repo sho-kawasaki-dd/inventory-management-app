@@ -44,6 +44,7 @@ class ItemDialog(QDialog):
         self.context = context
         self.item_id = item_id
         self.item = None
+        self._threshold_out_of_range: int | None = None
         self.setWindowTitle("品目の登録" if item_id is None else "品目の編集")
         self.setMinimumSize(620, 480)
 
@@ -247,7 +248,18 @@ class ItemDialog(QDialog):
         self.application_edit.setText(item.application or "")
         self.category_picker.set_current_category_id(item.category_id)
         self.location_combo.setCurrentIndex(self.location_combo.findData(item.location_id))
-        self.threshold_spin.setValue(item.reorder_threshold)
+        threshold = item.reorder_threshold
+        if not 0 <= threshold <= MAX_STOCK_QUANTITY:
+            self._threshold_out_of_range = threshold
+            spinbox_minimum = -(2**31)
+            spinbox_maximum = 2**31 - 1
+            if spinbox_minimum <= threshold <= spinbox_maximum:
+                self.threshold_spin.setRange(min(0, threshold), max(MAX_STOCK_QUANTITY, threshold))
+                self.threshold_spin.setValue(threshold)
+            else:
+                self.threshold_spin.setEnabled(False)
+        else:
+            self.threshold_spin.setValue(threshold)
         self.reorder_quantity_edit.setText(
             "" if item.reorder_quantity is None else str(item.reorder_quantity)
         )
@@ -281,7 +293,7 @@ class ItemDialog(QDialog):
             self.initial_quantity_spin.valueChanged.connect(self._validate)
         if self.initial_staff_combo is not None:
             self.initial_staff_combo.currentIndexChanged.connect(self._validate)
-        self.threshold_spin.valueChanged.connect(self._validate)
+        self.threshold_spin.valueChanged.connect(self._threshold_changed)
         self.reorder_quantity_edit.textChanged.connect(self._validate)
         self.purchaser_combo.currentIndexChanged.connect(self._validate)
         self.purchase_url_edit.textChanged.connect(self._validate)
@@ -295,6 +307,14 @@ class ItemDialog(QDialog):
         self.initial_staff_combo.setEnabled(enabled)
         if not enabled:
             self.initial_staff_combo.setCurrentIndex(0)
+
+    def _threshold_changed(self, value: int) -> None:
+        if 0 <= value <= MAX_STOCK_QUANTITY:
+            self._threshold_out_of_range = None
+            self.threshold_spin.setRange(0, MAX_STOCK_QUANTITY)
+        else:
+            self._threshold_out_of_range = value
+        self._validate()
 
     def _validate(self, *_args) -> None:
         messages: list[str] = []
@@ -316,6 +336,11 @@ class ItemDialog(QDialog):
             messages.append("カテゴリを選択してください")
         if self.purchaser_combo.currentData() is None:
             messages.append("発注主体を選択してください")
+        if self._threshold_out_of_range is not None:
+            messages.append(
+                f"閾値が 0〜{MAX_STOCK_QUANTITY:,} の範囲外です "
+                f"(現在値: {self._threshold_out_of_range})。範囲内の値に修正してください"
+            )
         if not self._has_valid_optional_integer(self.reorder_quantity_edit):
             messages.append("推奨発注数は 1〜1,000,000 の整数で指定してください")
         if not self._has_valid_optional_integer(self.reference_price_edit):
