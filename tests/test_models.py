@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from inventory_manager_mini.core.models import (
+    REASON_LABELS,
     Category,
     Client,
     DashboardRow,
@@ -147,6 +148,11 @@ def test_dashboard_model_and_enum_values() -> None:
         "disposed_quantity",
         "disposal_amount",
     }
+
+
+def test_reason_labels_cover_every_reason() -> None:
+    assert set(REASON_LABELS) == set(Reason)
+    assert list(REASON_LABELS.values()) == ["入庫", "出庫", "返品", "廃棄", "棚卸"]
 
 
 def test_model_instances_are_immutable() -> None:

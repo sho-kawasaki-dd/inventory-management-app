@@ -203,6 +203,10 @@ def test_item_repository_quantity_update_and_integrity_errors(
         repo.add_quantity(1, -2)
     assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
 
+    repository_conn.execute("UPDATE items SET quantity = 1000000 WHERE id = 1")
+    with pytest.raises(ValidationError, match="在庫数が上限"):
+        repo.add_quantity(1, 1)
+
     with pytest.raises(ValidationError) as duplicate:
         _insert_repository_item(repo, code="ST-0001")
     assert isinstance(duplicate.value.__cause__, sqlite3.IntegrityError)

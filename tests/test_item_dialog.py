@@ -1,10 +1,16 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import ItemFilter, NewItem
+from inventory_manager_mini.core.models import (
+    MAX_STOCK_QUANTITY,
+    MAX_UNIT_PRICE,
+    ItemFilter,
+    NewItem,
+)
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
@@ -214,3 +220,31 @@ def test_reference_price_zero_is_distinct_from_empty(qtbot, dialog_context) -> N
 
     items = dialog_context.inventory.list_items(ItemFilter())
     assert [item.reference_price for item in items] == [0, None]
+
+
+def test_numeric_inputs_match_business_limits_and_reject_group_separators(
+    qtbot, dialog_context
+) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+
+    assert dialog.initial_quantity_spin is not None
+    assert dialog.initial_quantity_spin.maximum() == MAX_STOCK_QUANTITY
+    assert dialog.threshold_spin.maximum() == MAX_STOCK_QUANTITY
+    reorder_validator = dialog.reorder_quantity_edit.validator()
+    reference_price_validator = dialog.reference_price_edit.validator()
+    assert isinstance(reorder_validator, QIntValidator)
+    assert isinstance(reference_price_validator, QIntValidator)
+    assert reorder_validator.top() == MAX_STOCK_QUANTITY
+    assert reference_price_validator.top() == MAX_UNIT_PRICE
+    _fill_required(dialog)
+
+    dialog.reference_price_edit.setText("10000001")
+    assert not _ok_button(dialog).isEnabled()
+    assert "参考価格" in dialog.error_label.text()
+    dialog.reference_price_edit.clear()
+    assert _ok_button(dialog).isEnabled()
+
+    dialog.reference_price_edit.setText("1,000")
+    assert not dialog.reference_price_edit.hasAcceptableInput()
+    assert not _ok_button(dialog).isEnabled()

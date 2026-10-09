@@ -110,9 +110,15 @@ def test_category_prefix_check(schema_conn: sqlite3.Connection, prefix: str) -> 
     [
         {"unit": "箱"},
         {"quantity": -1},
+        {"quantity": 1_000_001},
+        {"quantity": 1.5},
         {"reorder_threshold": -1},
+        {"reorder_threshold": 1_000_001},
         {"reorder_quantity": 0},
+        {"reorder_quantity": 1_000_001},
         {"reference_price": -1},
+        {"reference_price": 10_000_001},
+        {"reference_price": 1.5},
     ],
 )
 def test_item_checks_reject_invalid_values(
@@ -126,6 +132,45 @@ def test_item_checks_reject_invalid_values(
 def test_movement_unit_price_check(schema_conn: sqlite3.Connection, unit_price: int) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         _insert_movement(schema_conn, unit_price=unit_price)
+
+
+@pytest.mark.parametrize(
+    ("reason", "delta", "unit_price"),
+    [
+        ("in", 1_000_001, 0),
+        ("in", 1.5, 0),
+        ("in", 1, 10_000_001),
+        ("in", 1, 1.5),
+        ("out", -10_001, 10_000),
+    ],
+)
+def test_movement_checks_reject_out_of_range_or_non_integer_values(
+    schema_conn: sqlite3.Connection,
+    reason: str,
+    delta: int,
+    unit_price: int,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_movement(schema_conn, reason=reason, delta=delta, unit_price=unit_price)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("inbound_quantity", 1_000_000_000_001),
+        ("outbound_quantity", 1.5),
+        ("disposed_quantity", -1),
+        ("expenditure", 1_000_000_000_001),
+        ("disposal_amount", 1.5),
+    ],
+)
+def test_total_aggregate_checks_reject_invalid_values(
+    schema_conn: sqlite3.Connection,
+    column: str,
+    value: int,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(f"UPDATE total_aggregates SET {column} = ? WHERE id = 1", (value,))
 
 
 @pytest.mark.parametrize(

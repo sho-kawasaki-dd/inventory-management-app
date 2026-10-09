@@ -174,9 +174,11 @@ def test_dashboard_excludes_returns_adjustments_and_reversed_unpriced_issues(
     priced_id = _create_item(inventory, name="単価あり", reference_price=50)
     inventory.issue(priced_id, 1, 2, "費用")
     inventory.dispose(priced_id, 1, 1)
+    zero_price_id = _create_item(inventory, name="0円", reference_price=0)
+    inventory.issue(zero_price_id, 1, 1, "0円費用")
 
     row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
-    assert row.outbound_quantity == 4
+    assert row.outbound_quantity == 5
     assert row.expenditure == 100
     assert row.unpriced_issue_count == 1
     assert row.disposed_quantity == 1

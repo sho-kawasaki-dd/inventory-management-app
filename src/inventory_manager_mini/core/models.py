@@ -13,6 +13,20 @@ class Reason(StrEnum):
     ADJUST = "adjust"
 
 
+REASON_LABELS: dict[Reason, str] = {
+    Reason.IN: "入庫",
+    Reason.OUT: "出庫",
+    Reason.RETURN: "返品",
+    Reason.DISPOSE: "廃棄",
+    Reason.ADJUST: "棚卸",
+}
+
+MAX_STOCK_QUANTITY = 1_000_000
+MAX_UNIT_PRICE = 10_000_000
+MAX_MOVEMENT_AMOUNT = 100_000_000
+MAX_AGGREGATE_VALUE = 1_000_000_000_000
+
+
 @dataclass(frozen=True, slots=True)
 class Client:
     id: int

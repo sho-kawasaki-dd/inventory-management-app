@@ -15,6 +15,7 @@ from inventory_manager_mini.db import backup, migrations
 from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
 from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from tests.conftest import unchecked_constraints
 
 
 def _create_inventory_database(
@@ -496,6 +497,48 @@ def test_prepare_restore_rejects_failed_temporary_migration(
         BackupService().prepare_restore(source_path)
 
     assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_backup_and_restore_reject_numeric_corruption_without_changing_source(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "corrupt.db"
+    _create_inventory_database(source_path, "異常品目")
+    conn = connect(source_path)
+    try:
+        with unchecked_constraints(conn):
+            conn.execute("UPDATE items SET quantity = 1.5 WHERE id = 1")
+    finally:
+        conn.close()
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    readonly_conn = connect_readonly(source_path)
+    try:
+        reasons = BackupService().inspect_database(readonly_conn, SCHEMA_VERSION)
+        assert any(
+            "quantity" in reason and "整数" in reason or "quantity" in reason for reason in reasons
+        )
+        with pytest.raises(ValidationError, match="バックアップを作成できません"):
+            BackupService().create_backup(readonly_conn, tmp_path / "backups")
+    finally:
+        readonly_conn.close()
+
+    with pytest.raises(InvalidBackupError):
+        BackupService().prepare_restore(source_path)
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+    assert not (tmp_path / "backups").exists()
+
+
+def test_backup_rejects_aggregate_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "aggregate-mismatch.db"
+    _create_inventory_database(path, "品目")
+    conn = connect(path)
+    conn.execute("UPDATE total_aggregates SET expenditure = 1 WHERE id = 1")
+    try:
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
+        assert any("expenditure" in reason and "一致しません" in reason for reason in reasons)
+    finally:
+        conn.close()
 
 
 def test_cancel_removes_prepared_restore_directory(tmp_path: Path) -> None:

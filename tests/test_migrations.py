@@ -17,6 +17,7 @@ from inventory_manager_mini.db.connection import connect, connect_memory
 from inventory_manager_mini.db.migrations import (
     SCHEMA_SPECS,
     SCHEMA_VERSION,
+    MigrationStep,
     check_migration_path,
     create_schema,
     inspect_schema,
@@ -43,11 +44,19 @@ def _create_database(
 def _make_version_three_spec() -> migrations.SchemaSpec:
     conn = connect_memory()
     try:
-        conn.executescript(_schema_sql())
+        conn.executescript(migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL)
         conn.execute("ALTER TABLE settings ADD COLUMN extra TEXT")
         return migrations._read_schema_spec(conn)
     finally:
         conn.close()
+
+
+def _create_version_two_database(path: Path) -> None:
+    _create_database(
+        path,
+        schema_sql=migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL,
+        version=2,
+    )
 
 
 def test_new_database_is_created_and_persists_schema(tmp_path: Path) -> None:
@@ -79,6 +88,96 @@ def test_version_one_database_migrates_latest_purchase_index(tmp_path: Path) -> 
             "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
             ("idx_movements_item_purchase",),
         ).fetchone() == ("idx_movements_item_purchase",)
+    finally:
+        conn.close()
+
+
+def test_version_two_rebuild_preserves_rows_and_initializes_aggregates(tmp_path: Path) -> None:
+    path = tmp_path / "version-two.db"
+    _create_version_two_database(path)
+    conn = connect(path)
+    conn.executescript(
+        """INSERT INTO clients (id, name) VALUES (1, '利用者');
+        INSERT INTO purchasers (id, name) VALUES (1, '発注主体');
+        INSERT INTO staff (id, name) VALUES (1, '担当者');
+        INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ');
+        INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity,
+            reference_price) VALUES (7, 1, 1, 'EQ-0001', '品目', 1, 4, 200);
+        INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id,
+            reason, delta, unit_price) VALUES (11, 7, 1, 1, 1, 'in', 5, 200);
+        INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id,
+            reason, delta, unit_price, used_for) VALUES (12, 7, 1, 1, 1, 'out', -1, 200, '用途');"""
+    )
+    conn.close()
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261009_120000")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (3,)
+        assert migrated.execute("PRAGMA foreign_keys").fetchone() == (1,)
+        assert inspect_schema(migrated, SCHEMA_VERSION) == []
+        assert migrated.execute("SELECT id, quantity FROM items").fetchone() == (7, 4)
+        assert migrated.execute("SELECT id FROM stock_movements ORDER BY id").fetchall() == [
+            (11,),
+            (12,),
+        ]
+        assert migrated.execute(
+            "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+        ).fetchone() == (5, 1, 200)
+    finally:
+        migrated.close()
+
+
+def test_migration_precheck_rejects_legacy_limit_violation_before_backup(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-invalid.db"
+    _create_version_two_database(path)
+    conn = connect(path)
+    conn.executescript(
+        """INSERT INTO clients (id, name) VALUES (1, '利用者');
+        INSERT INTO purchasers (id, name) VALUES (1, '発注主体');
+        INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ');
+        INSERT INTO items (id, client_id, purchaser_id, code, name, category_id,
+            reference_price) VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 10000001);"""
+    )
+    conn.close()
+
+    with pytest.raises(MigrationError, match="データベースは変更されていません") as error:
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
+    assert error.value.backup_path is None
+    assert list((tmp_path / "backups").glob("pre-migrate_*.db")) == []
+    verify = sqlite3.connect(path)
+    try:
+        assert verify.execute("PRAGMA user_version").fetchone() == (2,)
+        assert verify.execute("SELECT reference_price FROM items").fetchone() == (10_000_001,)
+    finally:
+        verify.close()
+
+
+def test_rebuild_migration_restores_foreign_keys_after_failure() -> None:
+    conn = connect_memory()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL)
+
+    def fail_after_ddl(connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TABLE partial_rebuild (id INTEGER)")
+        raise RuntimeError("rebuild failure")
+
+    try:
+        with pytest.raises(RuntimeError, match="rebuild failure"):
+            migrations.migrate_schema(
+                conn,
+                2,
+                3,
+                {3: MigrationStep(fail_after_ddl, rebuilds_tables=True)},
+                {**SCHEMA_SPECS, 3: SCHEMA_SPECS[2]},
+            )
+        assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
+        assert conn.execute("PRAGMA user_version").fetchone() == (0,)
+        assert (
+            conn.execute("SELECT name FROM sqlite_master WHERE name = 'partial_rebuild'").fetchone()
+            is None
+        )
     finally:
         conn.close()
 
@@ -231,7 +330,7 @@ def test_normalize_sql_preserves_literals_and_quoted_identifiers() -> None:
     )
     assert normalize_sql(original) == normalize_sql(formatted)
     assert normalize_sql(original) != normalize_sql(original.replace("'A  --", "'a  --"))
-    assert normalize_sql(original) != normalize_sql(original.replace('"MiXeD"', '"mixed"'))
+    assert normalize_sql(original) == normalize_sql(original.replace('"MiXeD"', '"mixed"'))
 
 
 def test_normalize_sql_removes_comments_without_rewriting_literals() -> None:
@@ -248,7 +347,7 @@ def test_check_migration_path_requires_every_intermediate_version() -> None:
 
 def test_migrates_one_version_and_creates_timestamped_backup(tmp_path: Path) -> None:
     path = tmp_path / "inventory.db"
-    _create_database(path)
+    _create_version_two_database(path)
     source = connect(path)
     source.execute("UPDATE settings SET value = '9' WHERE key = 'fiscal_year_start_month'")
     source.close()
@@ -288,7 +387,7 @@ def test_migrates_one_version_and_creates_timestamped_backup(tmp_path: Path) -> 
 
 def test_migration_backup_collision_preserves_existing_files(tmp_path: Path) -> None:
     path = tmp_path / "inventory.db"
-    _create_database(path)
+    _create_version_two_database(path)
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
     backup = backup_dir / "pre-migrate_v2_fixed.db"
@@ -315,7 +414,7 @@ def test_migration_backup_collision_preserves_existing_files(tmp_path: Path) -> 
 
 def test_migration_sql_failure_rolls_back_and_keeps_backup(tmp_path: Path) -> None:
     path = tmp_path / "inventory.db"
-    _create_database(path)
+    _create_version_two_database(path)
     source = connect(path)
     source.execute("UPDATE settings SET value = '9' WHERE key = 'fiscal_year_start_month'")
     source.close()
@@ -348,7 +447,7 @@ def test_migration_sql_failure_rolls_back_and_keeps_backup(tmp_path: Path) -> No
 
 def test_migration_schema_failure_rolls_back(tmp_path: Path) -> None:
     path = tmp_path / "inventory.db"
-    _create_database(path)
+    _create_version_two_database(path)
     with pytest.raises(MigrationError, match="検査に失敗") as error:
         open_database(
             path,
@@ -371,7 +470,7 @@ def test_unsupported_old_version_and_missing_migration_path_are_rejected(
     tmp_path: Path,
 ) -> None:
     old_path = tmp_path / "old.db"
-    _create_database(old_path)
+    _create_version_two_database(old_path)
     with pytest.raises(UnsupportedSchemaError, match="サポート"):
         open_database(
             old_path,

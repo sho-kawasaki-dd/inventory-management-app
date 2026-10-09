@@ -11,6 +11,7 @@ from pathlib import Path
 from inventory_manager_mini.core.services import BackupService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now
 from inventory_manager_mini.db.connection import transaction
+from inventory_manager_mini.db.integrity import compute_aggregates
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 
 
@@ -250,6 +251,21 @@ def _generate_movements(
     conn.executemany(
         "UPDATE items SET quantity = ? WHERE id = ?",
         [(totals[item_id], item_id) for item_id in range(1, item_count + 1)],
+    )
+    aggregates = compute_aggregates(conn)
+    conn.execute(
+        "UPDATE total_aggregates SET inbound_quantity = ?, outbound_quantity = ?, "
+        "disposed_quantity = ?, expenditure = ?, disposal_amount = ? WHERE id = 1",
+        tuple(
+            aggregates[column]
+            for column in (
+                "inbound_quantity",
+                "outbound_quantity",
+                "disposed_quantity",
+                "expenditure",
+                "disposal_amount",
+            )
+        ),
     )
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -13,13 +14,23 @@ from inventory_manager_mini.core.errors import (
 )
 from inventory_manager_mini.db.backup import copy_database
 from inventory_manager_mini.db.connection import connect, transaction
+from inventory_manager_mini.db.integrity import compute_aggregates, find_limit_violations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MIN_SUPPORTED_SCHEMA_VERSION = 1
-MIGRATIONS: dict[int, str] = {
-    2: "CREATE INDEX idx_movements_item_purchase ON stock_movements "
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationStep:
+    apply: str | Callable[[sqlite3.Connection], None]
+    precheck: Callable[[sqlite3.Connection], list[str]] | None = None
+    rebuilds_tables: bool = False
+
+
+_MIGRATION_V2_SQL = (
+    "CREATE INDEX idx_movements_item_purchase ON stock_movements "
     "(item_id, moved_at DESC, id DESC) WHERE reason = 'in' AND reversal_of IS NULL;"
-}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,9 +281,161 @@ def _schema_spec_from_ddl(ddl: str) -> SchemaSpec:
         conn.close()
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    totals = compute_aggregates(conn)
+    conn.execute("DROP TRIGGER IF EXISTS trg_items_updated_at")
+    conn.execute(
+        """CREATE TABLE items_new (
+                    id INTEGER PRIMARY KEY,
+                    client_id INTEGER NOT NULL REFERENCES clients(id),
+                    purchaser_id INTEGER NOT NULL REFERENCES purchasers(id),
+                    code TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    category_id INTEGER NOT NULL REFERENCES categories(id),
+                    location_id INTEGER REFERENCES locations(id),
+                    unit TEXT NOT NULL DEFAULT '個' CHECK (unit = '個'),
+                    quantity INTEGER NOT NULL DEFAULT 0
+                        CHECK (typeof(quantity) = 'integer' AND quantity BETWEEN 0 AND 1000000),
+                    reorder_threshold INTEGER NOT NULL DEFAULT 0
+                        CHECK (
+                            typeof(reorder_threshold) = 'integer'
+                            AND reorder_threshold BETWEEN 0 AND 1000000
+                        ),
+                    reorder_quantity INTEGER CHECK (
+                        reorder_quantity IS NULL OR
+                        (
+                            typeof(reorder_quantity) = 'integer'
+                            AND reorder_quantity BETWEEN 1 AND 1000000
+                        )
+                    ),
+                    purchase_url TEXT,
+                    supplier TEXT,
+                    manufacturer_part_number TEXT,
+                    application TEXT,
+                    reference_price INTEGER CHECK (
+                        reference_price IS NULL OR
+                        (
+                            typeof(reference_price) = 'integer'
+                            AND reference_price BETWEEN 0 AND 10000000
+                        )
+                    ),
+                    note TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )"""
+    )
+    conn.execute(
+        "INSERT INTO items_new SELECT id, client_id, purchaser_id, code, name, category_id, "
+        "location_id, unit, quantity, reorder_threshold, reorder_quantity, purchase_url, "
+        "supplier, manufacturer_part_number, application, reference_price, note, is_active, "
+        "created_at, updated_at FROM items"
+    )
+    conn.execute("DROP TABLE items")
+    conn.execute("ALTER TABLE items_new RENAME TO items")
+
+    conn.execute(
+        """CREATE TABLE stock_movements_new (
+                    id INTEGER PRIMARY KEY,
+                    item_id INTEGER NOT NULL REFERENCES items(id),
+                    client_id INTEGER NOT NULL REFERENCES clients(id),
+                    purchaser_id INTEGER NOT NULL REFERENCES purchasers(id),
+                    staff_id INTEGER NOT NULL REFERENCES staff(id),
+                    reason TEXT NOT NULL CHECK (reason IN ('in','out','return','dispose','adjust')),
+                    delta INTEGER NOT NULL CHECK (
+                        typeof(delta) = 'integer' AND delta BETWEEN -1000000 AND 1000000
+                    ),
+                    unit_price INTEGER CHECK (
+                        unit_price IS NULL OR
+                        (typeof(unit_price) = 'integer' AND unit_price BETWEEN 0 AND 10000000)
+                    ),
+                    used_for TEXT,
+                    reversal_of INTEGER UNIQUE REFERENCES stock_movements(id),
+                    note TEXT,
+                    moved_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    CHECK (
+                        reversal_of IS NOT NULL
+                        OR (reason = 'in' AND delta > 0)
+                        OR (reason IN ('out','return','dispose') AND delta < 0)
+                        OR reason = 'adjust'
+                    ),
+                    CHECK (
+                        reason NOT IN ('out','dispose') OR unit_price IS NULL
+                        OR abs(delta) * unit_price <= 100000000
+                    )
+                )"""
+    )
+    conn.execute(
+        "INSERT INTO stock_movements_new SELECT id, item_id, client_id, purchaser_id, staff_id, "
+        "reason, delta, unit_price, used_for, reversal_of, note, moved_at FROM stock_movements"
+    )
+    conn.execute("DROP TABLE stock_movements")
+    conn.execute("ALTER TABLE stock_movements_new RENAME TO stock_movements")
+    conn.execute("CREATE INDEX idx_movements_item ON stock_movements(item_id, moved_at)")
+    conn.execute("CREATE INDEX idx_movements_client_date ON stock_movements(client_id, moved_at)")
+    conn.execute(
+        "CREATE INDEX idx_movements_purchaser_date ON stock_movements(purchaser_id, moved_at)"
+    )
+    conn.execute(_MIGRATION_V2_SQL)
+    conn.execute(
+        """CREATE TRIGGER trg_items_updated_at AFTER UPDATE ON items
+                WHEN NEW.updated_at = OLD.updated_at
+                BEGIN
+                    UPDATE items SET updated_at = datetime('now') WHERE id = NEW.id;
+                END"""
+    )
+    conn.execute(
+        """CREATE TABLE total_aggregates (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    inbound_quantity INTEGER NOT NULL DEFAULT 0 CHECK (
+                        typeof(inbound_quantity) = 'integer'
+                        AND inbound_quantity BETWEEN 0 AND 1000000000000
+                    ),
+                    outbound_quantity INTEGER NOT NULL DEFAULT 0 CHECK (
+                        typeof(outbound_quantity) = 'integer'
+                        AND outbound_quantity BETWEEN 0 AND 1000000000000
+                    ),
+                    disposed_quantity INTEGER NOT NULL DEFAULT 0 CHECK (
+                        typeof(disposed_quantity) = 'integer'
+                        AND disposed_quantity BETWEEN 0 AND 1000000000000
+                    ),
+                    expenditure INTEGER NOT NULL DEFAULT 0 CHECK (
+                        typeof(expenditure) = 'integer'
+                        AND expenditure BETWEEN 0 AND 1000000000000
+                    ),
+                    disposal_amount INTEGER NOT NULL DEFAULT 0 CHECK (
+                        typeof(disposal_amount) = 'integer'
+                        AND disposal_amount BETWEEN 0 AND 1000000000000
+                    )
+                )"""
+    )
+    conn.execute(
+        "INSERT INTO total_aggregates (id, inbound_quantity, outbound_quantity, "
+        "disposed_quantity, expenditure, disposal_amount) VALUES (1, ?, ?, ?, ?, ?)",
+        tuple(
+            totals[column]
+            for column in (
+                "inbound_quantity",
+                "outbound_quantity",
+                "disposed_quantity",
+                "expenditure",
+                "disposal_amount",
+            )
+        ),
+    )
+
+
+MIGRATIONS: dict[int, MigrationStep] = {
+    2: MigrationStep(_MIGRATION_V2_SQL),
+    3: MigrationStep(_migrate_v2_to_v3, find_limit_violations, rebuilds_tables=True),
+}
+
 SCHEMA_SPECS: dict[int, SchemaSpec] = {
     1: _schema_spec_from_ddl(_SCHEMA_V1_DDL),
-    2: _schema_spec_from_ddl(_SCHEMA_V1_DDL + "\n" + MIGRATIONS[2]),
+    2: _schema_spec_from_ddl(_SCHEMA_V1_DDL + "\n" + _MIGRATION_V2_SQL),
+    3: _schema_spec_from_ddl(
+        files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
+    ),
 }
 
 
@@ -307,7 +470,15 @@ def normalize_sql(sql: str) -> str:
                     position += 1
                     break
                 position += 1
-            tokens.append(sql[start:position])
+            token = sql[start:position]
+            if char == '"':
+                identifier = token[1:-1].replace('""', '"')
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+                    tokens.append(identifier.lower())
+                else:
+                    tokens.append(token)
+            else:
+                tokens.append(token)
             continue
 
         if char.isalnum() or char in {"_", "$"} or ord(char) > 127:
@@ -406,7 +577,7 @@ def inspect_schema(
 def check_migration_path(
     from_version: int,
     to_version: int,
-    migrations: dict[int, str] = MIGRATIONS,
+    migrations: Mapping[int, MigrationStep | str] = MIGRATIONS,
 ) -> None:
     if from_version < 0 or to_version < from_version:
         raise UnsupportedSchemaError("不正なマイグレーション経路です")
@@ -417,6 +588,66 @@ def check_migration_path(
         raise UnsupportedSchemaError(
             "マイグレーション経路がありません: " + ", ".join(map(str, missing))
         )
+
+
+def _migration_step(value: MigrationStep | str) -> MigrationStep:
+    return value if isinstance(value, MigrationStep) else MigrationStep(value)
+
+
+def check_migration_prechecks(
+    conn: sqlite3.Connection,
+    from_version: int,
+    to_version: int,
+    migrations: Mapping[int, MigrationStep | str] = MIGRATIONS,
+) -> None:
+    violations: list[str] = []
+    for target_version in range(from_version + 1, to_version + 1):
+        precheck = _migration_step(migrations[target_version]).precheck
+        if precheck is not None:
+            violations.extend(precheck(conn))
+    if violations:
+        details = "、".join(violations[:20])
+        if len(violations) > 20:
+            details += f"、ほか {len(violations) - 20} 件"
+        raise MigrationError(
+            f"移行前検査に失敗しました: {details}。データベースは変更されていません"
+        )
+
+
+def migrate_schema(
+    conn: sqlite3.Connection,
+    from_version: int,
+    to_version: int,
+    migrations: Mapping[int, MigrationStep | str] = MIGRATIONS,
+    specs: dict[int, SchemaSpec] = SCHEMA_SPECS,
+) -> None:
+    check_migration_path(from_version, to_version, migrations)
+    for target_version in range(from_version + 1, to_version + 1):
+        step = _migration_step(migrations[target_version])
+        if step.rebuilds_tables:
+            conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with transaction(conn):
+                if isinstance(step.apply, str):
+                    conn.executescript(step.apply)
+                else:
+                    step.apply(conn)
+                if step.rebuilds_tables:
+                    foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+                    if foreign_key_errors:
+                        raise UnsupportedSchemaError(
+                            "外部キー検査に失敗しました: "
+                            + ", ".join(str(row) for row in foreign_key_errors[:20])
+                        )
+                reasons = inspect_schema(conn, target_version, specs)
+                if reasons:
+                    raise UnsupportedSchemaError(
+                        f"スキーマ版 {target_version} の検査に失敗しました: " + "、".join(reasons)
+                    )
+                _set_user_version(conn, target_version)
+        finally:
+            if step.rebuilds_tables:
+                conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _set_user_version(conn: sqlite3.Connection, version: int) -> None:
@@ -470,7 +701,7 @@ def open_database(
     backup_timestamp: Callable[[], str],
     schema_version: int = SCHEMA_VERSION,
     min_supported: int = MIN_SUPPORTED_SCHEMA_VERSION,
-    migrations: dict[int, str] = MIGRATIONS,
+    migrations: Mapping[int, MigrationStep | str] = MIGRATIONS,
     specs: dict[int, SchemaSpec] = SCHEMA_SPECS,
 ) -> sqlite3.Connection:
     _validate_version_configuration(schema_version, min_supported)
@@ -503,6 +734,7 @@ def open_database(
             return conn
 
         check_migration_path(current_version, schema_version, migrations)
+        check_migration_prechecks(conn, current_version, schema_version, migrations)
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_path = backup_dir / (f"pre-migrate_v{current_version}_{backup_timestamp()}.db")
@@ -512,22 +744,13 @@ def open_database(
                 f"マイグレーション前のバックアップを作成できません: {error}"
             ) from error
 
-        for target_version in range(current_version + 1, schema_version + 1):
-            try:
-                with transaction(conn):
-                    conn.executescript(migrations[target_version])
-                    reasons = inspect_schema(conn, target_version, specs)
-                    if reasons:
-                        raise UnsupportedSchemaError(
-                            f"スキーマ版 {target_version} の検査に失敗しました: "
-                            + "、".join(reasons)
-                        )
-                    _set_user_version(conn, target_version)
-            except Exception as error:
-                raise MigrationError(
-                    f"スキーマ版 {target_version} への移行に失敗しました: {error}",
-                    backup_path=backup_path,
-                ) from error
+        try:
+            migrate_schema(conn, current_version, schema_version, migrations, specs)
+        except Exception as error:
+            raise MigrationError(
+                f"スキーマ版 {schema_version} への移行に失敗しました: {error}",
+                backup_path=backup_path,
+            ) from error
         return conn
     except BaseException:
         if conn is not None:

@@ -9,7 +9,10 @@ from contextlib import suppress
 from datetime import date, datetime, tzinfo
 from pathlib import Path
 
+from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    REASON_LABELS,
     DashboardRow,
     GroupBy,
     ItemFilter,
@@ -26,13 +29,6 @@ from inventory_manager_mini.core.timeutil import (
 )
 from inventory_manager_mini.db.connection import read_transaction
 
-_REASON_LABELS = {
-    Reason.IN: "入庫",
-    Reason.OUT: "出庫",
-    Reason.RETURN: "返品",
-    Reason.DISPOSE: "廃棄",
-    Reason.ADJUST: "棚卸",
-}
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 _AggregateKey = tuple[int, int | None, int | None]
 
@@ -155,59 +151,37 @@ class ReportService:
         purchaser_id: int | None,
         group_by: GroupBy,
     ) -> list[DashboardRow]:
-        boundaries: list[str] = []
-        case_parts: list[str] = []
-        parameters: dict[str, object] = {"client_id": client_id, "purchaser_id": purchaser_id}
-        for index, (_, _, start, end) in enumerate(periods):
-            start_utc, end_utc = local_range_to_utc(start, end, self.tz)
-            boundaries.extend((start_utc, end_utc))
-            parameters[f"period_start_{index}"] = start_utc
-            parameters[f"period_end_{index}"] = end_utc
-            parameters[f"period_index_{index}"] = index
-            case_parts.append(
-                f"WHEN event_at >= :period_start_{index} AND event_at < :period_end_{index} "
-                f"THEN :period_index_{index}"
-            )
-        first_start = boundaries[0]
-        final_end = boundaries[-1]
-        parameters["range_start"] = first_start
-        parameters["range_end"] = final_end
-        period_case = "CASE " + " ".join(case_parts) + " ELSE NULL END"
+        ranges = [local_range_to_utc(start, end, self.tz) for _, _, start, end in periods]
+        parameters: dict[str, object] = {
+            "range_start": ranges[0][0],
+            "range_end": ranges[-1][1],
+            "client_id": client_id,
+            "purchaser_id": purchaser_id,
+        }
         rows = self.conn.execute(
-            f"""WITH movements AS (
-                SELECT m.*, COALESCE(o.moved_at, m.moved_at) AS event_at
-                FROM stock_movements m
-                LEFT JOIN stock_movements o ON o.id = m.reversal_of
-            )
-            SELECT {period_case} AS period_index,
-                m.client_id, c.name, m.purchaser_id, p.name,
-                COALESCE(SUM(CASE WHEN m.reason = 'in' THEN m.delta ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN m.reason = 'out' THEN -m.delta ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN m.reason = 'out' AND m.unit_price IS NOT NULL
-                    THEN -m.delta * m.unit_price ELSE 0 END), 0),
-                COUNT(CASE WHEN m.reason = 'out' AND m.unit_price IS NULL
-                    AND m.reversal_of IS NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM stock_movements reversal WHERE reversal.reversal_of = m.id
-                    ) THEN 1 END),
-                COALESCE(SUM(CASE WHEN m.reason = 'dispose' THEN -m.delta ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN m.reason = 'dispose' AND m.unit_price IS NOT NULL
-                    THEN -m.delta * m.unit_price ELSE 0 END), 0)
-            FROM movements m
+            """SELECT COALESCE(o.moved_at, m.moved_at) AS event_at,
+                m.client_id, c.name, m.purchaser_id, p.name, m.reason, m.delta,
+                m.unit_price, m.reversal_of,
+                EXISTS(SELECT 1 FROM stock_movements r WHERE r.reversal_of = m.id) AS is_reversed
+            FROM stock_movements m
+            LEFT JOIN stock_movements o ON o.id = m.reversal_of
             JOIN clients c ON c.id = m.client_id
             JOIN purchasers p ON p.id = m.purchaser_id
-            WHERE m.event_at >= :range_start AND m.event_at < :range_end
+            WHERE COALESCE(o.moved_at, m.moved_at) >= :range_start
+                AND COALESCE(o.moved_at, m.moved_at) < :range_end
                 AND (:client_id IS NULL OR m.client_id = :client_id)
                 AND (:purchaser_id IS NULL OR m.purchaser_id = :purchaser_id)
-            GROUP BY period_index, m.client_id, c.name, m.purchaser_id, p.name
-            ORDER BY period_index, m.client_id, m.purchaser_id""",
+            ORDER BY event_at, m.id""",
             parameters,
         ).fetchall()
 
         aggregates: dict[_AggregateKey, list[int]] = {}
         names: dict[_AggregateKey, tuple[str | None, str | None]] = {}
         for row in rows:
-            period_index = int(row[0])
+            event_at = str(row[0])
+            period_index = next(
+                index for index, (start, end) in enumerate(ranges) if start <= event_at < end
+            )
             row_client_id = int(row[1])
             row_client_name = str(row[2])
             row_purchaser_id = int(row[3])
@@ -229,8 +203,23 @@ class ReportService:
                 ),
             )
             values = aggregates[key]
-            for metric_index in range(6):
-                values[metric_index] += int(row[5 + metric_index])
+            reason = Reason(str(row[5]))
+            delta = int(row[6])
+            unit_price = None if row[7] is None else int(row[7])
+            reversal_of = row[8]
+            is_reversed = bool(row[9])
+            if reason is Reason.IN:
+                values[0] += delta
+            elif reason is Reason.OUT:
+                values[1] -= delta
+                if unit_price is not None:
+                    values[2] -= delta * unit_price
+                elif reversal_of is None and not is_reversed:
+                    values[3] += 1
+            elif reason is Reason.DISPOSE:
+                values[4] -= delta
+                if unit_price is not None:
+                    values[5] -= delta * unit_price
 
         if group_by is GroupBy.NONE:
             for period_index in range(len(periods)):
@@ -242,6 +231,8 @@ class ReportService:
         for (period_index, row_client_id, row_purchaser_id), metrics in sorted(
             aggregates.items(), key=lambda entry: (entry[0][0], entry[0][1] or 0, entry[0][2] or 0)
         ):
+            if any(value < 0 or value > MAX_AGGREGATE_VALUE for value in metrics[:3] + metrics[4:]):
+                raise ValidationError("集計値が 0〜1,000,000,000,000 の範囲を超えます")
             label, period_start, _, _ = periods[period_index]
             client_name, purchaser_name = names[(period_index, row_client_id, row_purchaser_id)]
             output.append(
@@ -341,7 +332,7 @@ class ReportService:
                 format_local(row.moved_at, self.tz),
                 row.code,
                 row.item_name,
-                _REASON_LABELS[row.reason],
+                REASON_LABELS[row.reason],
                 row.delta,
                 row.unit_price,
                 row.client_name,

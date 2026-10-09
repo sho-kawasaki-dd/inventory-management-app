@@ -11,6 +11,8 @@ from inventory_manager_mini.core.errors import (
     ValidationError,
 )
 from inventory_manager_mini.core.models import (
+    MAX_AGGREGATE_VALUE,
+    MAX_STOCK_QUANTITY,
     Category,
     Client,
     Item,
@@ -25,6 +27,7 @@ from inventory_manager_mini.core.models import (
     Staff,
     StockMovement,
 )
+from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
 
 _MODEL = TypeVar("_MODEL", bound=Client | Purchaser | Staff | Category | Location)
 _ITEM_COLUMNS = (
@@ -271,6 +274,11 @@ class ItemRepository:
         return item
 
     def add_quantity(self, item_id: int, delta: int) -> None:
+        current = self.conn.execute(
+            "SELECT quantity FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if current is not None and int(current[0]) + delta > MAX_STOCK_QUANTITY:
+            raise ValidationError("操作後の在庫数が上限(1,000,000)を超えます")
         _execute(
             self.conn,
             "UPDATE items SET quantity = quantity + ? WHERE id = ?",
@@ -368,13 +376,14 @@ class ItemRepository:
         return PurchaseInfo(last_purchased_at=str(row["moved_at"]), lot_quantity=int(row["delta"]))
 
     def find_quantity_mismatches(self) -> list[tuple[int, int, int]]:
-        rows = self.conn.execute(
-            """SELECT i.id, i.quantity, COALESCE(SUM(m.delta), 0) AS movement_total
-            FROM items i LEFT JOIN stock_movements m ON m.item_id = i.id
-            GROUP BY i.id HAVING i.quantity != COALESCE(SUM(m.delta), 0)
-            ORDER BY i.id"""
-        ).fetchall()
-        return [(int(row["id"]), int(row["quantity"]), int(row["movement_total"])) for row in rows]
+        totals: dict[int, int] = {}
+        for item_id, delta in self.conn.execute("SELECT item_id, delta FROM stock_movements"):
+            totals[int(item_id)] = totals.get(int(item_id), 0) + int(delta)
+        return [
+            (int(row[0]), int(row[1]), totals.get(int(row[0]), 0))
+            for row in self.conn.execute("SELECT id, quantity FROM items ORDER BY id")
+            if int(row[1]) != totals.get(int(row[0]), 0)
+        ]
 
     @staticmethod
     def _item_row(row: sqlite3.Row) -> ItemRow:
@@ -789,3 +798,38 @@ class SettingsRepository:
     def all(self) -> dict[str, str]:
         rows = self.conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
         return {str(row["key"]): str(row["value"]) for row in rows}
+
+
+class TotalAggregatesRepository:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.conn.row_factory = sqlite3.Row
+
+    def get(self) -> dict[str, int]:
+        row = self.conn.execute(
+            "SELECT inbound_quantity, outbound_quantity, disposed_quantity, expenditure, "
+            "disposal_amount FROM total_aggregates WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("集計管理レコードがありません")
+        return {column: int(row[column]) for column in AGGREGATE_COLUMNS}
+
+    def apply(self, deltas: dict[str, int]) -> dict[str, int]:
+        current = self.get()
+        updated = current.copy()
+        for column, delta in deltas.items():
+            if column not in AGGREGATE_COLUMNS:
+                raise ValueError(f"未定義の集計項目です: {column}")
+            updated[column] += delta
+            if not 0 <= updated[column] <= MAX_AGGREGATE_VALUE:
+                raise ValidationError(
+                    f"集計値 {column} は 0〜{MAX_AGGREGATE_VALUE:,} の範囲を超えます"
+                )
+        assignments = ", ".join(f"{column} = ?" for column in deltas)
+        if assignments:
+            _execute(
+                self.conn,
+                f"UPDATE total_aggregates SET {assignments} WHERE id = 1",
+                tuple(updated[column] for column in deltas),
+            )
+        return updated
