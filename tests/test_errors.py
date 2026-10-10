@@ -6,6 +6,7 @@ from inventory_manager_mini.core.errors import (
     AlreadyReversedError,
     CategoryCycleError,
     DomainError,
+    FileOutputError,
     InactiveItemError,
     InactiveMasterError,
     InvalidBackupError,
@@ -25,6 +26,7 @@ from inventory_manager_mini.core.errors import (
     "error_type",
     [
         ValidationError,
+        FileOutputError,
         NegativeStockError,
         InactiveItemError,
         InactiveMasterError,

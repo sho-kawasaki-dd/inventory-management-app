@@ -9,7 +9,7 @@ from contextlib import suppress
 from datetime import date, datetime, tzinfo
 from pathlib import Path
 
-from inventory_manager_mini.core.errors import ValidationError
+from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     REASON_LABELS,
@@ -69,9 +69,11 @@ def _write_csv(path: Path, header: Sequence[object], rows: Sequence[Sequence[obj
             writer.writerows([_as_csv_value(value) for value in row] for row in rows)
         os.replace(temporary_path, path)
         temporary_path = None
+    except OSError as error:
+        raise FileOutputError(f"CSVファイルを書き込めません: {path} ({error})") from error
     finally:
         if temporary_path is not None:
-            with suppress(FileNotFoundError):
+            with suppress(OSError):
                 os.unlink(temporary_path)
 
 
@@ -323,6 +325,7 @@ class ReportService:
             "操作種別",
             "数量",
             "単価",
+            "原価金額",
             "クライアント",
             "発注主体",
             "担当者",
@@ -339,6 +342,7 @@ class ReportService:
                 REASON_LABELS[row.reason],
                 row.delta,
                 row.unit_price,
+                row.cost_amount if row.reason in (Reason.OUT, Reason.DISPOSE) else None,
                 row.client_name,
                 row.purchaser_name,
                 row.staff_name,

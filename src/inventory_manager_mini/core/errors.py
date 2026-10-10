@@ -10,6 +10,10 @@ class DomainError(Exception):
         super().__init__(message)
 
 
+class FileOutputError(DomainError):
+    pass
+
+
 class ValidationError(DomainError):
     pass
 
