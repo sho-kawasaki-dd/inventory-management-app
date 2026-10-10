@@ -191,6 +191,8 @@ class AlertPanel(QDockWidget):
 
     def _update_title(self) -> None:
         self.setWindowTitle(f"低在庫 ({self.model.rowCount()})")
+        # QDockWidget はタイトル変更でアクション名を上書きするため、直後に戻す
+        self.toggleViewAction().setText("アラートパネル")
 
     def _on_double_clicked(self, index: QModelIndex) -> None:
         if index.column() == LowStockTableModel.URL_COLUMN:

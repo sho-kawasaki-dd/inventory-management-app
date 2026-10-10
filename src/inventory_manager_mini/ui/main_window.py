@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -25,6 +25,7 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
+from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 
@@ -95,6 +96,10 @@ class MainWindow(QMainWindow):
         self.table.doubleClicked.connect(self._open_history_for_index)
         layout.addWidget(self.table)
         self.setCentralWidget(central)
+
+        self.alert_panel = AlertPanel(self.context, self)
+        self.alert_panel.item_activated.connect(self._show_item_from_alert)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.alert_panel)
 
         self._build_menus()
         self._build_toolbar()
@@ -195,6 +200,7 @@ class MainWindow(QMainWindow):
         self.include_inactive_action.toggled.connect(self.inactive_checkbox.setChecked)
         self.inactive_checkbox.toggled.connect(self.include_inactive_action.setChecked)
         view_menu.addAction(self.include_inactive_action)
+        view_menu.addAction(self.alert_panel.toggleViewAction())
 
         help_menu = self.menuBar().addMenu("ヘルプ")
         help_menu.addAction("バージョン情報", self._show_about)
@@ -204,6 +210,7 @@ class MainWindow(QMainWindow):
         selected_id = self._selected_item_id()
         self._refresh_master_choices()
         self.refresh_items()
+        self.alert_panel.refresh()
         if selected_id is not None:
             source_row = self.item_model.row_of(selected_id)
             if source_row is not None:
@@ -335,8 +342,38 @@ class MainWindow(QMainWindow):
     def _open_item_dialog(self, item_id: int | None = None) -> None:
         ItemDialog = import_module("inventory_manager_mini.ui.dialogs.item_dialog").ItemDialog
         dialog = ItemDialog(self.context, item_id=item_id, parent=self)
-        if dialog.exec():
-            self.refresh()
+        dialog.exec()
+
+    def _show_item_from_alert(self, item_id: int) -> None:
+        self.search_timer.stop()
+        widgets = (
+            self.search_edit,
+            self.client_combo,
+            self.purchaser_combo,
+            self.category_picker,
+            self.location_combo,
+            self.low_stock_checkbox,
+            self.inactive_checkbox,
+            self.include_inactive_action,
+        )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        self.search_edit.clear()
+        self.client_combo.setCurrentIndex(0)
+        self.purchaser_combo.setCurrentIndex(0)
+        self.category_picker.set_current_category_id(None)
+        self.location_combo.setCurrentIndex(0)
+        self.low_stock_checkbox.setChecked(False)
+        self.inactive_checkbox.setChecked(False)
+        self.include_inactive_action.setChecked(False)
+        for blocker in blockers:
+            blocker.unblock()
+        self.refresh_items()
+        source_row = self.item_model.row_of(item_id)
+        if source_row is None:
+            return
+        proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
+        self.table.selectRow(proxy_index.row())
+        self.table.scrollTo(proxy_index)
 
     def _open_master_dialog(self, tab_name: str) -> None:
         master_dialog_module = import_module("inventory_manager_mini.ui.dialogs.master_dialog")

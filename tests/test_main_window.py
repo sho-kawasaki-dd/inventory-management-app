@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QDialog, QMessageBox
 
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
@@ -323,3 +324,218 @@ def test_data_changed_refreshes_master_options(window_with_items) -> None:
 
     assert window.client_combo.findText("新規クライアント") >= 0
     assert window.statusBar().currentMessage() == "1 件"
+
+
+def _alert_ids(window: MainWindow) -> list[int]:
+    return [
+        window.alert_panel.model.row_at(row).id
+        for row in range(window.alert_panel.model.rowCount())
+    ]
+
+
+def _is_colored(window: MainWindow, item_id: int) -> bool:
+    row = window.item_model.row_of(item_id)
+    assert row is not None
+    return window.item_model.index(row, 0).data(Qt.ItemDataRole.BackgroundRole) is not None
+
+
+def _count_list_calls(window: MainWindow, monkeypatch) -> dict[str, int]:
+    calls = {"items": 0, "low_stock": 0}
+    inventory = window.context.inventory
+    original_items = inventory.list_items
+    original_low_stock = inventory.list_low_stock
+
+    def list_items(*args, **kwargs):
+        calls["items"] += 1
+        return original_items(*args, **kwargs)
+
+    def list_low_stock(*args, **kwargs):
+        calls["low_stock"] += 1
+        return original_low_stock(*args, **kwargs)
+
+    monkeypatch.setattr(inventory, "list_items", list_items)
+    monkeypatch.setattr(inventory, "list_low_stock", list_low_stock)
+    return calls
+
+
+def test_alert_panel_follows_stock_moves_reversal_and_active_state(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, _second = window_with_items
+    inventory = window.context.inventory
+    assert _alert_ids(window) == []
+    assert window.alert_panel.windowTitle() == "低在庫 (0)"
+
+    movement = inventory.issue(first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    assert _alert_ids(window) == [first.id]
+    assert _is_colored(window, first.id)
+    assert window.alert_panel.windowTitle() == "低在庫 (1)"
+
+    inventory.reverse(movement.id, staff_id=1)
+    window.context.data_bus.data_changed.emit()
+    assert _alert_ids(window) == []
+    assert not _is_colored(window, first.id)
+
+    inventory.issue(first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    inventory.receive(first.id, 1, 1)
+    window.context.data_bus.data_changed.emit()
+    assert _alert_ids(window) == []
+
+    inventory.issue(first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    _select_item(window, first.id)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    window.toggle_active_action.trigger()
+    assert _alert_ids(window) == []
+    window.inactive_checkbox.setChecked(True)
+    assert not _is_colored(window, first.id)
+    _select_item(window, first.id)
+    window.toggle_active_action.trigger()
+    assert _alert_ids(window) == [first.id]
+    assert _is_colored(window, first.id)
+
+
+def test_item_dialog_edit_threshold_updates_dock_with_one_reload_each(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, _second = window_with_items
+    from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
+
+    def edit_and_save(dialog: ItemDialog) -> int:
+        dialog.threshold_spin.setValue(5)
+        dialog._save()
+        return dialog.result()
+
+    monkeypatch.setattr(ItemDialog, "exec", edit_and_save)
+    _select_item(window, first.id)
+    calls = _count_list_calls(window, monkeypatch)
+
+    window.edit_action.trigger()
+
+    assert calls == {"items": 1, "low_stock": 1}
+    assert _alert_ids(window) == [first.id]
+    assert _is_colored(window, first.id)
+
+
+def test_item_dialog_create_reloads_once_and_cancel_does_not_reload(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, _second = window_with_items
+    from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
+
+    def create_and_save(dialog: ItemDialog) -> int:
+        dialog.client_combo.setCurrentIndex(0)
+        dialog.name_edit.setText("新規品目")
+        dialog.category_picker.set_current_category_id(1)
+        dialog.purchaser_combo.setCurrentIndex(0)
+        dialog._save()
+        return dialog.result()
+
+    calls = _count_list_calls(window, monkeypatch)
+    monkeypatch.setattr(ItemDialog, "exec", create_and_save)
+    window.new_action.trigger()
+    assert calls == {"items": 1, "low_stock": 1}
+    assert len(_alert_ids(window)) == 1
+
+    calls["items"] = calls["low_stock"] = 0
+    monkeypatch.setattr(ItemDialog, "exec", lambda dialog: dialog.reject() or dialog.result())
+    _select_item(window, first.id)
+    window.edit_action.trigger()
+    window.new_action.trigger()
+    assert calls == {"items": 0, "low_stock": 0}
+
+
+def test_search_and_filters_do_not_reload_dock(qtbot, window_with_items, monkeypatch) -> None:
+    window, first, _second = window_with_items
+    window.context.inventory.issue(first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    calls = _count_list_calls(window, monkeypatch)
+
+    window.search_edit.setText("該当なし")
+    qtbot.waitUntil(lambda: calls["items"] >= 1, timeout=1500)
+    window.low_stock_checkbox.setChecked(True)
+    window.inactive_checkbox.setChecked(True)
+
+    assert calls["low_stock"] == 0
+    assert _alert_ids(window) == [first.id]
+
+
+def test_dock_double_click_clears_filters_and_selects_item(
+    qtbot, window_with_items, monkeypatch
+) -> None:
+    window, first, second = window_with_items
+    window.context.inventory.issue(first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    window.inactive_checkbox.setChecked(True)
+    window.low_stock_checkbox.setChecked(True)
+    window.client_combo.setCurrentIndex(window.client_combo.findData(2))
+    window.location_combo.setCurrentIndex(window.location_combo.findData(2))
+    window.category_picker.set_current_category_id(1)
+    window.category_picker.category_changed.emit(1)
+    window.search_edit.setText("該当なし")
+    assert window.search_timer.isActive()
+    assert _item_ids(window) == set()
+    calls = _count_list_calls(window, monkeypatch)
+
+    window.alert_panel.table.doubleClicked.emit(window.alert_panel.model.index(0, 0))
+    qtbot.wait(window.search_timer.interval() + 150)
+
+    assert not window.search_timer.isActive()
+    assert calls == {"items": 1, "low_stock": 0}
+    assert window.search_edit.text() == ""
+    assert window.client_combo.currentIndex() == 0
+    assert window.purchaser_combo.currentIndex() == 0
+    assert window.location_combo.currentIndex() == 0
+    assert window.category_picker.current_category_id() is None
+    assert not window.low_stock_checkbox.isChecked()
+    assert not window.inactive_checkbox.isChecked()
+    assert not window.include_inactive_action.isChecked()
+    assert _item_ids(window) == {first.id}
+    assert window._selected_item_id() == first.id
+    assert second.id not in _item_ids(window)
+
+
+def test_alert_panel_can_be_closed_and_reopened_from_view_menu(window_with_items) -> None:
+    window, _first, _second = window_with_items
+    window.show()
+    window.context.inventory.issue(_first.id, 1, 1, "備品")
+    window.context.data_bus.data_changed.emit()
+    view_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "表示")
+    toggle = window.alert_panel.toggleViewAction()
+    assert toggle in view_menu.actions()
+    assert toggle.text() == "アラートパネル"
+    assert window.alert_panel.isVisible()
+
+    toggle.trigger()
+    assert not window.alert_panel.isVisible()
+    toggle.trigger()
+    assert window.alert_panel.isVisible()
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+def test_window_with_dock_fits_1366x768_work_area(qtbot, window_with_items, scale: float) -> None:
+    window, _first, _second = window_with_items
+    available = QRect(0, 0, 1366, 768)
+    original_font = window.font()
+    try:
+        font = QFont(original_font)
+        font.setPointSizeF(original_font.pointSizeF() * scale)
+        window.setFont(font)
+        window.show()
+        qtbot.waitExposed(window)
+        frame_width = window.frameGeometry().width() - window.width()
+        frame_height = window.frameGeometry().height() - window.height()
+        hint = window.minimumSizeHint()
+        assert hint.width() + frame_width <= available.width()
+        assert hint.height() + frame_height <= available.height()
+        window.resize(
+            min(1000, available.width() - frame_width), min(650, available.height() - frame_height)
+        )
+        assert window.alert_panel.isVisible()
+        table = window.alert_panel.table
+        assert table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert table.horizontalHeader().length() > 0
+    finally:
+        window.setFont(original_font)
