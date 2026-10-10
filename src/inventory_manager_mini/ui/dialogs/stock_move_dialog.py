@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import partial
 
 from PySide6.QtCore import QLocale, QStringListModel, QTimer
-from PySide6.QtGui import QIntValidator
+from PySide6.QtGui import QIntValidator, QShowEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -31,6 +31,7 @@ from inventory_manager_mini.core.models import (
     Reason,
 )
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 
 
@@ -128,6 +129,10 @@ class StockMoveDialog(QDialog):
         outer.addWidget(self.button_box)
         available = self.screen().availableGeometry()
         self.resize(min(760, available.width() - 24), min(660, available.height() - 48))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        center_dialog(self)
 
     @staticmethod
     def _integer_edit(parent: QWidget, locale: QLocale) -> QLineEdit:

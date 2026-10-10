@@ -12,10 +12,14 @@ import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from inventory_manager_mini.app import main, setup_logging
-from inventory_manager_mini.config import AppPaths
+from inventory_manager_mini.config import AppPaths, ensure_dirs
 from inventory_manager_mini.core.errors import MigrationError
-from inventory_manager_mini.db.migrations import SCHEMA_VERSION
+from inventory_manager_mini.core.models import ItemRow, NewItem
+from inventory_manager_mini.core.services import InventoryService
+from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui import single_instance
+from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from tests.test_single_instance import start_lock_holder, stop_lock_holder
 
@@ -156,3 +160,92 @@ def test_setup_logging_does_not_register_duplicate_handlers(tmp_path: Path) -> N
             if handler not in handlers_before and isinstance(handler, RotatingFileHandler):
                 root_logger.removeHandler(handler)
                 handler.close()
+
+
+def _seed_database(paths: AppPaths, *, low_stock: int, inactive_low_stock: int = 0) -> None:
+    ensure_dirs(paths)
+    conn = open_database(
+        paths.db_path, paths.backup_dir, backup_timestamp=local_timestamp_for_filename
+    )
+    try:
+        conn.execute("INSERT INTO clients (id, name) VALUES (1, '総務')")
+        conn.execute("INSERT INTO purchasers (id, name) VALUES (1, '本部')")
+        conn.execute(
+            "INSERT INTO categories (id, parent_id, name, code_prefix, next_seq) "
+            "VALUES (1, NULL, '文具', 'ST', 1)"
+        )
+        inventory = InventoryService(conn)
+        for index in range(low_stock + inactive_low_stock):
+            item = inventory.create_item(
+                NewItem(client_id=1, purchaser_id=1, name=f"品目{index}", category_id=1)
+            )
+            if index >= low_stock:
+                inventory.deactivate_item(item.id)
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def notice_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+
+    def fake_exec(dialog: LowStockNoticeDialog) -> int:
+        parent = dialog.parent()
+        calls.append(
+            {
+                "count": dialog.model.rowCount(),
+                "window_visible": isinstance(parent, MainWindow) and parent.isVisible(),
+            }
+        )
+        return 0
+
+    monkeypatch.setattr(LowStockNoticeDialog, "exec", fake_exec)
+    monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+    return calls
+
+
+@pytest.mark.parametrize("inactive_only", [False, True])
+def test_main_does_not_show_notice_without_low_stock_items(
+    tmp_path: Path, qtbot, notice_calls: list[dict[str, object]], inactive_only: bool
+) -> None:
+    paths = _paths(tmp_path)
+    _seed_database(paths, low_stock=0, inactive_low_stock=2 if inactive_only else 0)
+
+    assert main(paths) == 0
+
+    assert notice_calls == []
+
+
+def test_main_shows_notice_after_main_window_is_visible(
+    tmp_path: Path, qtbot, notice_calls: list[dict[str, object]]
+) -> None:
+    paths = _paths(tmp_path)
+    _seed_database(paths, low_stock=2, inactive_low_stock=1)
+
+    assert main(paths) == 0
+
+    assert notice_calls == [{"count": 2, "window_visible": True}]
+
+
+def test_main_continues_when_low_stock_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    qtbot,
+    notice_calls: list[dict[str, object]],
+) -> None:
+    paths = _paths(tmp_path)
+    _seed_database(paths, low_stock=1)
+    messages: list[tuple[object, ...]] = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: messages.append(args))
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+
+    def fail(self: InventoryService) -> list[ItemRow]:
+        raise RuntimeError("取得失敗")
+
+    monkeypatch.setattr(InventoryService, "list_low_stock", fail)
+
+    assert main(paths) == 0
+
+    assert notice_calls == []
+    assert len(messages) >= 1
+    assert messages[0][1] == "エラー"

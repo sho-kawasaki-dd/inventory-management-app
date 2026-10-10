@@ -32,6 +32,7 @@ from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
+from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from scripts.generate_dummy_data import generate_database
 
 pytestmark = pytest.mark.perf
@@ -49,7 +50,8 @@ def performance_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
             years=3,
             seed=0,
             force=False,
-        )
+        ),
+        ensure_positive_active_quantities=True,
     )
     return db_path
 
@@ -152,6 +154,9 @@ from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QApplication
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.app import main
+from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
+
+LowStockNoticeDialog.exec = lambda self: 0
 
 class FirstPaint(QObject):
     sent = False
@@ -213,14 +218,80 @@ raise SystemExit(main())
                 process.wait(timeout=5)
 
 
-def test_startup_to_first_table_paint(performance_db: Path, tmp_path: Path) -> None:
-    data_dir = tmp_path / "startup-data"
+def _copy_database_with_low_stock_count(
+    performance_db: Path, data_dir: Path, expected_count: int
+) -> Path:
     data_dir.mkdir()
-    shutil.copy2(performance_db, data_dir / "inventory.db")
+    db_path = data_dir / "inventory.db"
+    shutil.copy2(performance_db, db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        movement_count = conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0]
+        assert item_count == 5000
+        assert movement_count == 100000
+        active_items = conn.execute(
+            "SELECT id, quantity FROM items WHERE is_active = 1 ORDER BY id"
+        ).fetchall()
+        assert len(active_items) >= expected_count
+        assert all(quantity > 0 for _, quantity in active_items)
+        low_stock_ids = {item_id for item_id, _ in active_items[:expected_count]}
+        conn.executemany(
+            "UPDATE items SET reorder_threshold = ? WHERE id = ?",
+            [
+                (quantity if item_id in low_stock_ids else quantity - 1, item_id)
+                for item_id, quantity in active_items
+            ],
+        )
+        conn.commit()
+        actual_count = conn.execute(
+            "SELECT COUNT(*) FROM items WHERE is_active = 1 AND quantity <= reorder_threshold"
+        ).fetchone()[0]
+        assert actual_count == expected_count
+    finally:
+        conn.close()
+    return db_path
+
+
+@pytest.mark.parametrize("low_stock_count", (0, 1000))
+def test_startup_to_first_table_paint(
+    performance_db: Path, tmp_path: Path, low_stock_count: int
+) -> None:
+    data_dir = tmp_path / f"startup-data-{low_stock_count}"
+    _copy_database_with_low_stock_count(performance_db, data_dir, low_stock_count)
 
     elapsed = _run_startup_probe(data_dir)
-    print(f"別プロセス起動から一覧初回描画: {elapsed:.3f} 秒")
+    print(f"別プロセス起動から一覧初回描画(低在庫 {low_stock_count:,} 件): {elapsed:.3f} 秒")
     assert elapsed <= 3.0
+
+
+def test_alert_panel_refresh_with_one_thousand_low_stock_items(
+    qtbot, performance_db: Path, tmp_path: Path
+) -> None:
+    db_path = _copy_database_with_low_stock_count(
+        performance_db, tmp_path / "alert-panel-data", 1000
+    )
+    conn = connect(db_path)
+    context = AppContext(
+        inventory=InventoryService(conn),
+        master=MasterService(conn),
+        settings=SettingsService(conn),
+        data_bus=DataBus(),
+        db_path=db_path,
+        schema_version=SCHEMA_VERSION,
+        app_version="0.1.0",
+    )
+    panel = AlertPanel(context)
+    qtbot.addWidget(panel)
+    try:
+        started_at = time.perf_counter()
+        panel.refresh()
+        elapsed = time.perf_counter() - started_at
+        assert panel.model.rowCount() == 1000
+        assert panel.windowTitle() == "低在庫 (1000)"
+        print(f"ドック再読込(低在庫 1,000 件): {elapsed:.3f} 秒")
+    finally:
+        conn.close()
 
 
 def test_service_outflow_save_with_large_history(performance_db: Path) -> None:
