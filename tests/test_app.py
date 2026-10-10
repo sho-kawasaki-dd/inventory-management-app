@@ -61,6 +61,8 @@ def test_main_creates_database_and_log_shows_window_and_releases_lock(
     assert paths.log_path.is_file()
     assert len(shown_windows) == 1
     assert shown_windows[0].windowTitle() == "Inventory Manager mini"
+    assert shown_windows[0].context.reports is not None
+    assert shown_windows[0].context.paths == paths
     lock = single_instance.SingleInstanceLock(paths.lock_path)
     assert lock.try_acquire()
     lock.release()

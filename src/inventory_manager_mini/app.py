@@ -15,6 +15,7 @@ from inventory_manager_mini.core.errors import (
     SchemaTooNewError,
     UnsupportedSchemaError,
 )
+from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
@@ -60,6 +61,8 @@ def build_context(conn: sqlite3.Connection, paths: AppPaths) -> AppContext:
         inventory=InventoryService(conn),
         master=MasterService(conn),
         settings=SettingsService(conn),
+        reports=ReportService(conn),
+        paths=paths,
         data_bus=DataBus(),
         db_path=paths.db_path,
         schema_version=SCHEMA_VERSION,

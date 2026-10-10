@@ -14,18 +14,25 @@ from inventory_manager_mini.core.models import (
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
-from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
-from tests.conftest import unchecked_constraints
+from tests.conftest import create_test_context, unchecked_constraints
 
 
 @pytest.fixture
 def dialog_context(
+    seeded_conn,
     inventory: InventoryService,
     master: MasterService,
     settings: SettingsService,
 ) -> AppContext:
-    return AppContext(inventory, master, settings, DataBus(), Path("test.db"), 1, "0.1.0")
+    return create_test_context(
+        seeded_conn,
+        inventory=inventory,
+        master=master,
+        settings=settings,
+        db_path=Path("test.db"),
+        schema_version=1,
+    )
 
 
 def _fill_required(dialog: ItemDialog) -> None:

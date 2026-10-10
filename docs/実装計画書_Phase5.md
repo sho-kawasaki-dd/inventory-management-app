@@ -106,9 +106,9 @@
 
 #### B. AppContext の拡張
 
-- [ ] `ui/context.py` の `AppContext` に `reports: ReportService` と `paths: AppPaths` を追加する(`BackupService` は 5b で追加)
-- [ ] `app.py` の `build_context` で `ReportService(conn)` を生成して渡す
-- [ ] `tests/conftest.py` にテスト用 `AppContext` を生成する共通フィクスチャ／ヘルパー関数(`create_test_context`)を追加し、既存のテストコードで直に生成している箇所を集約・更新する(5b での `BackupService` 追加時の改修工数を抑える)
+- [x] `ui/context.py` の `AppContext` に `reports: ReportService` と `paths: AppPaths` を追加する(`BackupService` は 5b で追加)
+- [x] `app.py` の `build_context` で `ReportService(conn)` を生成して渡す
+- [x] `tests/conftest.py` にテスト用 `AppContext` を生成する共通フィクスチャ／ヘルパー関数(`create_test_context`)を追加し、既存のテストコードで直に生成している箇所を集約・更新する(5b での `BackupService` 追加時の改修工数を抑える)
 
 #### C. 販売ページを開く導線 `ui/main_window.py`
 

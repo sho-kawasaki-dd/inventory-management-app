@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -10,12 +8,18 @@ from inventory_manager_mini.core.models import MAX_STOCK_QUANTITY, Allocation, N
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
-from inventory_manager_mini.ui.signals import DataBus
+from tests.conftest import create_test_context
 
 
 @pytest.fixture
-def dialog_context(inventory, master, settings) -> AppContext:
-    return AppContext(inventory, master, settings, DataBus(), Path(":memory:"), 3, "0.1.0")
+def dialog_context(seeded_conn, inventory, master, settings) -> AppContext:
+    return create_test_context(
+        seeded_conn,
+        inventory=inventory,
+        master=master,
+        settings=settings,
+        schema_version=3,
+    )
 
 
 def _create_item(context: AppContext, quantity: int = 0, reference_price: int | None = None):

@@ -10,28 +10,27 @@ from PySide6.QtWidgets import QMessageBox, QStyleOptionViewItem
 from inventory_manager_mini.core.models import ItemRow, NewItem, PurchaseInfo
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
-from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.widgets import alert_panel
 from inventory_manager_mini.ui.widgets.alert_panel import (
     AlertPanel,
     LowStockTableModel,
     OpenUrlButtonDelegate,
 )
+from tests.conftest import create_test_context
 
 _URL_COLUMN = LowStockTableModel.URL_COLUMN
 
 
 def _context(
-    inventory: InventoryService, master: MasterService, settings: SettingsService
+    conn, inventory: InventoryService, master: MasterService, settings: SettingsService
 ) -> AppContext:
-    return AppContext(
+    return create_test_context(
+        conn,
         inventory=inventory,
         master=master,
         settings=settings,
-        data_bus=DataBus(),
         db_path=Path("test.db"),
         schema_version=1,
-        app_version="0.1.0",
     )
 
 
@@ -44,9 +43,9 @@ def _new_item(name: str, **changes: object) -> NewItem:
 
 @pytest.fixture
 def context(
-    inventory: InventoryService, master: MasterService, settings: SettingsService
+    seeded_conn, inventory: InventoryService, master: MasterService, settings: SettingsService
 ) -> AppContext:
-    return _context(inventory, master, settings)
+    return _context(seeded_conn, inventory, master, settings)
 
 
 @pytest.fixture

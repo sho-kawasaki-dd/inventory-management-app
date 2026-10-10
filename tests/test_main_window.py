@@ -9,11 +9,10 @@ from PySide6.QtWidgets import QDialog, QMessageBox
 
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
-from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
-from inventory_manager_mini.ui.signals import DataBus
+from tests.conftest import create_test_context
 
 
 def _item_ids(window: MainWindow) -> set[int]:
@@ -30,6 +29,7 @@ def _select_item(window: MainWindow, item_id: int) -> None:
 @pytest.fixture
 def window_with_items(
     qtbot,
+    seeded_conn,
     inventory: InventoryService,
     master: MasterService,
     settings: SettingsService,
@@ -60,14 +60,13 @@ def window_with_items(
         )
     )
     inventory.deactivate_item(second.id)
-    context = AppContext(
+    context = create_test_context(
+        seeded_conn,
         inventory=inventory,
         master=master,
         settings=settings,
-        data_bus=DataBus(),
         db_path=Path("test.db"),
         schema_version=1,
-        app_version="0.1.0",
     )
     window = MainWindow(context)
     qtbot.addWidget(window)
