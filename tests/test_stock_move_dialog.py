@@ -144,13 +144,18 @@ def test_reason_switch_updates_visible_fields(qtbot, dialog_context) -> None:
     qtbot.addWidget(dialog)
 
     assert dialog.form_layout.isRowVisible(dialog.unit_price_edit)
+    assert not dialog.form_layout.isRowVisible(dialog.estimate_label)
     assert not dialog.form_layout.isRowVisible(dialog.used_for_edit)
     dialog.reason_combo.setCurrentIndex(dialog.reason_combo.findData(Reason.OUT))
     assert not dialog.form_layout.isRowVisible(dialog.unit_price_edit)
+    assert dialog.form_layout.isRowVisible(dialog.estimate_label)
     assert dialog.form_layout.isRowVisible(dialog.used_for_edit)
     dialog.reason_combo.setCurrentIndex(dialog.reason_combo.findData(Reason.ADJUST))
     assert dialog.quantity_label.text() == "実数"
     assert dialog.quantity_spin.minimum() == 0
+    assert not dialog.form_layout.isRowVisible(dialog.estimate_label)
+    dialog.reason_combo.setCurrentIndex(dialog.reason_combo.findData(Reason.DISPOSE))
+    assert dialog.form_layout.isRowVisible(dialog.estimate_label)
 
 
 @pytest.mark.parametrize("quantity", [MAX_STOCK_QUANTITY - 1, MAX_STOCK_QUANTITY])
@@ -222,6 +227,7 @@ def test_fifo_limit_validation_ignores_changed_reference_price(qtbot, dialog_con
     dialog.quantity_spin.setValue(10_000)
 
     assert _ok_button(dialog).isEnabled()
+    assert dialog.estimate_label.text() == "見積原価: 100,000,000 円 / 単価未登録数量: 0 個"
     estimate = dialog_context.inventory.estimate_outflow(item.id, 10_000)
     assert estimate.cost_amount == MAX_MOVEMENT_AMOUNT
 
@@ -235,6 +241,7 @@ def test_unpriced_only_fifo_outflow_remains_saveable(qtbot, dialog_context) -> N
     dialog.quantity_spin.setValue(MAX_STOCK_QUANTITY)
 
     assert _ok_button(dialog).isEnabled()
+    assert dialog.estimate_label.text() == "見積原価: 0 円 / 単価未登録数量: 1,000,000 個"
     dialog._save()
     movement = dialog_context.inventory.list_history(item.id)[-1]
     assert (movement.unit_price, movement.cost_amount) == (None, 0)
@@ -258,10 +265,26 @@ def test_multi_lot_fifo_estimate_is_exact_to_one_yen(qtbot, dialog_context, reas
 
     exact = open_dialog(build(10))
     assert _ok_button(exact).isEnabled()
+    assert "見積原価: 100,000,000 円" in exact.estimate_label.text()
+    assert "単価未登録数量: 0 個" in exact.estimate_label.text()
 
     over = open_dialog(build(11))
     assert not _ok_button(over).isEnabled()
+    assert "見積原価: 100,000,001 円" in over.estimate_label.text()
     assert f"{MAX_MOVEMENT_AMOUNT:,}" in over.error_label.text()
+
+
+def test_fifo_estimate_shows_unpriced_quantity_across_lots(qtbot, dialog_context) -> None:
+    item = _create_item(dialog_context, quantity=2)
+    dialog_context.inventory.receive(item.id, 1, 3, unit_price=7)
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.quantity_spin.setValue(4)
+
+    assert _ok_button(dialog).isEnabled()
+    assert dialog.estimate_label.text() == "見積原価: 14 円 / 単価未登録数量: 2 個"
 
 
 def test_estimate_failures_disable_ok_and_show_the_reason(
@@ -521,9 +544,11 @@ def test_domain_error_keeps_dialog_open_and_does_not_emit_change(
 def test_dialog_fits_available_area_with_large_font_and_scrollable_form(
     qtbot, dialog_context
 ) -> None:
-    item = _create_item(dialog_context)
-    dialog = StockMoveDialog(dialog_context, Reason.IN, item.id)
+    item = _create_item(dialog_context, quantity=1)
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
     qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
     original_font = dialog.font()
     available = dialog.screen().availableGeometry()
     try:
@@ -534,6 +559,8 @@ def test_dialog_fits_available_area_with_large_font_and_scrollable_form(
             dialog.selected_item_label.setText("品名" * 500)
             dialog.note_edit.setPlainText("長いメモ" * 500)
             dialog.error_label.setText("入力エラー" * 500)
+            assert dialog.form_layout.isRowVisible(dialog.estimate_label)
+            assert "単価未登録数量: 1 個" in dialog.estimate_label.text()
             dialog.show()
             qtbot.waitExposed(dialog)
             frame = dialog.frameGeometry()
