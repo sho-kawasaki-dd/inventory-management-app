@@ -23,5 +23,4 @@ def center_dialog(dialog: QDialog) -> None:
         max(target.y() - frame.height() // 2, available.top()),
         available.bottom() - frame.height() + 1,
     )
-    frame_offset = dialog.geometry().topLeft() - frame.topLeft()
-    dialog.move(QPoint(frame_x, frame_y) + frame_offset)
+    dialog.move(QPoint(frame_x, frame_y))
