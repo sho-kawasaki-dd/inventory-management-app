@@ -112,14 +112,14 @@
 
 #### C. 販売ページを開く導線 `ui/main_window.py`
 
-- [ ] 「品目」メニューに「販売ページを開く」の `QAction` を追加する(履歴の前、区切り線で分ける)。同じ `QAction` をツールバーの「参照」グループと一覧の右クリックメニューに追加する
-- [ ] `_update_selection_actions` で活性状態を更新する(品目が選択され URL がある場合のみ活性)。選択変更・再読込・品目編集後のいずれでも追従する
-- [ ] 押下処理: 選択品目の URL を `run_guarded` 内で `validate_purchase_url` により再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。`ItemDialog._open_purchase_url` と同じ手順にそろえる
-- [ ] `tests/test_main_window.py`
-  - [ ] URL あり・なし・未選択・廃止品目の活性状態
-  - [ ] `http`/`https` で `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)
-  - [ ] 不正な URL(`javascript:`・ホスト名なし)では呼ばれずエラーが表示されること(モデルへ直接データを与えて検証する)
-  - [ ] メニュー・ツールバー・右クリックメニューで同じ `QAction` が共有され、活性状態とラベルが一致すること
+- [x] 「品目」メニューに「販売ページを開く」の `QAction` を追加する(履歴の前、区切り線で分ける)。同じ `QAction` をツールバーの「参照」グループと一覧の右クリックメニューに追加する
+- [x] `_update_selection_actions` で活性状態を更新する(品目が選択され URL がある場合のみ活性)。選択変更・再読込・品目編集後のいずれでも追従する
+- [x] 押下処理: 選択品目の URL を `run_guarded` 内で `validate_purchase_url` により再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。`ItemDialog._open_purchase_url` と同じ手順にそろえる
+- [x] `tests/test_main_window.py`
+  - [x] URL あり・なし・未選択・廃止品目の活性状態
+  - [x] `http`/`https` で `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)
+  - [x] 不正な URL(`javascript:`・ホスト名なし)では呼ばれずエラーが表示されること(モデルへ直接データを与えて検証する)
+  - [x] メニュー・ツールバー・右クリックメニューで同じ `QAction` が共有され、活性状態とラベルが一致すること
 
 #### D. CSV 出力 `ui/main_window.py`
 

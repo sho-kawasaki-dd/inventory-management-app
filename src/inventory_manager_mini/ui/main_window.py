@@ -1,7 +1,7 @@
 from importlib import import_module
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from inventory_manager_mini.core.models import REASON_LABELS, ItemFilter, Reason
+from inventory_manager_mini.core.services import validate_purchase_url
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.item_table_model import (
@@ -129,6 +130,7 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self.stock_actions[Reason.ADJUST])
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.history_action)
+        self.toolbar.addAction(self.purchase_page_action)
 
     def _build_table_context_menu(self) -> None:
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -144,6 +146,7 @@ class MainWindow(QMainWindow):
         separator.setSeparator(True)
         self.table.addAction(separator)
         self.table.addAction(self.history_action)
+        self.table.addAction(self.purchase_page_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -166,6 +169,9 @@ class MainWindow(QMainWindow):
         self.toggle_active_action.triggered.connect(self._toggle_item_active)
         item_menu.addAction(self.toggle_active_action)
         item_menu.addSeparator()
+        self.purchase_page_action = QAction("販売ページを開く", self)
+        self.purchase_page_action.triggered.connect(self._open_purchase_page)
+        item_menu.addAction(self.purchase_page_action)
         self.history_action = QAction("履歴", self)
         self.history_action.triggered.connect(self._open_history)
         item_menu.addAction(self.history_action)
@@ -296,6 +302,9 @@ class MainWindow(QMainWindow):
         self.edit_action.setEnabled(has_selection)
         self.toggle_active_action.setEnabled(has_selection)
         self.history_action.setEnabled(has_selection)
+        self.purchase_page_action.setEnabled(
+            item is not None and bool(item.purchase_url and item.purchase_url.strip())
+        )
         can_move_stock = item is not None and item.is_active
         for action in self.stock_actions.values():
             action.setEnabled(can_move_stock)
@@ -324,6 +333,18 @@ class MainWindow(QMainWindow):
         item_id = self._selected_item_id()
         if item_id is not None:
             self._show_history(item_id)
+
+    def _open_purchase_page(self) -> None:
+        selected_id = self._selected_item_id()
+        if selected_id is None:
+            return
+        row = self.item_model.row_of(selected_id)
+        if row is None:
+            return
+        item = self.item_model.row_at(row)
+        succeeded, url = run_guarded(self, lambda: validate_purchase_url(item.purchase_url))
+        if succeeded and url is not None:
+            QDesktopServices.openUrl(QUrl(url))
 
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():

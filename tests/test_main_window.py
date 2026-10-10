@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import QDialog, QMessageBox
 
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
@@ -24,6 +25,16 @@ def _select_item(window: MainWindow, item_id: int) -> None:
     assert source_row is not None
     proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
     window.table.selectRow(proxy_index.row())
+
+
+def _set_model_purchase_url(window: MainWindow, item_id: int, url: str | None) -> None:
+    rows = [
+        replace(window.item_model.row_at(row), purchase_url=url)
+        if window.item_model.row_at(row).id == item_id
+        else window.item_model.row_at(row)
+        for row in range(window.item_model.rowCount())
+    ]
+    window.item_model.set_rows(rows)
 
 
 @pytest.fixture
@@ -220,16 +231,19 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     ]
     assert toolbar_actions[8].isSeparator()
     assert toolbar_actions[9] is window.history_action
+    assert toolbar_actions[10] is window.purchase_page_action
     assert window.table.actions()[:3] == item_actions
     assert window.table.actions()[3].isSeparator()
     assert window.table.actions()[4:9] == stock_actions
     assert window.table.actions()[9].isSeparator()
     assert window.table.actions()[10] is window.history_action
+    assert window.table.actions()[11] is window.purchase_page_action
     assert window.table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
     item_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "品目")
     assert item_menu.actions()[:3] == item_actions
     assert item_menu.actions()[3].isSeparator()
-    assert item_menu.actions()[4] is window.history_action
+    assert item_menu.actions()[4:6] == [window.purchase_page_action, window.history_action]
+    assert window.purchase_page_action.text() == "販売ページを開く"
     stock_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "在庫")
     assert stock_menu.actions() == stock_actions
     assert [action.text() for action in stock_actions] == [
@@ -250,6 +264,62 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     assert window.history_action.isEnabled()
     assert window.toggle_active_action.text() == "再有効化"
     assert all(not action.isEnabled() for action in stock_actions)
+
+
+def test_purchase_page_action_requires_selected_item_with_url(window_with_items) -> None:
+    window, first, second = window_with_items
+    assert not window.purchase_page_action.isEnabled()
+
+    _set_model_purchase_url(window, first.id, "https://example.com/item")
+    _select_item(window, first.id)
+    assert window.purchase_page_action.isEnabled()
+
+    window.inactive_checkbox.setChecked(True)
+    _select_item(window, second.id)
+    assert not window.purchase_page_action.isEnabled()
+    _set_model_purchase_url(window, second.id, "https://example.com/inactive")
+    _select_item(window, second.id)
+    assert window.purchase_page_action.isEnabled()
+
+
+@pytest.mark.parametrize("url", ["http://example.com/item", "https://example.com/item"])
+def test_purchase_page_action_opens_valid_http_url(
+    window_with_items, monkeypatch, url: str
+) -> None:
+    window, first, _second = window_with_items
+    _set_model_purchase_url(window, first.id, url)
+    _select_item(window, first.id)
+    opened_urls = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda value: opened_urls.append(value.toString()) or True,
+    )
+
+    window.purchase_page_action.trigger()
+
+    assert opened_urls == [url]
+
+
+@pytest.mark.parametrize("url", ["javascript:alert(1)", "https:///missing-host"])
+def test_purchase_page_action_rejects_invalid_url(window_with_items, monkeypatch, url: str) -> None:
+    window, first, _second = window_with_items
+    _set_model_purchase_url(window, first.id, url)
+    _select_item(window, first.id)
+    opened_urls = []
+    warnings = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda value: opened_urls.append(value))
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+
+    window.purchase_page_action.trigger()
+
+    assert opened_urls == []
+    assert warnings
+    assert "http または https" in warnings[0]
 
 
 def test_double_click_opens_history_for_clicked_item(window_with_items, monkeypatch) -> None:
