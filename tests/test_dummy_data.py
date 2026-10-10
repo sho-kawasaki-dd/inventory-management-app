@@ -66,6 +66,27 @@ def test_generates_inspectable_database(tmp_path) -> None:
             conn.close()
 
 
+def test_performance_database_can_keep_active_quantities_positive(tmp_path) -> None:
+    path = tmp_path / "performance.db"
+
+    items, movements, _ = generate_database(_args(path), ensure_positive_active_quantities=True)
+
+    conn = sqlite3.connect(path)
+    try:
+        assert (items, movements) == (50, 500)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM items WHERE is_active = 1 AND quantity = 0"
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0] == 500
+        assert find_fifo_violations(conn) == []
+        assert BackupService().inspect_database(conn, SCHEMA_VERSION) == []
+    finally:
+        conn.close()
+
+
 def test_existing_database_is_refused_without_force(tmp_path) -> None:
     path = tmp_path / "existing.db"
     path.write_bytes(b"keep")

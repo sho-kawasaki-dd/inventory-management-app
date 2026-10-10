@@ -50,7 +50,8 @@ def performance_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
             years=3,
             seed=0,
             force=False,
-        )
+        ),
+        ensure_positive_active_quantities=True,
     )
     return db_path
 
@@ -233,16 +234,8 @@ def _copy_database_with_low_stock_count(
             "SELECT id, quantity FROM items WHERE is_active = 1 ORDER BY id"
         ).fetchall()
         assert len(active_items) >= expected_count
-        zero_quantity_ids = {item_id for item_id, quantity in active_items if quantity == 0}
-        if expected_count < len(zero_quantity_ids):
-            pytest.skip(
-                f"有効数量 0 の {len(zero_quantity_ids)} 品目は閾値変更だけでは除外できず、"
-                f"低在庫 {expected_count} 件を作成できません"
-            )
-        positive_items = [(item_id, quantity) for item_id, quantity in active_items if quantity > 0]
-        low_stock_ids = zero_quantity_ids | {
-            item_id for item_id, _ in positive_items[: expected_count - len(zero_quantity_ids)]
-        }
+        assert all(quantity > 0 for _, quantity in active_items)
+        low_stock_ids = {item_id for item_id, _ in active_items[:expected_count]}
         conn.executemany(
             "UPDATE items SET reorder_threshold = ? WHERE id = ?",
             [
@@ -265,13 +258,10 @@ def test_startup_to_first_table_paint(
     performance_db: Path, tmp_path: Path, low_stock_count: int
 ) -> None:
     data_dir = tmp_path / f"startup-data-{low_stock_count}"
-    db_path = _copy_database_with_low_stock_count(performance_db, data_dir, low_stock_count)
+    _copy_database_with_low_stock_count(performance_db, data_dir, low_stock_count)
 
     elapsed = _run_startup_probe(data_dir)
-    print(
-        f"別プロセス起動から一覧初回描画(低在庫 {low_stock_count:,} 件): "
-        f"{elapsed:.3f} 秒 ({db_path.stat().st_size:,} bytes)"
-    )
+    print(f"別プロセス起動から一覧初回描画(低在庫 {low_stock_count:,} 件): {elapsed:.3f} 秒")
     assert elapsed <= 3.0
 
 
