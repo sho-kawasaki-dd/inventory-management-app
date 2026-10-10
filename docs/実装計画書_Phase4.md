@@ -118,7 +118,7 @@
 
 #### E. 4a の仕上げ
 
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 4a の PR を作成し、CI 成功後にマージする
 
 ### 4b. 起動時通知・性能・文書(`feature/phase4-startup-notice`)
