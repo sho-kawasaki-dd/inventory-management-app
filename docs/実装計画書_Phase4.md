@@ -127,17 +127,17 @@
 
 #### F. 起動時通知
 
-- [ ] `ui/dialogs/low_stock_notice_dialog.py`:
-  - [ ] `LowStockNoticeTableModel(QAbstractTableModel)`: ドック用モデル(8列)と分離した起動時通知専用の軽量モデル。列は管理番号・品名・数量・閾値・発注主体(5列)。数値は右寄せ。`set_rows(rows: list[ItemRow])` を提供
-  - [ ] `LowStockNoticeDialog(rows: list[ItemRow], parent=None)`: 列は管理番号・品名・数量・閾値・発注主体、ボタンは「閉じる」のみ。表は入力フォームではないため、長い品名でも表がスクロールし、ボタンは常に操作可能にする。1366×768・文字サイズ 150% で作業領域に収める
-- [ ] `app.py` の `show_startup_notifications(context, window)` を実装する: `run_guarded` 経由で `list_low_stock()` を取得し、0 件なら何もしない。1 件以上ならダイアログを `exec` する。取得失敗でも起動を継続する。呼び出し位置は MainWindow 表示の後(変更しない)
-- [ ] `tests/test_low_stock_notice_dialog.py`: 起動スモーク、列と件数、表示内容、長い品名・多数件でのスクロールとボタン到達、文字サイズ 100%・150% で作業領域内に収まること
-- [ ] 性能テストの `exec()` 差し替えとは別に、通知ダイアログを実際に表示する UI テストで表の描画・スクロールと「閉じる」ボタンの操作を確認する
-- [ ] `tests/test_app.py`(追記)
-  - [ ] 低在庫 0 件で通知を表示しないこと、1 件以上で表示すること、廃止品目だけが低在庫相当の場合は表示しないこと
-  - [ ] 起動順: MainWindow の表示後に通知が呼ばれること
-  - [ ] 通知の取得失敗でも `main()` が継続すること
-  - [ ] 既存の `main()` テストが通知でブロックしないこと(低在庫なしの DB を使うか `exec` を差し替える)
+- [x] `ui/dialogs/low_stock_notice_dialog.py`:
+  - [x] `LowStockNoticeTableModel(QAbstractTableModel)`: ドック用モデル(8列)と分離した起動時通知専用の軽量モデル。列は管理番号・品名・数量・閾値・発注主体(5列)。数値は右寄せ。`set_rows(rows: list[ItemRow])` を提供
+  - [x] `LowStockNoticeDialog(rows: list[ItemRow], parent=None)`: 列は管理番号・品名・数量・閾値・発注主体、ボタンは「閉じる」のみ。表は入力フォームではないため、長い品名でも表がスクロールし、ボタンは常に操作可能にする。1366×768・文字サイズ 150% で作業領域に収める
+- [x] `app.py` の `show_startup_notifications(context, window)` を実装する: `run_guarded` 経由で `list_low_stock()` を取得し、0 件なら何もしない。1 件以上ならダイアログを `exec` する。取得失敗でも起動を継続する。呼び出し位置は MainWindow 表示の後(変更しない)
+- [x] `tests/test_low_stock_notice_dialog.py`: 起動スモーク、列と件数、表示内容、長い品名・多数件でのスクロールとボタン到達、文字サイズ 100%・150% で作業領域内に収まること
+- [x] 性能テストの `exec()` 差し替えとは別に、通知ダイアログを実際に表示する UI テストで表の描画・スクロールと「閉じる」ボタンの操作を確認する
+- [x] `tests/test_app.py`(追記)
+  - [x] 低在庫 0 件で通知を表示しないこと、1 件以上で表示すること、廃止品目だけが低在庫相当の場合は表示しないこと
+  - [x] 起動順: MainWindow の表示後に通知が呼ばれること
+  - [x] 通知の取得失敗でも `main()` が継続すること
+  - [x] 既存の `main()` テストが通知でブロックしないこと(低在庫なしの DB を使うか `exec` を差し替える)
 
 #### G. 性能
 

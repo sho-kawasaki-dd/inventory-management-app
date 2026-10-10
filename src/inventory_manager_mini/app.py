@@ -19,7 +19,12 @@ from inventory_manager_mini.core.services import InventoryService, MasterService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
-from inventory_manager_mini.ui.error_handling import install_excepthook, show_unexpected_error
+from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
+from inventory_manager_mini.ui.error_handling import (
+    install_excepthook,
+    run_guarded,
+    show_unexpected_error,
+)
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.single_instance import SingleInstanceLock
@@ -63,7 +68,9 @@ def build_context(conn: sqlite3.Connection, paths: AppPaths) -> AppContext:
 
 
 def show_startup_notifications(context: AppContext, window: MainWindow) -> None:
-    del context, window
+    succeeded, rows = run_guarded(window, context.inventory.list_low_stock)
+    if succeeded and rows:
+        LowStockNoticeDialog(rows, window).exec()
 
 
 def _show_database_error(
