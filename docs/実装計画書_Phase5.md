@@ -94,15 +94,15 @@
 
 #### A. core の改修
 
-- [ ] `core/errors.py` に `FileOutputError(DomainError)` を追加する(出力先に書き込めない場合。5b のバックアップでも共用し、UI は既存の `DomainError` 処理で表示する)
-- [ ] `core/reports.py` の `_write_csv` で `OSError` を `FileOutputError` に変換する(一時ファイルは `finally` で必ず削除し、既存ファイルは壊さない。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する)
-- [ ] `export_history_csv` に「原価金額」列を「単価」の後ろに追加する(開発計画書 5.8 の列順)。出庫・廃棄とそれらの取り消しは、保存済みの `cost_amount` をそのまま出力する。取り消し行の値は元行の符号反転済みなので、再度符号反転しない。入庫・返品・棚卸およびそれらの取り消しは空欄とする。原価 0 は `"0"` として空欄と区別し、数値セルは数式対策の対象外とする
-- [ ] `tests/test_csv.py`
-  - [ ] 原価金額の列順が「単価」の直後であること。出庫・廃棄は保存済み原価、各取り消しは符号反転した負の原価、入庫・返品・棚卸およびそれらの取り消しは空欄であること
-  - [ ] 原価 0 が `"0"` として出力され、負の原価に数式対策の `'` が付かず、取り消し行の符号が再反転しないこと
-  - [ ] 書き込み不可の出力先で `FileOutputError` が発生し、失敗後も既存ファイルのバイト列は変更されず、一時ファイルが残らないこと
-- [ ] `tests/test_errors.py`: `FileOutputError` が `DomainError` 派生であること
-- [ ] `tests/test_dependency_rules.py` が引き続き成功すること
+- [x] `core/errors.py` に `FileOutputError(DomainError)` を追加する(出力先に書き込めない場合。5b のバックアップでも共用し、UI は既存の `DomainError` 処理で表示する)
+- [x] `core/reports.py` の `_write_csv` で `OSError` を `FileOutputError` に変換する(一時ファイルは `finally` で必ず削除し、既存ファイルは壊さない。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する)
+- [x] `export_history_csv` に「原価金額」列を「単価」の後ろに追加する(開発計画書 5.8 の列順)。出庫・廃棄とそれらの取り消しは、保存済みの `cost_amount` をそのまま出力する。取り消し行の値は元行の符号反転済みなので、再度符号反転しない。入庫・返品・棚卸およびそれらの取り消しは空欄とする。原価 0 は `"0"` として空欄と区別し、数値セルは数式対策の対象外とする
+- [x] `tests/test_csv.py`
+  - [x] 原価金額の列順が「単価」の直後であること。出庫・廃棄は保存済み原価、各取り消しは符号反転した負の原価、入庫・返品・棚卸およびそれらの取り消しは空欄であること
+  - [x] 原価 0 が `"0"` として出力され、負の原価に数式対策の `'` が付かず、取り消し行の符号が再反転しないこと
+  - [x] 書き込み不可の出力先で `FileOutputError` が発生し、失敗後も既存ファイルのバイト列は変更されず、一時ファイルが残らないこと
+- [x] `tests/test_errors.py`: `FileOutputError` が `DomainError` 派生であること
+- [x] `tests/test_dependency_rules.py` が引き続き成功すること
 
 #### B. AppContext の拡張
 
