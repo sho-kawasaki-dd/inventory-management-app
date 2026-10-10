@@ -17,6 +17,7 @@ from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.integrity import (
     compute_aggregates,
     find_fifo_migration_violations,
+    find_fifo_violations,
     find_limit_violations,
     replay_allocations,
 )
@@ -553,6 +554,11 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
             )
         ),
     )
+    fifo_violations = find_fifo_violations(conn)
+    if fifo_violations:
+        raise UnsupportedSchemaError(
+            "FIFO 整合検査に失敗しました: " + "、".join(fifo_violations[:20])
+        )
 
 
 MIGRATIONS: dict[int, MigrationStep] = {

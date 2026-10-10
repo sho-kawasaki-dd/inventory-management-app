@@ -706,3 +706,215 @@ def test_apply_restore_reports_failed_recovery_and_preserves_automatic_backup(
     assert not error.value.recovered
     assert error.value.backup_path is not None
     assert error.value.backup_path.exists()
+
+
+_Legacy = tuple[int, str, int, int | None, str]
+
+
+def _add_legacy_history(
+    path: Path, rows: list[_Legacy], totals: tuple[int, int, int] | None = None
+) -> None:
+    conn = connect(path)
+    try:
+        conn.executemany(
+            "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, moved_at) VALUES (?, 1, 1, 1, 1, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.execute("UPDATE items SET quantity = ? WHERE id = 1", (sum(row[2] for row in rows),))
+        if totals is not None:
+            conn.execute(
+                "UPDATE total_aggregates SET inbound_quantity = ?, outbound_quantity = ?, "
+                "expenditure = ? WHERE id = 1",
+                totals,
+            )
+    finally:
+        conn.close()
+
+
+def _add_fifo_history(path: Path) -> None:
+    conn = connect(path)
+    try:
+        conn.executemany(
+            "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, cost_amount, moved_at) "
+            "VALUES (?, 1, 1, 1, 1, ?, ?, ?, ?, ?)",
+            [
+                (10, "in", 5, 100, None, "2026-01-01 00:00:00"),
+                (11, "out", -3, None, 300, "2026-01-02 00:00:00"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (11, 10, 3)"
+        )
+        conn.execute("UPDATE items SET quantity = 2 WHERE id = 1")
+        conn.execute(
+            "UPDATE total_aggregates SET inbound_quantity = 5, outbound_quantity = 3, "
+            "expenditure = 300 WHERE id = 1"
+        )
+    finally:
+        conn.close()
+
+
+def _corrupt_allocation(path: Path) -> None:
+    conn = connect(path)
+    try:
+        conn.execute("UPDATE stock_allocations SET quantity = 2 WHERE movement_id = 11")
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_prepare_restore_converts_older_history_to_fifo(tmp_path: Path, version: int) -> None:
+    source_path = tmp_path / f"v{version}-history.db"
+    _create_inventory_database(source_path, "履歴付き", schema_version=version)
+    _add_legacy_history(
+        source_path,
+        [
+            (10, "in", 2, 100, "2026-01-01 00:00:00"),
+            (11, "out", -1, 50, "2026-01-02 00:00:00"),
+        ],
+    )
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        restored = connect_readonly(prepared.path)
+        try:
+            assert restored.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+            assert restored.execute(
+                "SELECT unit_price, cost_amount FROM stock_movements WHERE id = 11"
+            ).fetchone() == (None, 100)
+            assert restored.execute(
+                "SELECT movement_id, lot_id, quantity FROM stock_allocations"
+            ).fetchall() == [(11, 10, 1)]
+            assert restored.execute(
+                "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+            ).fetchone() == (2, 1, 100)
+        finally:
+            restored.close()
+
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+@pytest.mark.parametrize(
+    ("rows", "totals", "expected"),
+    [
+        (
+            [
+                (10, "out", -1, None, "2026-01-01 00:00:00"),
+                (11, "in", 1, 100, "2026-01-02 00:00:00"),
+            ],
+            (1, 1, 0),
+            "FIFO 引当が不足",
+        ),
+        (
+            [
+                (10, "in", 100_001, 1_000, "2026-01-01 00:00:00"),
+                (11, "out", -100_001, 0, "2026-01-02 00:00:00"),
+            ],
+            (100_001, 100_001, 0),
+            "cost_amount",
+        ),
+    ],
+    ids=["replay-impossible", "cost-over-limit"],
+)
+def test_prepare_restore_rejects_version_three_source_failing_fifo_precheck(
+    tmp_path: Path, rows: list[_Legacy], totals: tuple[int, int, int], expected: str
+) -> None:
+    source_path = tmp_path / "v3-fifo-invalid.db"
+    _create_inventory_database(source_path, "移行不可", schema_version=3)
+    _add_legacy_history(source_path, rows, totals)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert any("事前検査" in reason and expected in reason for reason in error.value.reasons)
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_backup_and_restore_reject_fifo_violation_in_current_version(tmp_path: Path) -> None:
+    source_path = tmp_path / "v4-fifo-invalid.db"
+    _create_inventory_database(source_path, "引当不整合")
+    _add_fifo_history(source_path)
+    conn = connect(source_path)
+    try:
+        assert BackupService().inspect_database(conn, SCHEMA_VERSION) == []
+    finally:
+        conn.close()
+    _corrupt_allocation(source_path)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    readonly_conn = connect_readonly(source_path)
+    try:
+        with pytest.raises(ValidationError, match="バックアップを作成できません"):
+            BackupService().create_backup(readonly_conn, tmp_path / "backups")
+    finally:
+        readonly_conn.close()
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert any("引当明細" in reason and "一致しません" in reason for reason in error.value.reasons)
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+    assert not (tmp_path / "backups").exists()
+
+
+def test_inspect_database_compares_aggregates_with_the_method_of_each_version(
+    tmp_path: Path,
+) -> None:
+    v4_path = tmp_path / "v4.db"
+    _create_inventory_database(v4_path, "v4")
+    _add_fifo_history(v4_path)
+    v3_path = tmp_path / "v3.db"
+    _create_inventory_database(v3_path, "v3", schema_version=3)
+    _add_legacy_history(
+        v3_path,
+        [(10, "in", 2, 100, "2026-01-01 00:00:00"), (11, "out", -1, 50, "2026-01-02 00:00:00")],
+        (2, 1, 50),
+    )
+    service = BackupService()
+
+    v4 = connect(v4_path)
+    v3 = connect(v3_path)
+    try:
+        assert service.inspect_database(v4, 4) == []
+        assert service.inspect_database(v3, 3) == []
+
+        v4.execute("UPDATE total_aggregates SET expenditure = 301 WHERE id = 1")
+        v3.execute("UPDATE total_aggregates SET expenditure = 100 WHERE id = 1")
+
+        assert any(
+            "expenditure" in r and "一致しません" in r for r in service.inspect_database(v4, 4)
+        )
+        assert any(
+            "expenditure" in r and "一致しません" in r for r in service.inspect_database(v3, 3)
+        )
+    finally:
+        v4.close()
+        v3.close()
+
+
+def test_apply_restore_recovers_when_overwritten_database_violates_fifo(
+    tmp_path: Path,
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    _add_fifo_history(source_path)
+    service = BackupService()
+
+    with service.prepare_restore(source_path) as prepared:
+        _corrupt_allocation(prepared.path)
+        with pytest.raises(RestoreError) as error:
+            service.apply_restore(prepared, current_path, tmp_path / "backups")
+
+    assert error.value.stage == "overwrite"
+    assert error.value.recovered
+    assert "引当明細" in str(error.value)
+    current = connect_readonly(current_path)
+    try:
+        assert current.execute("SELECT name FROM items").fetchone() == ("現行品目",)
+        assert current.execute("SELECT COUNT(*) FROM stock_movements").fetchone() == (0,)
+    finally:
+        current.close()
