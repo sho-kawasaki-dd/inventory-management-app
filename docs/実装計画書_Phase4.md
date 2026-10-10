@@ -6,6 +6,7 @@
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3.1・5.5・5.6・6.2・6.3・6.4・7.5・8・9 章)、[実装計画書_Phase2](実装計画書_Phase2.md)、[実装計画書_Phase3](実装計画書_Phase3.md)
 - 改訂履歴: 2026-10-10 初版。判定の `is_active` 条件の修正、販売ページボタンの範囲、ドック行ダブルクリック時の絞り込み解除、ドックの並び順、PR 分割を決定
 - 改訂履歴: 2026-10-10 レビュー反映。品目登録・編集後の再読込の一本化、条件解除時の検索タイマー停止、通知の取得・構築を含む起動性能計測を明記
+- 改訂履歴: 2026-10-11 レビュー反映。販売ページ列のデリゲート採用(描画性能確保)、ドック用と通知用のモデル分離、行着色のコントラスト・選択ハイライト、低在庫1,000件DBの調整手順を具体化
 
 ---
 
@@ -38,15 +39,15 @@
 | PR 分割 | 4a(判定の修正・行着色・アラートドック・販売ページボタン)→ 4b(起動時通知・性能計測・文書同期・手動確認)の 2 PR。各 PR は CI 成功後にマージし、4b は 4a のマージ後に最新の `main` から作成する |
 | 判定の修正 | `ItemRepository.list` の `is_low_stock` 算出と `low_stock_only` 条件は `is_active` を見ていない。このため「廃止品目を含む」で廃止品目が低在庫として着色・抽出される。両方に `i.is_active = 1` を加える。`list_low_stock()`(`include_inactive=False` で有効品目のみ)と同じ結果になる |
 | 閾値 0 の扱い | 正本どおり `quantity <= reorder_threshold` とし、閾値 0・数量 0 も低在庫とする(仕様変更なし) |
-| 行着色 | `ItemTableModel` に `BackgroundRole` を追加し、低在庫行を淡い警告色にする。廃止行のグレー(`ForegroundRole`)は従来どおり。廃止品目は低在庫にならないため両者は重ならない。色は `item_table_model.py` の定数とし、文字色との十分なコントラストを保つ |
+| 行着色 | `ItemTableModel` に `BackgroundRole` を追加し、低在庫行を淡い警告色(例: `#FFF3CD`)にする。廃止行のグレー(`ForegroundRole`)は従来どおり。廃止品目は低在庫にならないため両者は重ならない。色は `item_table_model.py` の定数とし、文字色との十分なコントラスト(WCAG 2.1 AA 準拠、コントラスト比 4.5:1 以上)を保ち、行選択時にも選択ハイライトが適切に視認・優先されることを確認する |
 | ドックの構成 | `QDockWidget` を MainWindow の右側に置く。列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ(ボタン)。タイトルは「低在庫 (N)」で件数を示す。0 件のときは「低在庫 (0)」とし、空の一覧を表示する |
 | ドックの並び順 | 管理番号順(`list_low_stock()` の返す順)に固定し、ソートは設けない |
 | ドックの再読込 | `MainWindow.refresh()`(`data_changed` と初期化で呼ばれる)でのみ再読込する。検索・絞り込みの変更(`refresh_items`)では再読込しない。取得は `run_guarded` 経由 |
 | 品目登録・編集後の再読込 | `ItemDialog._save()` の成功時の `data_changed` 通知に一本化する。`MainWindow._open_item_dialog()` の `dialog.exec()` 終了後の `self.refresh()` は削除し、一覧とドックの二重取得を防ぐ。キャンセル時は再読込しない |
 | 表示切替 | 「表示」メニューに `toggleViewAction()` による「アラートパネル」を追加する。閉じても再表示できる。表示状態の保存は行わず、起動ごとに表示する |
 | 行のダブルクリック | 最初に `search_timer.stop()` で開始済みの検索タイマーを停止する。`QSignalBlocker` で検索欄・クライアント・発注主体・カテゴリ・保管場所・「低在庫のみ」・「廃止品目を含む」と表示メニューの対応するアクションのシグナルをブロックして条件をすべて解除し、チェックボックスとアクションをともに未選択にする。ブロック解除後に `refresh_items()` を 1 回だけ呼び、該当品目をソースモデルからプロキシへ変換して選択・スクロールする。`refresh()` は呼ばず、ドックは再取得しない |
-| 販売ページボタン | Phase 4 ではドックのみに置く(一覧・メニューの導線は Phase 5)。URL が空の行は不活性。押下時に `validate_purchase_url` で再検証し、不正なら `run_guarded` でエラー表示して開かない。通過した URL のみ `QDesktopServices.openUrl` に渡す(`ItemDialog._open_purchase_url` と同じ手順) |
-| 起動時通知 | 起動順の最後(「MainWindow 表示 → 低在庫通知」)に `show_startup_notifications(context, window)` で表示する。0 件なら表示しない。列は管理番号・品名・数量・閾値・発注主体、ボタンは「閉じる」のみ。モーダル。取得に失敗した場合は `run_guarded` で表示し、起動は継続する |
+| 販売ページボタン | Phase 4 ではドックのみに置く(一覧・メニューの導線は Phase 5)。1,000 件規模の低在庫でもウィジェット生成コスト・メモリ消費・再読込速度のボトルネックを避けるため、`setIndexWidget` は使わず `QStyledItemDelegate` によるカスタムデリゲートを採用する。`paint()` で `QStyle.drawControl` による押しボタン外観を描画し、`editorEvent()` でクリックを検知する。URL が空の行は不活性(無効表示)。押下時に `validate_purchase_url` で再検証し、不正なら `run_guarded` でエラー表示して開かない。通過した URL のみ `QDesktopServices.openUrl` に渡す(`ItemDialog._open_purchase_url` と同じ手順) |
+| 起動時通知 | 起動順の最後(「MainWindow 表示 → 低在庫通知」)に `show_startup_notifications(context, window)` で表示する。0 件なら表示しない。列は管理番号・品名・数量・閾値・発注主体(ドックの 8 列とは異なるため、専用の軽量モデル `LowStockNoticeTableModel` をドック用モデルと分離して定義)。ボタンは「閉じる」のみ。モーダル。取得に失敗した場合は `run_guarded` で表示し、起動は継続する |
 | 通知のテスト方針 | 通知ダイアログは自動テストで `exec()` を差し替える。既存の `test_app.py` のスモークテストでは低在庫 0 件の DB も使用可。起動性能テストは低在庫 0 件・1,000 件の両方で行い、子プロセス内で `LowStockNoticeDialog.exec()` のみを即時終了する処理へ差し替える。通知関数全体は差し替えず、実際の低在庫取得とダイアログ構築を計測に含める。通知ダイアログ自体の描画・スクロール・閉じる操作は別の UI テストで確認する |
 | ダイアログの表示 | MainWindow(ドック表示時)と起動時通知は、1366×768 の画面で文字サイズ 100%・150% とも `availableGeometry()` 内にウィンドウ枠を含めて収める(開発計画書 6.4)。必要に応じてスクロール可能とし、ボタンは常に操作可能にする。テストではフォント倍率を直接適用し、終了後に戻す |
 | 性能 | ドックの再読込を含めても、在庫操作・取り消しの保存と再描画 0.5 秒以内、その他の絞り込み 0.3 秒以内、起動 3 秒以内を維持する(開発計画書 7.5)。一覧の終了判定は既存どおり一覧 viewport の描画完了とする |
@@ -77,23 +78,24 @@
 
 #### B. 行着色 `ui/models/item_table_model.py`
 
-- [ ] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数にする
+- [ ] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数とし、文字色との十分なコントラスト(黒文字に対し 4.5:1 以上、例: `#FFF3CD`)を確保する
 - [ ] `tests/test_item_table_model.py`: 低在庫行のみ背景が返ること、非低在庫行は `None`、廃止行は背景なし・グレー文字のままであること
-- [ ] ソート・絞り込み用プロキシを経由しても着色が維持されることを `tests/test_main_window.py` で確認する
+- [ ] ソート・絞り込み用プロキシを経由しても着色が維持されること、行選択時にも選択状態が正常に視認できることを `tests/test_main_window.py` で確認する
 
 #### C. アラートドック `ui/widgets/alert_panel.py`
 
 - [ ] `LowStockTableModel(QAbstractTableModel)`: 列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ。数値は右寄せ、推奨発注数 `None` は空欄。`set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替え、`row_at(row)` を持つ
+- [ ] `OpenUrlButtonDelegate(QStyledItemDelegate)`: 販売ページ列用のカスタムデリゲート。`paint()` で `QStyle.drawControl(CE_PushButton, ...)` により押しボタンを描画し、URL 空行は不活性(無効表示)。`editorEvent()` でクリック(マウス左ボタン解放)を検知し、URL を `validate_purchase_url` で再検証して開く。大量行での生成コストとメモリ消費を避けるため `setIndexWidget` は使用しない
 - [ ] `AlertPanel(context, parent=None)`(`QDockWidget`)
-  - [ ] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし)
+  - [ ] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし、販売ページ列に `OpenUrlButtonDelegate` を設定)
   - [ ] `refresh()` は `run_guarded` 経由で `context.inventory.list_low_stock()` を呼び、モデルとタイトル「低在庫 (N)」を更新する
   - [ ] 行のダブルクリックで `item_activated(int)` を発火する(品目 ID)
-  - [ ] 販売ページ列に「開く」ボタンを置く(`setIndexWidget` またはデリゲート)。URL が空なら不活性。押下時に `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
+  - [ ] 販売ページの押下処理: デリゲートまたはパネル側で `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
 - [ ] `tests/test_alert_panel.py`
   - [ ] 起動スモーク、列見出し、管理番号順、件数タイトル(0 件・複数件)
   - [ ] 廃止品目が含まれないこと、閾値 0・数量 0 が含まれること
   - [ ] ダブルクリックで品目 ID のシグナルが発火すること
-  - [ ] 販売ページボタン: URL なしで不活性、`http`/`https` で `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
+  - [ ] 販売ページボタンデリゲート: URL なしで不活性描画・クリック無反応、`http`/`https` のクリックで `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
 
 #### D. MainWindow への組み込み `ui/main_window.py`
 
@@ -125,7 +127,9 @@
 
 #### F. 起動時通知
 
-- [ ] `ui/dialogs/low_stock_notice_dialog.py`: `LowStockNoticeDialog(rows: list[ItemRow], parent=None)`。列は管理番号・品名・数量・閾値・発注主体、ボタンは「閉じる」のみ。表は入力フォームではないため、長い品名でも表がスクロールし、ボタンは常に操作可能にする。1366×768・文字サイズ 150% で作業領域に収める
+- [ ] `ui/dialogs/low_stock_notice_dialog.py`:
+  - [ ] `LowStockNoticeTableModel(QAbstractTableModel)`: ドック用モデル(8列)と分離した起動時通知専用の軽量モデル。列は管理番号・品名・数量・閾値・発注主体(5列)。数値は右寄せ。`set_rows(rows: list[ItemRow])` を提供
+  - [ ] `LowStockNoticeDialog(rows: list[ItemRow], parent=None)`: 列は管理番号・品名・数量・閾値・発注主体、ボタンは「閉じる」のみ。表は入力フォームではないため、長い品名でも表がスクロールし、ボタンは常に操作可能にする。1366×768・文字サイズ 150% で作業領域に収める
 - [ ] `app.py` の `show_startup_notifications(context, window)` を実装する: `run_guarded` 経由で `list_low_stock()` を取得し、0 件なら何もしない。1 件以上ならダイアログを `exec` する。取得失敗でも起動を継続する。呼び出し位置は MainWindow 表示の後(変更しない)
 - [ ] `tests/test_low_stock_notice_dialog.py`: 起動スモーク、列と件数、表示内容、長い品名・多数件でのスクロールとボタン到達、文字サイズ 100%・150% で作業領域内に収まること
 - [ ] 性能テストの `exec()` 差し替えとは別に、通知ダイアログを実際に表示する UI テストで表の描画・スクロールと「閉じる」ボタンの操作を確認する
@@ -139,6 +143,7 @@
 
 - [ ] `tests/test_performance.py` の起動子プロセス内で `LowStockNoticeDialog.exec()` のみを即時終了する処理へ差し替え、通知の待機でブロックしないようにする。`show_startup_notifications` 全体は差し替えず、実際の `list_low_stock()` と通知ダイアログ構築を起動計測に含める
 - [ ] 共通のダミーデータ生成条件は通知回避のために変更せず、計測用に独立してコピーした DB で整合性を保って低在庫件数を調整する。品目 5,000・履歴 100,000 件を維持し、低在庫 0 件・1,000 件の両ケースの件数を確認したうえで、起動要求から一覧初回描画までそれぞれ 3 秒以内であることを検証し、4.1 に記録する
+  - [ ] 低在庫件数の調整手順: 履歴・引当・数量・集計値の整合性を一切崩さないよう、コピー後 DB の `items.reorder_threshold` のみで調整する。低在庫件数が `is_active = 1 AND quantity <= reorder_threshold` に従うことを前提に、正確に 0 件・1,000 件となるよう SQL で閾値を更新する(例: `quantity > 0` の有効品目から 1,000 件を選定して `reorder_threshold = quantity` とし、残りは `quantity > reorder_threshold` に収まるよう設定する)
 - [ ] ドックの再読込を含めて、入庫・出庫・取り消しの保存と一覧再描画が 0.5 秒以内、その他の絞り込みが 0.3 秒以内、起動が 3 秒以内であることを再計測する
 - [ ] 低在庫が品目 5,000 のうち 1,000 件ある DB で、ドックの再読込(`list_low_stock` とモデル更新)の時間を別途計測し、4.1 に記録する
 - [ ] 目標未達の場合は `list_low_stock` の SQL(`list` の再帰 CTE・購入情報の結合)・再読込の呼び出し回数を見直す。2 回の一覧取得(一覧とドック)を許容できない場合は、取得を 1 回にまとめる方針を検討し、本書へ反映する
@@ -165,7 +170,7 @@
 
 計測条件: 品目 5,000・履歴 100,000 件の DB(`scripts/generate_dummy_data.py`)。実行は `uv run pytest --run-perf tests/test_performance.py`。一覧の終了判定は、操作後のモデル更新を確認したうえでの一覧 viewport の描画完了とする(実装計画書 Phase 3 の 4.1 と同じ)。
 
-起動は低在庫 0 件・1,000 件の独立した計測用 DB で測定する。子プロセス内で `LowStockNoticeDialog.exec()` のみを即時終了する処理へ差し替え、利用者が閉じるまでの待機を除外する。通知関数全体は差し替えず、実際の低在庫取得と通知ダイアログ構築を計測に含める。通知ダイアログ自体の描画・スクロール・閉じる操作は別の UI テストで確認する。
+起動は低在庫 0 件・1,000 件の独立した計測用 DB で測定する。子プロセス内で `LowStockNoticeDialog.exec()` のみを即時終了する処理へ差し替え、利用者が閉じるまでの待機を除外する。通知関数全体は差し替えず、実際の低在庫取得と通知ダイアログ構築を計測に含める。低在庫件数の調整は、数量・履歴・引当・集計値に影響を与えないよう、コピー後 DB の `items.reorder_threshold` のみを SQL で更新して正確に 0 件および 1,000 件を再現する。通知ダイアログ自体の描画・スクロール・閉じる操作は別の UI テストで確認する。
 
 | 項目 | 目標 | 結果 | 実行環境 |
 | --- | --- | --- | --- |
