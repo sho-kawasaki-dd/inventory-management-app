@@ -9,15 +9,18 @@ from inventory_manager_mini.core.models import (
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
     REASON_LABELS,
+    Allocation,
     Category,
     Client,
     DashboardRow,
+    FifoEstimate,
     GroupBy,
     Item,
     ItemFilter,
     ItemRow,
     ItemUpdate,
     Location,
+    Lot,
     MovementRow,
     NewItem,
     PeriodKind,
@@ -43,6 +46,9 @@ def _field_names(model: type[Any]) -> set[str]:
         Location,
         Item,
         StockMovement,
+        Lot,
+        Allocation,
+        FifoEstimate,
         NewItem,
         ItemUpdate,
         PurchaseInfo,
@@ -104,7 +110,17 @@ def test_master_and_inventory_models_match_the_data_contract() -> None:
         "reversal_of",
         "note",
         "moved_at",
+        "cost_amount",
     }
+    assert _field_names(Lot) == {
+        "id",
+        "moved_at",
+        "remaining_quantity",
+        "unit_price",
+        "purchaser_id",
+    }
+    assert _field_names(Allocation) == {"lot_id", "quantity"}
+    assert _field_names(FifoEstimate) == {"cost_amount", "unpriced_quantity"}
 
 
 def test_input_and_display_models_match_their_roles() -> None:
