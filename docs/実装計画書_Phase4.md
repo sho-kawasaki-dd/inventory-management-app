@@ -78,9 +78,9 @@
 
 #### B. 行着色 `ui/models/item_table_model.py`
 
-- [ ] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数とし、文字色との十分なコントラスト(黒文字に対し 4.5:1 以上、例: `#FFF3CD`)を確保する
-- [ ] `tests/test_item_table_model.py`: 低在庫行のみ背景が返ること、非低在庫行は `None`、廃止行は背景なし・グレー文字のままであること
-- [ ] ソート・絞り込み用プロキシを経由しても着色が維持されること、行選択時にも選択状態が正常に視認できることを `tests/test_main_window.py` で確認する
+- [x] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数とし、文字色との十分なコントラスト(黒文字に対し 4.5:1 以上、例: `#FFF3CD`)を確保する
+- [x] `tests/test_item_table_model.py`: 低在庫行のみ背景が返ること、非低在庫行は `None`、廃止行は背景なし・グレー文字のままであること
+- [x] ソート・絞り込み用プロキシを経由しても着色が維持されること、行選択時にも選択状態が正常に視認できることを `tests/test_main_window.py` で確認する
 
 #### C. アラートドック `ui/widgets/alert_panel.py`
 

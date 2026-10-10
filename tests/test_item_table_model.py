@@ -104,6 +104,28 @@ def test_display_values_roles_and_inactive_foreground(monkeypatch: pytest.Monkey
     assert model.data(model.index(0, 6), Qt.ItemDataRole.ForegroundRole) == QBrush(
         QColor(Qt.GlobalColor.gray)
     )
+    assert model.data(model.index(0, 6), Qt.ItemDataRole.BackgroundRole) is None
+
+
+def test_background_role_highlights_only_active_low_stock_rows() -> None:
+    model = ItemTableModel()
+    model.set_rows(
+        [
+            _item(1, is_low_stock=True),
+            _item(2, quantity=5, is_low_stock=False),
+            _item(3, is_active=False, is_low_stock=True),
+        ]
+    )
+
+    for column in range(model.columnCount()):
+        assert model.data(model.index(0, column), Qt.ItemDataRole.BackgroundRole) == QBrush(
+            QColor("#FFF3CD")
+        )
+        assert model.data(model.index(1, column), Qt.ItemDataRole.BackgroundRole) is None
+        assert model.data(model.index(2, column), Qt.ItemDataRole.BackgroundRole) is None
+    assert model.data(model.index(2, 0), Qt.ItemDataRole.ForegroundRole) == QBrush(
+        QColor(Qt.GlobalColor.gray)
+    )
 
 
 def test_none_values_are_blank_and_numeric_columns_are_right_aligned() -> None:

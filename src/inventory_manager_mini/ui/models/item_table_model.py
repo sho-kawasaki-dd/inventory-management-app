@@ -40,6 +40,7 @@ class ItemTableModel(QAbstractTableModel):
         ("状態", "is_active"),
     )
     _NUMERIC_COLUMNS = {7, 9, 10, 11}
+    _LOW_STOCK_BACKGROUND = QBrush(QColor("#FFF3CD"))
     _INACTIVE_FOREGROUND = QBrush(QColor(Qt.GlobalColor.gray))
 
     def __init__(self, parent=None) -> None:
@@ -66,6 +67,8 @@ class ItemTableModel(QAbstractTableModel):
             return self._display_value(value, index.column())
         if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in self._NUMERIC_COLUMNS:
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        if role == Qt.ItemDataRole.BackgroundRole and row.is_active and row.is_low_stock:
+            return self._LOW_STOCK_BACKGROUND
         if role == Qt.ItemDataRole.ForegroundRole and not row.is_active:
             return self._INACTIVE_FOREGROUND
         return None

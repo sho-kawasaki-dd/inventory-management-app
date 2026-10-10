@@ -95,6 +95,39 @@ def test_search_debounces_name_code_and_manufacturer_number(qtbot, window_with_i
         qtbot.waitUntil(lambda: len(_item_ids(window)) == 2, timeout=1500)
 
 
+def test_low_stock_background_survives_proxy_sort_filter_and_selection(window_with_items) -> None:
+    window, _first, _second = window_with_items
+    low_stock_item = window.context.inventory.create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name="閾値ゼロ品目",
+            category_id=2,
+            initial_quantity=0,
+            initial_staff_id=1,
+            reorder_threshold=0,
+        )
+    )
+    window.context.data_bus.data_changed.emit()
+    window.sort_model.sort(1, Qt.SortOrder.AscendingOrder)
+    low_stock_source_row = window.item_model.row_of(low_stock_item.id)
+    assert low_stock_source_row is not None
+    low_stock_proxy_index = window.sort_model.mapFromSource(
+        window.item_model.index(low_stock_source_row, 0)
+    )
+
+    assert low_stock_proxy_index.data(Qt.ItemDataRole.BackgroundRole).color().name() == "#fff3cd"
+
+    window.low_stock_checkbox.setChecked(True)
+    assert _item_ids(window) == {low_stock_item.id}
+    window.table.selectRow(0)
+
+    selected_rows = window.table.selectionModel().selectedRows()
+    assert len(selected_rows) == 1
+    assert window._selected_item_id() == low_stock_item.id
+    assert selected_rows[0].data(Qt.ItemDataRole.BackgroundRole).color().name() == "#fff3cd"
+
+
 def test_filter_controls_and_inactive_master_labels(window_with_items) -> None:
     window, first, second = window_with_items
 
@@ -130,7 +163,7 @@ def test_filter_controls_and_inactive_master_labels(window_with_items) -> None:
     assert _item_ids(window) == {second.id}
     window.location_combo.setCurrentIndex(0)
     window.low_stock_checkbox.setChecked(True)
-    assert _item_ids(window) == {second.id}
+    assert _item_ids(window) == set()
 
     window.include_inactive_action.setChecked(False)
     assert not window.inactive_checkbox.isChecked()
