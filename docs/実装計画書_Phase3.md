@@ -461,7 +461,7 @@
   - [x] 消費済みの入庫を取り消そうとすると不活性と理由ツールチップが表示され、消費操作を取り消した後に取り消せること
   - [x] 1366×768 の画面で文字サイズ 100%・150% の StockMoveDialog(見積表示を含む)・HistoryDialog(原価金額列を含む)が作業領域内に収まること
 - [x] 3c-2 の仕上げ: `uv sync --locked`・`uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する(Windows / Python 3.13.12。739 passed・13 skipped、core/db 97%)
-- [ ] 3c-2 の PR を作成し、CI 成功後にマージする
+- [x] 3c-2 の PR を作成し、CI 成功後にマージする
 - [x] 本書のステータスを更新し、未完了の手動確認・PR/CI を明示した(Phase 3 完了確認は手動確認・PR/CI 後)
 
 ## 4. 計測・確認結果
