@@ -12,7 +12,12 @@ from inventory_manager_mini.core.models import (
 )
 from inventory_manager_mini.core.services import InventoryService
 from inventory_manager_mini.db import integrity
-from inventory_manager_mini.db.integrity import compute_aggregates, find_limit_violations
+from inventory_manager_mini.db.integrity import (
+    compute_aggregates,
+    find_fifo_violations,
+    find_limit_violations,
+    replay_allocations,
+)
 from tests.conftest import unchecked_constraints
 
 ZERO_TOTALS = {
@@ -77,6 +82,36 @@ def _assert_stored_totals_match_history(
 
 def test_compute_aggregates_is_zero_without_history(seeded_conn: sqlite3.Connection) -> None:
     assert compute_aggregates(seeded_conn) == ZERO_TOTALS
+
+
+def test_fifo_replay_accepts_reversed_issue_and_fully_restored_lot(
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item_id = _create_item_directly(seeded_conn)
+    seeded_conn.executemany(
+        "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason, "
+        "delta, unit_price, cost_amount, reversal_of, moved_at) "
+        "VALUES (?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?)",
+        [
+            (10, item_id, "in", 5, 100, None, None, "2026-01-01 00:00:00"),
+            (11, item_id, "out", -3, None, 300, None, "2026-01-02 00:00:00"),
+            (12, item_id, "out", 3, None, -300, 11, "2026-01-03 00:00:00"),
+            (13, item_id, "in", -5, 100, None, 10, "2026-01-04 00:00:00"),
+        ],
+    )
+    seeded_conn.executemany(
+        "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (?, 10, ?)",
+        [(11, 3), (12, -3)],
+    )
+    seeded_conn.execute("UPDATE items SET quantity = 0 WHERE id = ?", (item_id,))
+
+    replay = replay_allocations(seeded_conn)
+
+    assert replay.violations == ()
+    assert replay.remaining_by_lot == {10: 0}
+    assert replay.allocations == {11: ((10, 3),), 12: ((10, -3),)}
+    assert find_fifo_violations(seeded_conn) == []
+    assert compute_aggregates(seeded_conn, version=4) == ZERO_TOTALS
 
 
 def test_total_aggregates_follow_every_operation_and_reversal(

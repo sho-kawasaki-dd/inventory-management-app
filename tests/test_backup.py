@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,15 @@ def _create_inventory_database(
     try:
         if schema_version == 1:
             create_schema(conn, migrations._SCHEMA_V1_DDL, version=1)
+        elif schema_version == 2:
+            create_schema(
+                conn,
+                migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL,
+                version=2,
+            )
+        elif schema_version == 3:
+            schema_v3 = files("inventory_manager_mini.db").joinpath("schema_v3.sql")
+            create_schema(conn, schema_v3.read_text(encoding="utf-8"), version=3)
         else:
             create_schema(conn, version=schema_version)
         conn.executemany("INSERT INTO clients (id, name) VALUES (?, ?)", [(1, "クライアント")])
@@ -224,6 +234,70 @@ def test_backup_service_inspects_schema_and_business_integrity(tmp_path: Path) -
         assert not conn.in_transaction
     finally:
         conn.close()
+
+
+def test_prepare_restore_migrates_v3_and_rechecks_fifo_integrity(tmp_path: Path) -> None:
+    source_path = tmp_path / "v3-backup.db"
+    _create_inventory_database(source_path, "復元品", schema_version=3)
+    source_conn = connect(source_path)
+    try:
+        source_conn.execute("UPDATE items SET quantity = 1 WHERE id = 1")
+        source_conn.executemany(
+            "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, moved_at) VALUES (?, 1, 1, 1, 1, ?, ?, ?, ?)",
+            [
+                (10, "in", 2, 100, "2026-01-01 00:00:00"),
+                (11, "out", -1, 50, "2026-01-02 00:00:00"),
+            ],
+        )
+        source_conn.execute(
+            "UPDATE total_aggregates SET inbound_quantity = 2, outbound_quantity = 1, "
+            "expenditure = 50 WHERE id = 1"
+        )
+    finally:
+        source_conn.close()
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        restored = connect_readonly(prepared.path)
+        try:
+            assert restored.execute("PRAGMA user_version").fetchone() == (4,)
+            assert restored.execute(
+                "SELECT unit_price, cost_amount FROM stock_movements WHERE id = 11"
+            ).fetchone() == (None, 100)
+            assert restored.execute(
+                "SELECT movement_id, lot_id, quantity FROM stock_allocations"
+            ).fetchall() == [(11, 10, 1)]
+        finally:
+            restored.close()
+
+        writable = connect(prepared.path)
+        try:
+            writable.execute("UPDATE stock_allocations SET quantity = 2 WHERE movement_id = 11")
+            reasons = BackupService().inspect_database(writable, 4)
+            assert any("引当明細" in reason and "一致しません" in reason for reason in reasons)
+        finally:
+            writable.close()
+
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_prepare_restore_migrates_v2_database_through_v4(tmp_path: Path) -> None:
+    source_path = tmp_path / "v2-backup.db"
+    _create_inventory_database(source_path, "v2復元品", schema_version=2)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        restored = connect_readonly(prepared.path)
+        try:
+            assert restored.execute("PRAGMA user_version").fetchone() == (4,)
+            assert migrations.inspect_schema(restored, 4) == []
+            assert restored.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert restored.execute("SELECT name FROM items").fetchone() == ("v2復元品",)
+        finally:
+            restored.close()
+
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
 
 
 def test_backup_service_stops_before_business_checks_when_schema_is_invalid(

@@ -53,7 +53,11 @@ from inventory_manager_mini.db.connection import (
     read_transaction,
     transaction,
 )
-from inventory_manager_mini.db.integrity import compute_aggregates, find_limit_violations
+from inventory_manager_mini.db.integrity import (
+    compute_aggregates,
+    find_fifo_violations,
+    find_limit_violations,
+)
 from inventory_manager_mini.db.migrations import (
     MIGRATIONS,
     MIN_SUPPORTED_SCHEMA_VERSION,
@@ -883,12 +887,12 @@ class BackupService:
                 return reasons
 
             # 型・範囲違反があると後続の数値検査が例外になるため、違反があればここで返す
-            limit_violations = find_limit_violations(conn)
+            limit_violations = find_limit_violations(conn, version=version)
             if limit_violations:
                 return limit_violations
 
             if version >= 3:
-                expected_aggregates = compute_aggregates(conn)
+                expected_aggregates = compute_aggregates(conn, version=version)
                 stored_row = conn.execute(
                     "SELECT inbound_quantity, outbound_quantity, disposed_quantity, "
                     "expenditure, disposal_amount FROM total_aggregates WHERE id = 1"
@@ -912,6 +916,9 @@ class BackupService:
                                 f"集計管理テーブルの {column} が履歴と一致しません: "
                                 f"保存値 {stored_row[index]!r}、履歴 {expected_aggregates[column]}"
                             )
+
+            if version >= 4:
+                reasons.extend(find_fifo_violations(conn))
 
             invalid_reversals = MovementRepository(conn).find_invalid_reversals()
             if invalid_reversals:
