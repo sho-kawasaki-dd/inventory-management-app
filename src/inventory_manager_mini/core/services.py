@@ -375,6 +375,11 @@ class InventoryService:
             unit_price = item.reference_price if delta > 0 else None
             if unit_price is not None:
                 unit_price = _optional_integer(unit_price, "適用単価", 0, MAX_UNIT_PRICE)
+            allocations: tuple[Allocation, ...] = ()
+            if delta < 0:
+                allocations, _ = plan_fifo_allocations(
+                    self.allocations.list_available_lots(item.id), -delta
+                )
             return self._record_movement(
                 item,
                 staff.id,
@@ -383,6 +388,7 @@ class InventoryService:
                 unit_price,
                 None,
                 normalized_note,
+                allocations=allocations,
             )
 
     def reverse(self, movement_id: int, staff_id: int, note: str | None = None) -> StockMovement:

@@ -16,12 +16,14 @@ from inventory_manager_mini.core.errors import (
 )
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
+    MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
     Allocation,
     ItemFilter,
     ItemUpdate,
     Reason,
+    StockMovement,
 )
 from inventory_manager_mini.db.connection import connect_memory
 from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
@@ -416,6 +418,214 @@ def test_allocation_repository_lists_lots_and_tracks_remaining_quantity(
     assert allocations.lot_remaining(lot.id) == 1
     assert movements.latest_moved_at(1) == "2026-01-02 00:00:00"
     assert movements.latest_moved_at(999) is None
+
+
+def _insert_lot_row(
+    repo: MovementRepository,
+    *,
+    delta: int,
+    moved_at: str,
+    item_id: int = 1,
+    reason: Reason = Reason.IN,
+    unit_price: int | None = 100,
+) -> StockMovement:
+    return repo.insert(
+        item_id=item_id,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=reason,
+        delta=delta,
+        unit_price=unit_price,
+        used_for=None,
+        reversal_of=None,
+        note=None,
+        moved_at=moved_at,
+    )
+
+
+def _insert_issue_row(
+    repo: MovementRepository,
+    *,
+    delta: int,
+    moved_at: str,
+    cost_amount: int = 0,
+    reversal_of: int | None = None,
+) -> StockMovement:
+    return repo.insert(
+        item_id=1,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=Reason.OUT,
+        delta=delta,
+        unit_price=None,
+        cost_amount=cost_amount,
+        used_for="用途",
+        reversal_of=reversal_of,
+        note=None,
+        moved_at=moved_at,
+    )
+
+
+def test_list_available_lots_filters_and_orders_by_moved_at_then_id(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    _insert_item(repository_conn, item_id=2, code="TL-0001", category_id=3)
+    movements = MovementRepository(repository_conn)
+    allocations = AllocationRepository(repository_conn)
+    later = _insert_lot_row(movements, delta=1, moved_at="2026-01-02 00:00:00")
+    earlier = _insert_lot_row(movements, delta=2, moved_at="2026-01-01 00:00:00")
+    same_time = _insert_lot_row(movements, delta=3, moved_at="2026-01-01 00:00:00")
+    adjust = _insert_lot_row(
+        movements, delta=4, moved_at="2026-01-03 00:00:00", reason=Reason.ADJUST, unit_price=None
+    )
+    consumed = _insert_lot_row(movements, delta=2, moved_at="2026-01-01 12:00:00")
+    reversed_lot = _insert_lot_row(movements, delta=5, moved_at="2026-01-01 13:00:00")
+    movements.insert(
+        item_id=1,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=Reason.IN,
+        delta=-5,
+        unit_price=100,
+        used_for=None,
+        reversal_of=reversed_lot.id,
+        note=None,
+        moved_at="2026-01-01 14:00:00",
+    )
+    _insert_lot_row(movements, delta=7, moved_at="2026-01-01 00:00:00", item_id=2)
+    issue = _insert_issue_row(movements, delta=-2, moved_at="2026-01-04 00:00:00")
+    allocations.insert_many(issue.id, (Allocation(consumed.id, 2),))
+
+    lots = allocations.list_available_lots(1)
+
+    assert [lot.id for lot in lots] == [earlier.id, same_time.id, later.id, adjust.id]
+    assert [(lot.remaining_quantity, lot.unit_price) for lot in lots] == [
+        (2, 100),
+        (3, 100),
+        (1, 100),
+        (4, None),
+    ]
+    assert allocations.list_available_lots(999) == []
+
+
+def test_allocation_reversal_restores_lot_remaining_quantity(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    movements = MovementRepository(repository_conn)
+    allocations = AllocationRepository(repository_conn)
+    lot = _insert_lot_row(movements, delta=3, moved_at="2026-01-01 00:00:00")
+    issue = _insert_issue_row(movements, delta=-2, moved_at="2026-01-02 00:00:00", cost_amount=200)
+    allocations.insert_many(issue.id, (Allocation(lot.id, 2),))
+    assert allocations.lot_remaining(lot.id) == 1
+
+    reversal = _insert_issue_row(
+        movements,
+        delta=2,
+        moved_at="2026-01-03 00:00:00",
+        cost_amount=-200,
+        reversal_of=issue.id,
+    )
+    allocations.insert_many(reversal.id, (Allocation(lot.id, -2),))
+
+    assert allocations.lot_remaining(lot.id) == 3
+    assert [value.remaining_quantity for value in allocations.list_available_lots(1)] == [3]
+    assert allocations.list_for_movement(reversal.id) == (Allocation(lot.id, -2),)
+
+
+def test_lot_remaining_is_none_for_rows_that_are_not_active_lots(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    movements = MovementRepository(repository_conn)
+    lot = _insert_lot_row(movements, delta=3, moved_at="2026-01-01 00:00:00")
+    issue = _insert_issue_row(movements, delta=-1, moved_at="2026-01-02 00:00:00")
+    lot_reversal = movements.insert(
+        item_id=1,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=Reason.IN,
+        delta=-3,
+        unit_price=100,
+        used_for=None,
+        reversal_of=lot.id,
+        note=None,
+        moved_at="2026-01-03 00:00:00",
+    )
+    allocations = AllocationRepository(repository_conn)
+
+    assert allocations.lot_remaining(lot.id) is None
+    assert allocations.lot_remaining(issue.id) is None
+    assert allocations.lot_remaining(lot_reversal.id) is None
+    assert allocations.lot_remaining(999) is None
+
+
+def test_allocation_insert_many_converts_integrity_errors(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    movements = MovementRepository(repository_conn)
+    allocations = AllocationRepository(repository_conn)
+    lot = _insert_lot_row(movements, delta=3, moved_at="2026-01-01 00:00:00")
+    issue = _insert_issue_row(movements, delta=-2, moved_at="2026-01-02 00:00:00")
+
+    for invalid in ((Allocation(999, 1),), (Allocation(lot.id, 0),)):
+        with pytest.raises(ValidationError) as error:
+            allocations.insert_many(issue.id, invalid)
+        assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+    allocations.insert_many(issue.id, (Allocation(lot.id, 1),))
+    with pytest.raises(ValidationError):
+        allocations.insert_many(issue.id, (Allocation(lot.id, 1),))
+    assert allocations.list_for_movement(issue.id) == (Allocation(lot.id, 1),)
+
+
+@pytest.mark.parametrize(
+    ("cost_amount", "accepted"),
+    [
+        (0, True),
+        (200, True),
+        (MAX_MOVEMENT_AMOUNT, True),
+        (MAX_MOVEMENT_AMOUNT + 1, False),
+        (None, False),
+    ],
+)
+def test_movement_repository_persists_and_validates_cost_amount(
+    repository_conn: sqlite3.Connection, cost_amount: int | None, accepted: bool
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    repo = MovementRepository(repository_conn)
+    values: dict[str, Any] = {
+        "item_id": 1,
+        "client_id": 1,
+        "purchaser_id": 1,
+        "staff_id": 1,
+        "reason": Reason.OUT,
+        "delta": -1,
+        "unit_price": None,
+        "cost_amount": cost_amount,
+        "used_for": "用途",
+        "reversal_of": None,
+        "note": None,
+        "moved_at": "2026-01-01 00:00:00",
+    }
+
+    if accepted:
+        movement = repo.insert(**values)
+        assert movement.cost_amount == cost_amount
+        fetched = repo.get(movement.id)
+        assert fetched is not None
+        assert fetched.cost_amount == cost_amount
+        assert repo.list_by_item(1)[0].cost_amount == cost_amount
+    else:
+        with pytest.raises(ValidationError) as error:
+            repo.insert(**values)
+        assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+        assert repository_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0] == 0
 
 
 def test_find_quantity_mismatches_reports_only_differences(

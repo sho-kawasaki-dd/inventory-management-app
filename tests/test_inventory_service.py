@@ -35,6 +35,7 @@ from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.integrity import (
     AGGREGATE_COLUMNS,
     compute_aggregates,
+    find_fifo_violations,
     replay_allocations,
 )
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
@@ -1139,5 +1140,295 @@ def test_failed_operations_leave_a_consistent_database_after_reconnect(
         }
         assert stored == compute_aggregates(reopened)
         assert BackupService().inspect_database(reopened, SCHEMA_VERSION) == []
+    finally:
+        reopened.close()
+
+
+_CONSUMED_LOT_REASON = (
+    "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で消費されているため取り消せません"
+)
+
+
+def _assert_fifo_consistent(inventory: InventoryService, conn: sqlite3.Connection) -> None:
+    assert find_fifo_violations(conn) == []
+    for item_id, quantity in conn.execute("SELECT id, quantity FROM items").fetchall():
+        lots = inventory.allocations.list_available_lots(item_id)
+        assert sum(lot.remaining_quantity for lot in lots) == quantity
+    assert inventory.aggregates.get() == compute_aggregates(conn)
+
+
+def _allocation_pairs(inventory: InventoryService, movement_id: int) -> list[tuple[int, int]]:
+    return [
+        (value.lot_id, value.quantity)
+        for value in inventory.allocations.list_for_movement(movement_id)
+    ]
+
+
+def test_every_decreasing_operation_allocates_lots_in_fifo_order(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=5, initial_staff_id=1, reference_price=10)
+    )
+    lot_a = inventory.list_history(item.id)[0]
+    lot_b = inventory.receive(item.id, 1, 5, unit_price=20)
+    assert _allocation_pairs(inventory, lot_a.id) == []
+    assert _allocation_pairs(inventory, lot_b.id) == []
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+    issued = inventory.issue(item.id, 1, 3, "用途")
+    assert _allocation_pairs(inventory, issued.id) == [(lot_a.id, 3)]
+    _assert_fifo_consistent(inventory, seeded_conn)
+    disposed = inventory.dispose(item.id, 1, 3)
+    assert _allocation_pairs(inventory, disposed.id) == [(lot_a.id, 2), (lot_b.id, 1)]
+    _assert_fifo_consistent(inventory, seeded_conn)
+    returned = inventory.return_to_supplier(item.id, 1, 2)
+    assert _allocation_pairs(inventory, returned.id) == [(lot_b.id, 2)]
+    _assert_fifo_consistent(inventory, seeded_conn)
+    counted = inventory.stocktake(item.id, 1, 1)
+    assert counted.delta == -1
+    assert _allocation_pairs(inventory, counted.id) == [(lot_b.id, 1)]
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+    assert [m.unit_price for m in (issued, disposed, returned, counted)] == [None] * 4
+    assert [m.cost_amount for m in (issued, disposed, returned, counted)] == [30, 40, None, None]
+    totals = inventory.aggregates.get()
+    assert (totals["inbound_quantity"], totals["outbound_quantity"], totals["expenditure"]) == (
+        5,
+        3,
+        30,
+    )
+    assert (totals["disposed_quantity"], totals["disposal_amount"]) == (3, 40)
+    assert [
+        (lot.id, lot.remaining_quantity)
+        for lot in inventory.allocations.list_available_lots(item.id)
+    ] == [(lot_b.id, 1)]
+
+
+def test_stocktake_increase_lot_uses_reference_price_and_blocks_reversal_when_consumed(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=1, initial_staff_id=1, reference_price=10)
+    )
+    initial = inventory.list_history(item.id)[0]
+    inventory.update_item(_update_item(item, reference_price=30))
+    increase = inventory.stocktake(item.id, 1, 3)
+    assert increase.unit_price == 30
+
+    issued = inventory.issue(item.id, 1, 3, "用途")
+    assert issued.cost_amount == 10 + 2 * 30
+    for lot in (initial, increase):
+        assert inventory.reversal_block_reason(lot.id) == _CONSUMED_LOT_REASON
+        with pytest.raises(ReversalNotAllowedError):
+            inventory.reverse(lot.id, 2)
+
+    inventory.reverse(issued.id, 2)
+    inventory.reverse(increase.id, 2)
+    inventory.reverse(initial.id, 2)
+    assert inventory.get_item(item.id).quantity == 0  # type: ignore[union-attr]
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+
+def test_priced_zero_and_unpriced_lots_are_mixed_by_fifo(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=2, initial_staff_id=1, reference_price=None)
+    )
+    unpriced_receipt = inventory.receive(item.id, 1, 2)
+    inventory.receive(item.id, 1, 2, unit_price=0)
+    inventory.receive(item.id, 1, 2, unit_price=5)
+    assert unpriced_receipt.unit_price is None
+
+    estimate = inventory.estimate_outflow(item.id, 7)
+    assert (estimate.cost_amount, estimate.unpriced_quantity) == (5, 4)
+    issued = inventory.issue(item.id, 1, 7, "用途")
+    assert issued.cost_amount == 5
+    assert inventory.aggregates.get()["expenditure"] == 5
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+
+@pytest.mark.parametrize("operation", ["issue", "dispose"])
+def test_fifo_cost_limit_is_exact_to_one_yen_across_lots(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection, operation: str
+) -> None:
+    def build(name: str, second_price: int) -> int:
+        item = inventory.create_item(
+            _new_item(name=name, initial_quantity=10, initial_staff_id=1, reference_price=9_999_999)
+        )
+        inventory.receive(item.id, 1, 1, unit_price=second_price)
+        return item.id
+
+    exact_id = build("ちょうど", 10)
+    over_id = build("1円超過", 11)
+    assert inventory.estimate_outflow(over_id, 11).cost_amount == MAX_MOVEMENT_AMOUNT + 1
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(ValidationError, match="1 操作の金額"):
+        _run_operation(inventory, operation, over_id, 11)
+    assert _snapshot(seeded_conn) == before
+
+    assert _run_operation(inventory, operation, exact_id, 11).cost_amount == MAX_MOVEMENT_AMOUNT
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+
+def test_reversed_lot_is_excluded_and_reversal_costs_keep_zero_and_null(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(
+        _new_item(initial_quantity=5, initial_staff_id=1, reference_price=10)
+    )
+    initial = inventory.list_history(item.id)[0]
+    receipt = inventory.receive(item.id, 1, 3, unit_price=20)
+    lot_reversal = inventory.reverse(receipt.id, 2)
+    assert (lot_reversal.cost_amount, lot_reversal.unit_price) == (None, 20)
+
+    issued = inventory.issue(item.id, 1, 5, "用途")
+    assert issued.cost_amount == 50
+    assert _allocation_pairs(inventory, issued.id) == [(initial.id, 5)]
+    assert inventory.allocations.list_available_lots(item.id) == []
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+    free = inventory.create_item(
+        _new_item(name="単価なし", initial_quantity=2, initial_staff_id=1, reference_price=None)
+    )
+    zero_issue = inventory.issue(free.id, 1, 2, "用途")
+    zero_reversal = inventory.reverse(zero_issue.id, 2)
+    assert zero_issue.cost_amount == 0
+    assert zero_reversal.cost_amount is not None
+    assert zero_reversal.cost_amount == 0
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+
+def test_fifo_state_stays_consistent_through_mixed_operations_and_reversals(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    a = inventory.create_item(
+        _new_item(name="A", initial_quantity=4, initial_staff_id=1, reference_price=10)
+    )
+    b = inventory.create_item(
+        _new_item(name="B", initial_quantity=3, initial_staff_id=1, reference_price=7)
+    )
+    inventory.receive(a.id, 1, 4, unit_price=20)
+    issue_a = inventory.issue(a.id, 1, 5, "用途")
+    _assert_fifo_consistent(inventory, seeded_conn)
+    dispose_b = inventory.dispose(b.id, 1, 2)
+    count_a = inventory.stocktake(a.id, 1, 1)
+    return_a = inventory.return_to_supplier(a.id, 1, 1)
+    _assert_fifo_consistent(inventory, seeded_conn)
+    inventory.stocktake(b.id, 1, 6)
+    issue_b = inventory.issue(b.id, 1, 4, "用途")
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+    for movement in (count_a, return_a, dispose_b, issue_b, issue_a):
+        inventory.reverse(movement.id, 2)
+        _assert_fifo_consistent(inventory, seeded_conn)
+    assert inventory.get_item(a.id).quantity == 8  # type: ignore[union-attr]
+    assert inventory.get_item(b.id).quantity == 8  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("operation", ["receive", "issue", "return", "dispose", "stocktake"])
+def test_every_operation_rejects_clock_rollback_atomically(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection, operation: str
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=5, initial_staff_id=1))
+    inventory.receive(item.id, 1, 1)
+    before = _snapshot(seeded_conn)
+    inventory.clock = lambda: datetime(2026, 1, 15, 11, 59, 59, tzinfo=UTC)
+
+    with pytest.raises(ValidationError, match="最新履歴より前"):
+        _run_operation(inventory, operation, item.id, 3 if operation == "stocktake" else 1)
+
+    assert _snapshot(seeded_conn) == before
+    assert not seeded_conn.in_transaction
+
+
+def test_clock_rollback_check_includes_reversal_rows_and_is_per_item(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=5, initial_staff_id=1))
+    first = inventory.issue(item.id, 1, 1, "用途")
+    second = inventory.issue(item.id, 1, 1, "用途")
+    inventory.clock = lambda: datetime(2026, 1, 15, 12, 0, 10, tzinfo=UTC)
+    inventory.reverse(first.id, 2)
+    before = _snapshot(seeded_conn)
+
+    inventory.clock = lambda: datetime(2026, 1, 15, 12, 0, 5, tzinfo=UTC)
+    with pytest.raises(ValidationError, match="最新履歴より前"):
+        inventory.issue(item.id, 1, 1, "用途")
+    with pytest.raises(ValidationError, match="最新履歴より前"):
+        inventory.reverse(second.id, 2)
+    assert _snapshot(seeded_conn) == before
+
+    other = inventory.create_item(_new_item(name="別品目", initial_quantity=1, initial_staff_id=1))
+    assert inventory.receive(other.id, 1, 1).moved_at == "2026-01-15 12:00:05"
+    _assert_fifo_consistent(inventory, seeded_conn)
+
+
+def test_estimate_outflow_validates_input_and_does_not_write(
+    inventory: InventoryService, seeded_conn: sqlite3.Connection
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=3, initial_staff_id=1))
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(NegativeStockError):
+        inventory.estimate_outflow(item.id, 4)
+    for bad_quantity in (0, -1, MAX_STOCK_QUANTITY + 1, True):
+        with pytest.raises(ValidationError):
+            inventory.estimate_outflow(item.id, bad_quantity)
+    for bad_item_id in (0, 999):
+        with pytest.raises(ValidationError):
+            inventory.estimate_outflow(bad_item_id, 1)
+
+    assert inventory.estimate_outflow(item.id, 3).cost_amount == 300
+    assert _snapshot(seeded_conn) == before
+    assert not seeded_conn.in_transaction
+
+
+@pytest.mark.parametrize("operation", ["issue", "reverse_issue", "stocktake_decrease"])
+def test_commit_failure_rolls_back_allocations_and_stays_consistent(
+    tmp_path: Path, operation: str
+) -> None:
+    path = tmp_path / "inventory.db"
+    conn = sqlite3.connect(path, autocommit=True, factory=_CommitFailConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    create_schema(conn)
+    master = MasterService(conn)
+    staff = master.add_staff("担当")
+    inventory = InventoryService(conn)
+    item = inventory.create_item(
+        NewItem(
+            client_id=master.add_client("総務").id,
+            purchaser_id=master.add_purchaser("本部").id,
+            name="品目",
+            category_id=master.add_category("備品", "TO").id,
+            initial_quantity=5,
+            initial_staff_id=staff.id,
+            reference_price=10,
+        )
+    )
+    inventory.receive(item.id, staff.id, 5, unit_price=20)
+    issued = inventory.issue(item.id, staff.id, 6, "用途")
+    before = _snapshot(conn)
+    actions: dict[str, Callable[[], object]] = {
+        "issue": lambda: inventory.issue(item.id, staff.id, 1, "用途"),
+        "reverse_issue": lambda: inventory.reverse(issued.id, staff.id),
+        "stocktake_decrease": lambda: inventory.stocktake(item.id, staff.id, 2),
+    }
+    try:
+        assert isinstance(conn, _CommitFailConnection)
+        conn.fail_next_commit = True
+        with pytest.raises(sqlite3.OperationalError, match="commit failed"):
+            actions[operation]()
+        assert _snapshot(conn) == before
+        _assert_fifo_consistent(inventory, conn)
+    finally:
+        conn.close()
+
+    reopened = connect(path)
+    try:
+        assert _snapshot(reopened) == before
+        assert find_fifo_violations(reopened) == []
     finally:
         reopened.close()

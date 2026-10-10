@@ -10,6 +10,7 @@ from inventory_manager_mini.core.models import (
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
     REASON_LABELS,
+    FifoEstimate,
     NewItem,
     Reason,
 )
@@ -237,6 +238,79 @@ def test_unpriced_only_fifo_outflow_remains_saveable(qtbot, dialog_context) -> N
     dialog._save()
     movement = dialog_context.inventory.list_history(item.id)[-1]
     assert (movement.unit_price, movement.cost_amount) == (None, 0)
+
+
+@pytest.mark.parametrize("reason", [Reason.OUT, Reason.DISPOSE])
+def test_multi_lot_fifo_estimate_is_exact_to_one_yen(qtbot, dialog_context, reason) -> None:
+    def build(second_price: int):
+        item = _create_item(dialog_context, quantity=10, reference_price=9_999_999)
+        dialog_context.inventory.receive(item.id, 1, 1, unit_price=second_price)
+        return item
+
+    def open_dialog(item):
+        dialog = StockMoveDialog(dialog_context, reason, item.id)
+        qtbot.addWidget(dialog)
+        dialog.staff_combo.setCurrentIndex(1)
+        if reason is Reason.OUT:
+            dialog.used_for_edit.setText("設備A")
+        dialog.quantity_spin.setValue(11)
+        return dialog
+
+    exact = open_dialog(build(10))
+    assert _ok_button(exact).isEnabled()
+
+    over = open_dialog(build(11))
+    assert not _ok_button(over).isEnabled()
+    assert f"{MAX_MOVEMENT_AMOUNT:,}" in over.error_label.text()
+
+
+def test_estimate_failures_disable_ok_and_show_the_reason(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = _create_item(dialog_context, quantity=3, reference_price=100)
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.quantity_spin.setValue(4)
+    assert not _ok_button(dialog).isEnabled()
+    assert "在庫が不足しています" in dialog.error_label.text()
+
+    def fail(item_id: int, quantity: int):
+        raise ValidationError("見積を計算できません")
+
+    monkeypatch.setattr(dialog_context.inventory, "estimate_outflow", fail)
+    dialog.quantity_spin.setValue(3)
+    assert not _ok_button(dialog).isEnabled()
+    assert "見積を計算できません" in dialog.error_label.text()
+
+
+def test_save_revalidates_the_estimate_and_does_not_record_over_limit(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = _create_item(dialog_context, quantity=3, reference_price=100)
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.quantity_spin.setValue(2)
+    assert _ok_button(dialog).isEnabled()
+    changes: list[bool] = []
+    dialog_context.data_bus.data_changed.connect(lambda: changes.append(True))
+    history_before = dialog_context.inventory.list_history(item.id)
+
+    monkeypatch.setattr(
+        dialog_context.inventory,
+        "estimate_outflow",
+        lambda item_id, quantity: FifoEstimate(MAX_MOVEMENT_AMOUNT + 1, 0),
+    )
+    dialog._save()
+
+    assert dialog_context.inventory.list_history(item.id) == history_before
+    assert changes == []
+    assert dialog.result() == 0
+    assert not _ok_button(dialog).isEnabled()
+    assert f"{MAX_MOVEMENT_AMOUNT:,}" in dialog.error_label.text()
 
 
 def test_inbound_price_validation_and_other_reasons_ignore_price(qtbot, dialog_context) -> None:
