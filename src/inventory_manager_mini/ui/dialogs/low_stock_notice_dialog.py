@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from inventory_manager_mini.core.models import ItemRow
+from inventory_manager_mini.ui.dialog_placement import center_dialog
 
 _INVALID_INDEX = QModelIndex()
 _ModelIndex = QModelIndex | QPersistentModelIndex
@@ -106,3 +108,7 @@ class LowStockNoticeDialog(QDialog):
 
         available = self.screen().availableGeometry()
         self.resize(min(700, available.width() - 24), min(420, available.height() - 48))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        center_dialog(self)
