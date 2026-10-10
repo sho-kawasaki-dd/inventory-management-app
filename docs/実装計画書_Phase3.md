@@ -431,7 +431,7 @@
 - [x] `tests/test_performance.py`: FIFO 引当を含む Service 単体の出庫保存が 0.5 秒以内、ロット多数(1,000 ロット)の出庫保存が 0.5 秒以内、ReportService の年次・月次集計が各 2 秒以内であることを測り、`--run-perf` で実行して 4.1 に記録する。v4 移行時間も参考値として記録する
 - [x] `.github/copilot-instructions.md` の在庫整合性ルールと開発計画書 4.2 ・4.4・5.2.2 が実装と一致していることを確認し、差異があれば同期する
 - [x] 3c-1 の仕上げ: `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 3c-1 の PR を作成し、CI 成功後にマージする
+- [x] 3c-1 の PR を作成し、CI 成功後にマージする
 
 ### 3c-2. FIFO 原価計上: UI 表示(`feature/phase3-fifo-ui`)
 
