@@ -69,12 +69,12 @@
 
 #### A. 低在庫判定の修正
 
-- [ ] `db/repositories.py` の `ItemRepository.list` で、`is_low_stock` の算出式と `low_stock_only` の条件に `i.is_active = 1` を加える。`list_low_stock()` の結果が変わらないことを確認する
-- [ ] `tests/test_repositories.py`・`tests/test_inventory_service.py` に境界ケースを追加する
-  - [ ] 数量が閾値ちょうど(低在庫)・閾値 + 1(対象外)・閾値 0 かつ数量 0(低在庫)
-  - [ ] 廃止品目は `include_inactive=True` でも `is_low_stock` が偽で、`low_stock_only` に含まれない
-  - [ ] 再有効化で低在庫に戻る
-- [ ] 既存のテストが廃止品目の低在庫を前提にしていれば、新しい契約へ更新する
+- [x] `db/repositories.py` の `ItemRepository.list` で、`is_low_stock` の算出式と `low_stock_only` の条件に `i.is_active = 1` を加える。`list_low_stock()` の結果が変わらないことを確認する
+- [x] `tests/test_repositories.py`・`tests/test_inventory_service.py` に境界ケースを追加する
+  - [x] 数量が閾値ちょうど(低在庫)・閾値 + 1(対象外)・閾値 0 かつ数量 0(低在庫)
+  - [x] 廃止品目は `include_inactive=True` でも `is_low_stock` が偽で、`low_stock_only` に含まれない
+  - [x] 再有効化で低在庫に戻る
+- [x] 既存のテストが廃止品目の低在庫を前提にしていれば、新しい契約へ更新する
 
 #### B. 行着色 `ui/models/item_table_model.py`
 

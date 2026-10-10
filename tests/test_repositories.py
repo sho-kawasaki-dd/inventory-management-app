@@ -302,6 +302,29 @@ def test_item_list_builds_paths_and_latest_non_reversed_purchase_info(
     assert repo.get_purchase_info(999).last_purchased_at is None
 
 
+def test_item_list_low_stock_boundaries_exclude_inactive_items(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1, quantity=2, threshold=2)
+    _insert_item(repository_conn, item_id=2, quantity=3, threshold=2)
+    _insert_item(repository_conn, item_id=3, quantity=0, threshold=0)
+    _insert_item(repository_conn, item_id=4, quantity=0, threshold=0, active=0)
+    repo = ItemRepository(repository_conn)
+
+    all_rows = {row.id: row for row in repo.list(ItemFilter(include_inactive=True))}
+    assert {item_id: row.is_low_stock for item_id, row in all_rows.items()} == {
+        1: True,
+        2: False,
+        3: True,
+        4: False,
+    }
+    assert [row.id for row in repo.list(ItemFilter(low_stock_only=True))] == [1, 3]
+    assert [
+        row.id for row in repo.list(ItemFilter(low_stock_only=True, include_inactive=True))
+    ] == [1, 3]
+    assert [row.id for row in repo.list_low_stock()] == [1, 3]
+
+
 def test_movement_repository_maps_rows_orders_and_detects_reversals(
     repository_conn: sqlite3.Connection,
 ) -> None:
