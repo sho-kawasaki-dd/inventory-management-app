@@ -160,17 +160,21 @@ class ReportService:
         }
         rows = self.conn.execute(
             """SELECT COALESCE(o.moved_at, m.moved_at) AS event_at,
-                m.client_id, c.name, m.purchaser_id, p.name, m.reason, m.delta,
-                m.unit_price, m.reversal_of,
-                EXISTS(SELECT 1 FROM stock_movements r WHERE r.reversal_of = m.id) AS is_reversed
+                m.client_id, c.name, COALESCE(lot.purchaser_id, m.purchaser_id), p.name,
+                m.reason, m.delta, a.quantity, lot.unit_price
             FROM stock_movements m
             LEFT JOIN stock_movements o ON o.id = m.reversal_of
+            LEFT JOIN stock_allocations a ON a.movement_id = m.id
+            LEFT JOIN stock_movements lot ON lot.id = a.lot_id
             JOIN clients c ON c.id = m.client_id
-            JOIN purchasers p ON p.id = m.purchaser_id
+            JOIN purchasers p ON p.id = COALESCE(lot.purchaser_id, m.purchaser_id)
             WHERE COALESCE(o.moved_at, m.moved_at) >= :range_start
                 AND COALESCE(o.moved_at, m.moved_at) < :range_end
                 AND (:client_id IS NULL OR m.client_id = :client_id)
-                AND (:purchaser_id IS NULL OR m.purchaser_id = :purchaser_id)
+                AND (
+                    :purchaser_id IS NULL
+                    OR COALESCE(lot.purchaser_id, m.purchaser_id) = :purchaser_id
+                )
             ORDER BY event_at, m.id""",
             parameters,
         ).fetchall()
@@ -205,21 +209,21 @@ class ReportService:
             values = aggregates[key]
             reason = Reason(str(row[5]))
             delta = int(row[6])
-            unit_price = None if row[7] is None else int(row[7])
-            reversal_of = row[8]
-            is_reversed = bool(row[9])
+            allocation_quantity = None if row[7] is None else int(row[7])
+            unit_price = None if row[8] is None else int(row[8])
             if reason is Reason.IN:
                 values[0] += delta
             elif reason is Reason.OUT:
-                values[1] -= delta
+                if allocation_quantity is not None:
+                    values[1] += allocation_quantity
+                    if unit_price is None:
+                        values[3] += allocation_quantity
+                    else:
+                        values[2] += allocation_quantity * unit_price
+            elif reason is Reason.DISPOSE and allocation_quantity is not None:
+                values[4] += allocation_quantity
                 if unit_price is not None:
-                    values[2] -= delta * unit_price
-                elif reversal_of is None and not is_reversed:
-                    values[3] += 1
-            elif reason is Reason.DISPOSE:
-                values[4] -= delta
-                if unit_price is not None:
-                    values[5] -= delta * unit_price
+                    values[5] += allocation_quantity * unit_price
 
         if group_by is GroupBy.NONE:
             for period_index in range(len(periods)):
@@ -246,7 +250,7 @@ class ReportService:
                     inbound_quantity=metrics[0],
                     outbound_quantity=metrics[1],
                     expenditure=metrics[2],
-                    unpriced_issue_count=metrics[3],
+                    unpriced_issue_quantity=metrics[3],
                     disposed_quantity=metrics[4],
                     disposal_amount=metrics[5],
                 )
@@ -364,7 +368,7 @@ class ReportService:
             "入庫数",
             "出庫数",
             "支出額",
-            "単価未登録件数",
+            "単価未登録数量",
             "廃棄数",
             "廃棄額",
         )
@@ -376,7 +380,7 @@ class ReportService:
                 row.inbound_quantity,
                 row.outbound_quantity,
                 row.expenditure,
-                row.unpriced_issue_count,
+                row.unpriced_issue_quantity,
                 row.disposed_quantity,
                 row.disposal_amount,
             )

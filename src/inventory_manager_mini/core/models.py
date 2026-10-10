@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 
@@ -101,6 +101,28 @@ class StockMovement:
     reversal_of: int | None
     note: str | None
     moved_at: str
+    cost_amount: int | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True, slots=True)
+class Lot:
+    id: int
+    moved_at: str
+    remaining_quantity: int
+    unit_price: int | None
+    purchaser_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class Allocation:
+    lot_id: int
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
+class FifoEstimate:
+    cost_amount: int
+    unpriced_quantity: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +222,6 @@ class DashboardRow:
     inbound_quantity: int
     outbound_quantity: int
     expenditure: int
-    unpriced_issue_count: int
+    unpriced_issue_quantity: int
     disposed_quantity: int
     disposal_amount: int

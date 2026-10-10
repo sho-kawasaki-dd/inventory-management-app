@@ -11,6 +11,7 @@ from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import GroupBy, ItemUpdate, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
 from inventory_manager_mini.core.services import InventoryService, SettingsService
+from inventory_manager_mini.db.integrity import compute_aggregates
 from tests.conftest import FixedClock, unchecked_constraints
 
 
@@ -21,6 +22,7 @@ def _create_item(
     client_id: int = 1,
     purchaser_id: int = 1,
     reference_price: int | None = None,
+    quantity: int = 10,
 ) -> int:
     return inventory.create_item(
         NewItem(
@@ -28,8 +30,8 @@ def _create_item(
             purchaser_id=purchaser_id,
             name=name,
             category_id=2,
-            initial_quantity=10,
-            initial_staff_id=1,
+            initial_quantity=quantity,
+            initial_staff_id=1 if quantity else None,
             reference_price=reference_price,
         )
     ).id
@@ -66,6 +68,7 @@ def test_dashboard_uses_local_month_boundaries_and_original_reversal_period(
 ) -> None:
     settings = SettingsService(seeded_conn)
     settings.set_fiscal_year_start_month(4)
+    fixed_clock.current = datetime(2025, 3, 31, 14, 58, tzinfo=UTC)
     inventory = InventoryService(seeded_conn, clock=fixed_clock)
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
     item = inventory.create_item(
@@ -138,7 +141,7 @@ def test_dashboard_aggregates_all_grouping_axes_and_combined_filters(
             "inbound_quantity",
             "outbound_quantity",
             "expenditure",
-            "unpriced_issue_count",
+            "unpriced_issue_quantity",
             "disposed_quantity",
             "disposal_amount",
         ):
@@ -184,7 +187,7 @@ def test_dashboard_excludes_returns_adjustments_and_reversed_unpriced_issues(
     row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
     assert row.outbound_quantity == 5
     assert row.expenditure == 100
-    assert row.unpriced_issue_count == 1
+    assert row.unpriced_issue_quantity == 2
     assert row.disposed_quantity == 1
     assert row.disposal_amount == 50
 
@@ -222,6 +225,7 @@ def test_available_fiscal_years_include_history_range_and_current_year(
     fixed_clock: FixedClock,
 ) -> None:
     settings.set_fiscal_year_start_month(4)
+    fixed_clock.current = datetime(2023, 4, 1, 0, 0, tzinfo=UTC)
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
     item_id = _create_item(inventory, name="年度一覧")
     fixed_clock.current = datetime(2023, 4, 1, 0, 0, tzinfo=UTC)
@@ -241,6 +245,7 @@ def test_changing_fiscal_year_start_month_changes_annual_periods(
     fixed_clock: FixedClock,
 ) -> None:
     settings.set_fiscal_year_start_month(4)
+    fixed_clock.current = datetime(2025, 4, 10, tzinfo=UTC)
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
     item_id = _create_item(inventory, name="年度境界")
     fixed_clock.current = datetime(2026, 3, 31, 14, 59, tzinfo=UTC)
@@ -337,17 +342,31 @@ def test_dashboard_sums_beyond_int64_with_python_integers(
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    item_id = _new_report_item(inventory, "巨大")
+    item_id = _new_report_item(inventory, "巨大", quantity=10)
     huge_price = 9 * 10**18
+    lot_id = seeded_conn.execute(
+        "SELECT id FROM stock_movements WHERE item_id = ? AND delta > 0", (item_id,)
+    ).fetchone()[0]
     with unchecked_constraints(seeded_conn):
-        seeded_conn.executemany(
-            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, reason, "
-            "delta, unit_price, used_for, moved_at) "
-            "VALUES (?, 1, 1, 1, 'out', -1, ?, '巨大', '2026-01-15 12:00:00')",
-            [(item_id, huge_price)] * 10,
+        seeded_conn.execute(
+            "UPDATE stock_movements SET unit_price = ? WHERE id = ?", (huge_price, lot_id)
         )
+        for _ in range(10):
+            cursor = seeded_conn.execute(
+                "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, reason, "
+                "delta, unit_price, cost_amount, used_for, moved_at) "
+                "VALUES (?, 1, 1, 1, 'out', -1, NULL, ?, '巨大', '2026-01-15 12:00:00')",
+                (item_id, huge_price),
+            )
+            seeded_conn.execute(
+                "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (?, ?, 1)",
+                (cursor.lastrowid, lot_id),
+            )
     with pytest.raises(sqlite3.OperationalError):
-        seeded_conn.execute("SELECT SUM(unit_price) FROM stock_movements").fetchone()
+        seeded_conn.execute(
+            "SELECT SUM(a.quantity * lot.unit_price) FROM stock_allocations a "
+            "JOIN stock_movements lot ON lot.id = a.lot_id"
+        ).fetchone()
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
 
     with pytest.raises(ValidationError, match="集計値"):
@@ -357,6 +376,117 @@ def test_dashboard_sums_beyond_int64_with_python_integers(
     row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
     assert type(row.expenditure) is int
     assert row.expenditure == 10 * huge_price
+
+
+def test_dashboard_attributes_costs_to_allocated_lot_purchasers(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _create_item(
+        inventory, name="発注主体別ロット", client_id=1, purchaser_id=1, quantity=0
+    )
+    inventory.receive(item_id, 1, 2, unit_price=10)
+    _change_item_owners(inventory, item_id, 2, 2)
+    inventory.receive(item_id, 1, 3, unit_price=30)
+    inventory.issue(item_id, 1, 1, "出庫")
+    inventory.dispose(item_id, 1, 3)
+
+    all_rows = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    by_purchaser = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.PURCHASER)
+    purchaser_totals = {row.purchaser_id: row for row in by_purchaser}
+    assert (all_rows.outbound_quantity, all_rows.expenditure) == (1, 10)
+    assert (all_rows.disposed_quantity, all_rows.disposal_amount) == (3, 70)
+    assert (
+        purchaser_totals[1].outbound_quantity,
+        purchaser_totals[1].expenditure,
+        purchaser_totals[1].disposed_quantity,
+        purchaser_totals[1].disposal_amount,
+    ) == (1, 10, 1, 10)
+    assert (
+        purchaser_totals[2].outbound_quantity,
+        purchaser_totals[2].expenditure,
+        purchaser_totals[2].disposed_quantity,
+        purchaser_totals[2].disposal_amount,
+    ) == (0, 0, 2, 60)
+
+    by_pair = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
+    for field in (
+        "inbound_quantity",
+        "outbound_quantity",
+        "expenditure",
+        "unpriced_issue_quantity",
+        "disposed_quantity",
+        "disposal_amount",
+    ):
+        assert sum(getattr(row, field) for row in by_pair) == getattr(all_rows, field)
+
+    filtered = report.dashboard(
+        2026,
+        PeriodKind.ANNUAL,
+        client_id=2,
+        purchaser_id=1,
+        group_by=GroupBy.CLIENT_PURCHASER,
+    )
+    assert len(filtered) == 1
+    assert (filtered[0].outbound_quantity, filtered[0].disposed_quantity) == (1, 1)
+
+
+def test_dashboard_counts_unpriced_issue_quantity_and_reversal_by_original_period(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(1)
+    fixed_clock.current = datetime(2025, 12, 31, 23, 59, tzinfo=UTC)
+    item_id = _create_item(inventory, name="単価不明数量", reference_price=None)
+    issue = inventory.issue(item_id, 1, 3, "月またぎ取消")
+    inventory.issue(item_id, 1, 2, "未取消")
+    fixed_clock.current = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    inventory.reverse(issue.id, 1)
+
+    december = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock).dashboard(
+        2025, PeriodKind.MONTHLY
+    )[-1]
+    january = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock).dashboard(
+        2026, PeriodKind.MONTHLY
+    )[0]
+    assert (december.outbound_quantity, december.unpriced_issue_quantity) == (2, 2)
+    assert (january.outbound_quantity, january.unpriced_issue_quantity) == (0, 0)
+
+
+def test_dashboard_attributes_outflow_to_issue_period_across_lot_periods(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(4)
+    fixed_clock.current = datetime(2025, 12, 30, tzinfo=UTC)
+    item_id = _create_item(inventory, name="期間をまたぐロット", quantity=0)
+    inventory.receive(item_id, 1, 2, unit_price=10)
+    fixed_clock.current = datetime(2026, 1, 2, tzinfo=UTC)
+    inventory.receive(item_id, 1, 2, unit_price=20)
+    fixed_clock.current = datetime(2026, 1, 3, tzinfo=UTC)
+    inventory.issue(item_id, 1, 3, "期間をまたぐ引当")
+
+    rows = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock).dashboard(
+        2026, PeriodKind.MONTHLY
+    )
+    december = next(row for row in rows if row.period_label == "2025年12月")
+    january = next(row for row in rows if row.period_label == "2026年1月")
+    assert (december.inbound_quantity, december.outbound_quantity, december.expenditure) == (
+        2,
+        0,
+        0,
+    )
+    assert (january.inbound_quantity, january.outbound_quantity, january.expenditure) == (
+        2,
+        3,
+        40,
+    )
 
 
 def test_monthly_annual_and_total_aggregates_agree_across_months(
@@ -377,6 +507,8 @@ def test_monthly_annual_and_total_aggregates_agree_across_months(
         inventory.receive(item_id, 1, 20)
         issue = inventory.issue(item_id, 1, 3, "用途")
         inventory.dispose(item_id, 1, 2)
+        inventory.return_to_supplier(item_id, 1, 1)
+        inventory.stocktake(item_id, 1, 13)
         if moment.month == 7:
             july_issue = issue
     assert july_issue is not None
@@ -386,6 +518,7 @@ def test_monthly_annual_and_total_aggregates_agree_across_months(
     monthly = report.dashboard(2026, PeriodKind.MONTHLY)
     annual = report.dashboard(2026, PeriodKind.ANNUAL)[0]
     totals = inventory.aggregates.get()
+    assert compute_aggregates(seeded_conn) == totals
     for field in (
         "inbound_quantity",
         "outbound_quantity",

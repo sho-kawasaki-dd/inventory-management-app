@@ -14,6 +14,7 @@ from inventory_manager_mini.core.errors import (
 )
 from inventory_manager_mini.db import integrity, migrations
 from inventory_manager_mini.db.connection import connect, connect_memory
+from inventory_manager_mini.db.integrity import find_fifo_violations
 from inventory_manager_mini.db.migrations import (
     SCHEMA_SPECS,
     SCHEMA_VERSION,
@@ -112,7 +113,7 @@ def test_version_two_rebuild_preserves_rows_and_initializes_aggregates(tmp_path:
 
     migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261009_120000")
     try:
-        assert migrated.execute("PRAGMA user_version").fetchone() == (3,)
+        assert migrated.execute("PRAGMA user_version").fetchone() == (4,)
         assert migrated.execute("PRAGMA foreign_keys").fetchone() == (1,)
         assert inspect_schema(migrated, SCHEMA_VERSION) == []
         assert migrated.execute("SELECT id, quantity FROM items").fetchone() == (7, 4)
@@ -123,6 +124,12 @@ def test_version_two_rebuild_preserves_rows_and_initializes_aggregates(tmp_path:
         assert migrated.execute(
             "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
         ).fetchone() == (5, 1, 200)
+        assert migrated.execute(
+            "SELECT unit_price, cost_amount FROM stock_movements WHERE id = 12"
+        ).fetchone() == (None, 200)
+        assert migrated.execute(
+            "SELECT lot_id, quantity FROM stock_allocations WHERE movement_id = 12"
+        ).fetchall() == [(11, 1)]
     finally:
         migrated.close()
 
@@ -503,6 +510,14 @@ def test_version_three_spec_is_based_on_its_own_ddl_snapshot() -> None:
     assert any(column.name == "extra" for column in settings.columns)
 
 
+def test_version_three_spec_uses_frozen_schema_file() -> None:
+    schema_v3 = files("inventory_manager_mini.db").joinpath("schema_v3.sql")
+    assert SCHEMA_SPECS[3] == migrations._schema_spec_from_ddl(
+        schema_v3.read_text(encoding="utf-8")
+    )
+    assert SCHEMA_SPECS[3] != SCHEMA_SPECS[4]
+
+
 def test_spec_records_index_expression_and_trigger_definition() -> None:
     category_index = next(
         index for index in SCHEMA_SPECS[1].indexes if index.name == "uq_categories_parent_name"
@@ -540,7 +555,12 @@ _LEGACY_TABLES = (
 
 
 def _create_legacy_database(path: Path, statements: str, *, version: int = 2) -> None:
-    ddl = migrations._SCHEMA_V1_DDL
+    if version == 3:
+        ddl = (
+            files("inventory_manager_mini.db").joinpath("schema_v3.sql").read_text(encoding="utf-8")
+        )
+    else:
+        ddl = migrations._SCHEMA_V1_DDL
     if version == 2:
         ddl += "\n" + migrations._MIGRATION_V2_SQL
     _create_database(path, schema_sql=ddl, version=version)
@@ -585,7 +605,8 @@ VALUES
     (24, 3, 1, 1, 2, 'out', 4, 500, '用途', 21, '取り消し', '2026-01-14 00:00:00'),
     (25, 3, 1, 1, 1, 'out', -3, 500, '別用途', NULL, NULL, '2026-01-15 00:00:00'),
     (30, 9, 1, 1, 1, 'in', 2, NULL, NULL, NULL, NULL, '2026-02-02 00:00:00'),
-    (31, 9, 1, 1, 1, 'adjust', -2, NULL, NULL, NULL, NULL, '2026-02-03 00:00:00');
+    (31, 9, 1, 1, 1, 'adjust', -2, NULL, NULL, NULL, NULL, '2026-02-03 00:00:00'),
+    (32, 9, 1, 1, 1, 'adjust', 0, 300, NULL, NULL, NULL, '2026-02-04 00:00:00');
 """
 
 
@@ -608,13 +629,47 @@ def test_version_two_rebuild_preserves_every_row_reference_index_and_trigger(
 
     conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261009_130000")
     try:
-        assert _table_rows(conn) == rows_before
+        preserved_tables = (
+            "clients",
+            "purchasers",
+            "staff",
+            "categories",
+            "locations",
+            "items",
+            "settings",
+        )
+        for table in preserved_tables:
+            assert _table_rows(conn)[table] == rows_before[table]
+        assert conn.execute(
+            "SELECT id, unit_price, cost_amount FROM stock_movements ORDER BY id"
+        ).fetchall() == [
+            (20, 500, None),
+            (21, None, 2000),
+            (22, None, 500),
+            (23, None, None),
+            (24, None, -2000),
+            (25, None, 1500),
+            (30, None, None),
+            (31, None, None),
+            (32, None, None),
+        ]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert find_fifo_violations(conn) == []
         assert inspect_schema(conn, SCHEMA_VERSION) == []
         assert _schema_object_names(conn) == fresh_objects
         assert ("index", "idx_movements_item_purchase", "stock_movements") in fresh_objects
         assert conn.execute("SELECT * FROM total_aggregates").fetchall() == [
             (1, 12, 3, 1, 1500, 500)
+        ]
+        assert conn.execute(
+            "SELECT movement_id, lot_id, quantity FROM stock_allocations ORDER BY id"
+        ).fetchall() == [
+            (21, 20, 4),
+            (22, 20, 1),
+            (23, 20, 1),
+            (24, 20, -4),
+            (25, 20, 3),
+            (31, 30, 2),
         ]
         assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
 
@@ -645,6 +700,51 @@ def test_version_two_rebuild_preserves_every_row_reference_index_and_trigger(
         backup.close()
 
 
+def test_v4_fifo_integrity_check_rejects_changed_allocations(tmp_path: Path) -> None:
+    path = tmp_path / "v3-corrupt-allocation.db"
+    _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
+    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120100")
+    try:
+        conn.execute("UPDATE stock_allocations SET quantity = quantity + 1 WHERE movement_id = 21")
+        violations = find_fifo_violations(conn)
+        assert any("履歴 ID 21" in reason and "一致しません" in reason for reason in violations)
+    finally:
+        conn.close()
+
+
+def test_failed_v4_rebuild_rolls_back_schema_data_version_and_foreign_keys(tmp_path: Path) -> None:
+    path = tmp_path / "v4-rebuild-failure.db"
+    _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
+    conn = connect(path)
+    try:
+        rows_before = _table_rows(conn)
+
+        def rebuild_then_fail(connection: sqlite3.Connection) -> None:
+            migrations._migrate_v3_to_v4(connection)
+            raise RuntimeError("after v4 rebuild")
+
+        with pytest.raises(RuntimeError, match="after v4 rebuild"):
+            migrations.migrate_schema(
+                conn,
+                3,
+                4,
+                {4: MigrationStep(rebuild_then_fail, rebuilds_tables=True)},
+            )
+        assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
+        assert not conn.in_transaction
+        assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+        assert inspect_schema(conn, 3) == []
+        assert _table_rows(conn) == rows_before
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'stock_allocations'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+
 def test_version_one_database_with_history_migrates_through_every_step(tmp_path: Path) -> None:
     path = tmp_path / "v1-history.db"
     _create_legacy_database(path, _RICH_LEGACY_ROWS, version=1)
@@ -659,6 +759,177 @@ def test_version_one_database_with_history_migrates_through_every_step(tmp_path:
     finally:
         conn.close()
     assert (tmp_path / "backups" / "pre-migrate_v1_20261009_130100.db").exists()
+
+
+def test_version_three_migrates_fifo_history_and_matches_new_schema(tmp_path: Path) -> None:
+    path = tmp_path / "v3-history.db"
+    _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
+
+    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120000")
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+        assert inspect_schema(conn, 4) == []
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute(
+            "SELECT id, unit_price, cost_amount FROM stock_movements WHERE id IN (21, 24, 25) "
+            "ORDER BY id"
+        ).fetchall() == [(21, None, 2000), (24, None, -2000), (25, None, 1500)]
+        assert conn.execute(
+            "SELECT movement_id, lot_id, quantity FROM stock_allocations ORDER BY id"
+        ).fetchall() == [
+            (21, 20, 4),
+            (22, 20, 1),
+            (23, 20, 1),
+            (24, 20, -4),
+            (25, 20, 3),
+            (31, 30, 2),
+        ]
+    finally:
+        conn.close()
+
+
+def test_v2_v3_legacy_aggregates_are_preserved_until_v4_conversion(tmp_path: Path) -> None:
+    path = tmp_path / "legacy-aggregates.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 6);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 10, 100, '2026-01-01 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (11, 1, 1, 1, 1, 'out', -4, 500, '2026-01-02 00:00:00');
+    """
+    _create_legacy_database(path, statements)
+    conn = connect(path)
+    try:
+        migrations.migrate_schema(conn, 2, 3)
+        assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+        assert conn.execute(
+            "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+        ).fetchone() == (10, 4, 2000)
+    finally:
+        conn.close()
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120200")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (4,)
+        assert migrated.execute(
+            "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+        ).fetchone() == (10, 4, 400)
+        assert migrated.execute(
+            "SELECT unit_price, cost_amount FROM stock_movements WHERE id = 11"
+        ).fetchone() == (None, 400)
+    finally:
+        migrated.close()
+
+
+def test_v3_fifo_cost_over_limit_is_rejected_before_backup(tmp_path: Path) -> None:
+    path = tmp_path / "v3-fifo-cost-too-high.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 100001);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 100001, 1000, '2026-01-01 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (11, 1, 1, 1, 1, 'out', -100001, 0, '2026-01-02 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, reversal_of, moved_at)
+    VALUES (12, 1, 1, 1, 1, 'out', 100001, 0, 11, '2026-01-03 00:00:00');
+    """
+    _create_legacy_database(path, statements, version=3)
+
+    with pytest.raises(MigrationError, match="cost_amount") as error:
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
+
+    assert "ID 11" in str(error.value)
+    assert "ID 12" in str(error.value)
+    assert "100001000" in str(error.value)
+    assert error.value.backup_path is None
+    assert not (tmp_path / "backups").exists()
+    verify = sqlite3.connect(path)
+    try:
+        assert verify.execute("PRAGMA user_version").fetchone() == (3,)
+        assert verify.execute(
+            "SELECT unit_price FROM stock_movements WHERE id = 11"
+        ).fetchone() == (0,)
+    finally:
+        verify.close()
+
+
+def test_v3_consumed_lot_reversal_is_rejected_before_backup(tmp_path: Path) -> None:
+    path = tmp_path / "v3-consumed-lot.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 0);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 5, 100, '2026-01-01 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (11, 1, 1, 1, 1, 'out', -3, 100, '2026-01-02 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (12, 1, 1, 1, 1, 'in', 3, 100, '2026-01-03 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, reversal_of, moved_at)
+    VALUES (13, 1, 1, 1, 1, 'in', -5, 100, 10, '2026-01-04 00:00:00');
+    """
+    _create_legacy_database(path, statements, version=3)
+
+    with pytest.raises(MigrationError, match="消費済み") as error:
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
+
+    assert error.value.backup_path is None
+    assert not (tmp_path / "backups").exists()
+    verify = sqlite3.connect(path)
+    try:
+        assert verify.execute("PRAGMA user_version").fetchone() == (3,)
+        assert verify.execute("SELECT COUNT(*) FROM stock_movements").fetchone() == (4,)
+    finally:
+        verify.close()
+
+
+@pytest.mark.parametrize(("aggregate_limit", "rejected"), [(10, False), (9, True)])
+def test_v3_fifo_aggregate_limit_boundary_before_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    aggregate_limit: int,
+    rejected: bool,
+) -> None:
+    monkeypatch.setattr(integrity, "MAX_AGGREGATE_VALUE", aggregate_limit)
+    path = tmp_path / f"v3-fifo-aggregate-{aggregate_limit}.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 0);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 1, 10, '2026-01-01 00:00:00');
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (11, 1, 1, 1, 1, 'out', -1, 0, '2026-01-02 00:00:00');
+    """
+    _create_legacy_database(path, statements, version=3)
+
+    if rejected:
+        with pytest.raises(MigrationError, match="expenditure") as error:
+            open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
+        assert error.value.backup_path is None
+        assert not (tmp_path / "backups").exists()
+        verify = sqlite3.connect(path)
+        try:
+            assert verify.execute("PRAGMA user_version").fetchone() == (3,)
+        finally:
+            verify.close()
+    else:
+        conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120300")
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+            assert conn.execute("SELECT expenditure FROM total_aggregates").fetchone() == (10,)
+        finally:
+            conn.close()
 
 
 _ITEM = (
@@ -851,3 +1122,249 @@ def test_normalize_sql_unquotes_only_simple_identifiers() -> None:
     assert normalize_sql('SELECT "my col" FROM t') != normalize_sql("SELECT my col FROM t")
     assert normalize_sql('SELECT "1x" FROM t') != normalize_sql("SELECT 1x FROM t")
     assert normalize_sql('SELECT "items"') != normalize_sql("SELECT 'items'")
+
+
+_V3_LOT_ROWS = """
+INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+VALUES (1, 1, 1, 'EQ-0101', 'ロット品', 1, 2),
+       (2, 1, 1, 'EQ-0102', '逆順品', 1, 1),
+       (3, 1, 1, 'EQ-0103', '同秒品', 1, 1);
+INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason, delta,
+    unit_price, reversal_of, moved_at)
+VALUES
+    (10, 1, 1, 1, 1, 'in', 3, 100, NULL, '2026-01-01 00:00:00'),
+    (11, 1, 1, 1, 1, 'adjust', 2, 70, NULL, '2026-01-02 00:00:00'),
+    (12, 1, 1, 1, 1, 'in', 4, NULL, NULL, '2026-01-03 00:00:00'),
+    (13, 1, 1, 1, 1, 'out', -6, 999, NULL, '2026-01-04 00:00:00'),
+    (14, 1, 1, 1, 1, 'return', -1, NULL, NULL, '2026-01-05 00:00:00'),
+    (15, 1, 1, 1, 1, 'dispose', -1, 100, NULL, '2026-01-06 00:00:00'),
+    (16, 1, 1, 1, 1, 'dispose', 1, 100, 15, '2026-01-07 00:00:00'),
+    (17, 1, 1, 1, 1, 'return', 1, NULL, 14, '2026-01-08 00:00:00'),
+    (18, 1, 1, 1, 1, 'in', 2, 120, NULL, '2026-01-09 00:00:00'),
+    (19, 1, 1, 1, 1, 'in', -2, 120, 18, '2026-01-10 00:00:00'),
+    (20, 1, 1, 1, 1, 'adjust', -1, 100, NULL, '2026-01-11 00:00:00'),
+    (30, 2, 1, 1, 1, 'in', 2, 200, NULL, '2026-02-02 00:00:00'),
+    (31, 2, 1, 1, 1, 'in', 2, 100, NULL, '2026-02-01 00:00:00'),
+    (32, 2, 1, 1, 1, 'out', -3, 0, NULL, '2026-02-03 00:00:00'),
+    (40, 3, 1, 1, 1, 'in', 1, 60, NULL, '2026-03-01 00:00:00'),
+    (41, 3, 1, 1, 1, 'in', 1, 50, NULL, '2026-03-01 00:00:00'),
+    (42, 3, 1, 1, 1, 'out', -1, 0, NULL, '2026-03-02 00:00:00');
+"""
+
+
+def test_version_three_conversion_covers_every_lot_and_decrease_kind(tmp_path: Path) -> None:
+    path = tmp_path / "v3-lots.db"
+    _create_legacy_database(path, _V3_LOT_ROWS, version=3)
+
+    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_130000")
+    try:
+        assert conn.execute(
+            "SELECT id, unit_price, cost_amount FROM stock_movements ORDER BY id"
+        ).fetchall() == [
+            (10, 100, None),  # 入庫ロットの単価を保持する
+            (11, 70, None),  # 棚卸増加ロットの単価を保持する
+            (12, None, None),  # 単価不明ロット
+            (13, None, 440),  # 3 × 100 + 2 × 70 + 単価不明 1
+            (14, None, None),  # 返品は原価なし
+            (15, None, 0),  # 単価不明ロットのみの廃棄
+            (16, None, 0),
+            (17, None, None),
+            (18, 120, None),
+            (19, 120, None),  # ロットの取り消しは元行の単価を保持する
+            (20, None, None),  # 棚卸減少は原価なし
+            (30, 200, None),
+            (31, 100, None),
+            (32, None, 400),  # 時刻順に古いロットから引き当てる(ID 順ではない)
+            (40, 60, None),
+            (41, 50, None),
+            (42, None, 60),  # 同時刻のロットは ID 順
+        ]
+        assert conn.execute(
+            "SELECT movement_id, lot_id, quantity FROM stock_allocations "
+            "ORDER BY movement_id, lot_id"
+        ).fetchall() == [
+            (13, 10, 3),
+            (13, 11, 2),
+            (13, 12, 1),
+            (14, 12, 1),
+            (15, 12, 1),
+            (16, 12, -1),
+            (17, 12, -1),
+            (20, 12, 1),
+            (32, 30, 1),
+            (32, 31, 2),
+            (42, 40, 1),
+        ]
+        assert conn.execute(
+            "SELECT id, reversal_of FROM stock_movements WHERE reversal_of IS NOT NULL ORDER BY id"
+        ).fetchall() == [(16, 15), (17, 14), (19, 18)]
+        assert conn.execute("SELECT * FROM total_aggregates").fetchall() == [(1, 13, 10, 0, 900, 0)]
+        assert find_fifo_violations(conn) == []
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert inspect_schema(conn, SCHEMA_VERSION) == []
+    finally:
+        conn.close()
+
+
+def test_version_three_cost_exactly_at_limit_is_migrated_with_reversal(tmp_path: Path) -> None:
+    path = tmp_path / "v3-cost-limit.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 100000);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, reversal_of, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 100000, 1000, NULL, '2026-01-01 00:00:00'),
+           (11, 1, 1, 1, 1, 'out', -100000, 0, NULL, '2026-01-02 00:00:00'),
+           (12, 1, 1, 1, 1, 'out', 100000, 0, 11, '2026-01-03 00:00:00');
+    """
+    _create_legacy_database(path, statements, version=3)
+
+    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_130100")
+    try:
+        assert conn.execute(
+            "SELECT id, cost_amount FROM stock_movements WHERE id IN (11, 12) ORDER BY id"
+        ).fetchall() == [(11, 100_000_000), (12, -100_000_000)]
+        assert conn.execute("SELECT expenditure FROM total_aggregates").fetchone() == (0,)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("statements", "expected"),
+    [
+        (
+            """
+            INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+            VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 0);
+            INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+                delta, unit_price, moved_at)
+            VALUES (10, 1, 1, 1, 1, 'out', -1, 0, '2026-01-01 00:00:00'),
+                   (11, 1, 1, 1, 1, 'in', 1, 100, '2026-01-02 00:00:00');
+            """,
+            "FIFO 引当が不足",
+        ),
+        (
+            "INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)"
+            " VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 5);",
+            "在庫数が履歴合計と一致しません",
+        ),
+    ],
+    ids=["replay-impossible", "quantity-mismatch"],
+)
+def test_version_three_precheck_rejects_before_backup(
+    tmp_path: Path, statements: str, expected: str
+) -> None:
+    path = tmp_path / "v3-invalid.db"
+    _create_legacy_database(path, statements, version=3)
+
+    with pytest.raises(MigrationError, match="データベースは変更されていません") as error:
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "unused")
+
+    assert expected in str(error.value)
+    assert error.value.backup_path is None
+    assert not (tmp_path / "backups").exists()
+    verify = sqlite3.connect(path)
+    try:
+        assert verify.execute("PRAGMA user_version").fetchone() == (3,)
+        assert inspect_schema(verify, 3) == []
+    finally:
+        verify.close()
+
+
+def _assert_version_three_unchanged(
+    conn: sqlite3.Connection, rows_before: dict[str, list[tuple[object, ...]]]
+) -> None:
+    assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
+    assert not conn.in_transaction
+    assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+    assert inspect_schema(conn, 3) == []
+    assert _table_rows(conn) == rows_before
+    assert (
+        conn.execute("SELECT name FROM sqlite_master WHERE name = 'stock_allocations'").fetchone()
+        is None
+    )
+
+
+def test_version_four_step_rolls_back_when_foreign_key_check_finds_orphans(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v3-orphan.db"
+    _create_legacy_database(
+        path,
+        "INSERT INTO items (id, client_id, purchaser_id, code, name, category_id) "
+        "VALUES (1, 1, 1, 'EQ-0001', '孤児', 999);",
+        version=3,
+    )
+    conn = connect(path)
+    try:
+        rows_before = _table_rows(conn)
+        with pytest.raises(UnsupportedSchemaError, match="外部キー検査に失敗"):
+            migrations.migrate_schema(conn, 3, 4)
+        _assert_version_three_unchanged(conn, rows_before)
+    finally:
+        conn.close()
+
+
+def test_version_four_step_rolls_back_when_schema_inspection_fails(tmp_path: Path) -> None:
+    path = tmp_path / "v3-schema-check.db"
+    _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
+    conn = connect(path)
+    try:
+        rows_before = _table_rows(conn)
+        with pytest.raises(UnsupportedSchemaError, match="検査に失敗"):
+            migrations.migrate_schema(conn, 3, 4, specs={**SCHEMA_SPECS, 4: SCHEMA_SPECS[3]})
+        _assert_version_three_unchanged(conn, rows_before)
+    finally:
+        conn.close()
+
+
+def test_version_four_step_rolls_back_when_fifo_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(migrations, "find_fifo_violations", lambda conn: ["注入した FIFO 違反"])
+    path = tmp_path / "v3-fifo-check.db"
+    _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
+
+    with pytest.raises(MigrationError, match="FIFO 整合検査に失敗.*注入した FIFO 違反") as error:
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_130200")
+
+    assert error.value.backup_path is not None and error.value.backup_path.exists()
+    conn = connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+        assert inspect_schema(conn, 3) == []
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'stock_allocations'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+
+def test_version_one_keeps_legacy_aggregates_until_the_version_four_step(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v1-aggregates.db"
+    statements = """
+    INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, quantity)
+    VALUES (1, 1, 1, 'EQ-0001', '品目', 1, 6);
+    INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason,
+        delta, unit_price, moved_at)
+    VALUES (10, 1, 1, 1, 1, 'in', 10, 100, '2026-01-01 00:00:00'),
+           (11, 1, 1, 1, 1, 'out', -4, 500, '2026-01-02 00:00:00');
+    """
+    _create_legacy_database(path, statements, version=1)
+    conn = connect(path)
+    try:
+        migrations.migrate_schema(conn, 1, 3)
+        assert conn.execute(
+            "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+        ).fetchone() == (10, 4, 2000)
+        migrations.migrate_schema(conn, 3, 4)
+        assert conn.execute(
+            "SELECT inbound_quantity, outbound_quantity, expenditure FROM total_aggregates"
+        ).fetchone() == (10, 4, 400)
+    finally:
+        conn.close()

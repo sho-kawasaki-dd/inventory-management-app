@@ -27,6 +27,10 @@ def parse_utc(utc_str: str) -> datetime:
     return value.replace(tzinfo=UTC)
 
 
+def is_before_utc(value: str, reference: str) -> bool:
+    return parse_utc(value) < parse_utc(reference)
+
+
 def to_local(utc_str: str, tz: tzinfo | None = None) -> datetime:
     value = parse_utc(utc_str)
     return value.astimezone(tz) if tz is not None else value.astimezone()

@@ -122,7 +122,7 @@ def test_history_csv_formats_local_time_and_leaves_numeric_delta_unescaped(
     issue_row = next(row for row in rows[1:] if row[3] == "出庫")
     assert issue_row[0] == "2026-01-15 21:00:00"
     assert issue_row[4] == "-1"
-    assert issue_row[5] == "100"
+    assert issue_row[5] == ""
     assert issue_row[9] == "設備"
     assert issue_row[11] == "○"
 
@@ -148,7 +148,7 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
         "入庫数",
         "出庫数",
         "支出額",
-        "単価未登録件数",
+        "単価未登録数量",
         "廃棄数",
         "廃棄額",
     ]

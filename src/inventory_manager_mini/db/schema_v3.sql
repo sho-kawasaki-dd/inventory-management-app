@@ -84,10 +84,6 @@ CREATE TABLE stock_movements (
     unit_price IS NULL OR
     (typeof(unit_price) = 'integer' AND unit_price BETWEEN 0 AND 10000000)
   ),
-  cost_amount INTEGER CHECK (
-    cost_amount IS NULL OR
-    (typeof(cost_amount) = 'integer' AND cost_amount BETWEEN -100000000 AND 100000000)
-  ),
   used_for TEXT,
   reversal_of INTEGER UNIQUE REFERENCES stock_movements(id),
   note TEXT,
@@ -99,15 +95,8 @@ CREATE TABLE stock_movements (
     OR reason = 'adjust'
   ),
   CHECK (
-    (reason IN ('out','dispose')) = (cost_amount IS NOT NULL)
-  ),
-  CHECK (
-    cost_amount IS NULL
-    OR (reversal_of IS NULL AND cost_amount >= 0)
-    OR (reversal_of IS NOT NULL AND cost_amount <= 0)
-  ),
-  CHECK (
-    reason NOT IN ('out','return','dispose') OR unit_price IS NULL
+    reason NOT IN ('out','dispose') OR unit_price IS NULL
+    OR abs(delta) * unit_price <= 100000000
   )
 );
 
@@ -116,19 +105,6 @@ CREATE INDEX idx_movements_client_date ON stock_movements(client_id, moved_at);
 CREATE INDEX idx_movements_purchaser_date ON stock_movements(purchaser_id, moved_at);
 CREATE INDEX idx_movements_item_purchase ON stock_movements(item_id, moved_at DESC, id DESC)
 WHERE reason = 'in' AND reversal_of IS NULL;
-CREATE INDEX idx_movements_item_lot ON stock_movements(item_id, moved_at, id)
-WHERE reversal_of IS NULL AND delta > 0 AND reason IN ('in','adjust');
-
-CREATE TABLE stock_allocations (
-  id INTEGER PRIMARY KEY,
-  movement_id INTEGER NOT NULL REFERENCES stock_movements(id),
-  lot_id INTEGER NOT NULL REFERENCES stock_movements(id),
-  quantity INTEGER NOT NULL CHECK (
-    typeof(quantity) = 'integer' AND quantity BETWEEN -1000000 AND 1000000 AND quantity <> 0
-  ),
-  UNIQUE (movement_id, lot_id)
-);
-CREATE INDEX idx_allocations_lot ON stock_allocations(lot_id);
 
 CREATE TABLE total_aggregates (
   id INTEGER PRIMARY KEY CHECK (id = 1),

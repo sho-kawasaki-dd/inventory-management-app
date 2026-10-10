@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from inventory_manager_mini.core.services import BackupService
+from inventory_manager_mini.db.integrity import find_fifo_violations
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION
 from scripts.generate_dummy_data import generate_database, main
 
@@ -56,6 +57,7 @@ def test_generates_inspectable_database(tmp_path) -> None:
         conn.close()
         readonly_conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
         try:
+            assert find_fifo_violations(readonly_conn) == []
             assert BackupService().inspect_database(readonly_conn, SCHEMA_VERSION) == []
         finally:
             readonly_conn.close()

@@ -149,6 +149,11 @@ def _generate_movements(
     totals = [0] * (item_count + 1)
     movement_rows: list[tuple[object, ...]] = []
     original_rows: list[tuple[int, int, int, int, int, str, int, int | None, str | None]] = []
+    lots_by_item: dict[int, list[int]] = {}
+    lot_remaining: dict[int, int] = {}
+    lot_prices: dict[int, int | None] = {}
+    allocations_by_movement: dict[int, list[tuple[int, int]]] = {}
+    movement_costs: dict[int, int | None] = {}
 
     def append_movement(
         item_id: int,
@@ -165,6 +170,43 @@ def _generate_movements(
         used_for = f"用途{movement_id % 12:02d}" if reason == "out" else None
         if original is not None:
             _, _, client_id, purchaser_id, _, reason, _, unit_price, used_for = original
+        elif delta < 0:
+            unit_price = None
+
+        movement_allocations: list[tuple[int, int]] = []
+        cost_amount: int | None = None
+        if reversal_of is not None and original is not None:
+            if original[6] > 0:
+                lot_remaining[reversal_of] = 0
+            else:
+                for lot_id, quantity in allocations_by_movement.get(reversal_of, []):
+                    lot_remaining[lot_id] += quantity
+                    movement_allocations.append((lot_id, -quantity))
+                original_cost = movement_costs.get(reversal_of)
+                cost_amount = None if original_cost is None else -original_cost
+        elif delta > 0 and reason in {"in", "adjust"}:
+            lot_remaining[movement_id] = delta
+            lot_prices[movement_id] = unit_price
+            lots_by_item.setdefault(item_id, []).append(movement_id)
+        elif delta < 0:
+            remaining = -delta
+            for lot_id in lots_by_item.get(item_id, []):
+                available = lot_remaining[lot_id]
+                quantity = min(remaining, available)
+                if quantity:
+                    lot_remaining[lot_id] -= quantity
+                    remaining -= quantity
+                    movement_allocations.append((lot_id, quantity))
+                    lot_price = lot_prices[lot_id]
+                    if reason in {"out", "dispose"} and lot_price is not None:
+                        cost_amount = (cost_amount or 0) + quantity * lot_price
+                if remaining == 0:
+                    break
+            if remaining:
+                raise RuntimeError(f"品目 ID {item_id} の FIFO ロットが不足しています")
+        if reason in {"out", "dispose"} and cost_amount is None:
+            cost_amount = 0
+
         movement_rows.append(
             (
                 movement_id,
@@ -175,11 +217,15 @@ def _generate_movements(
                 reason,
                 delta,
                 unit_price,
+                cost_amount,
                 used_for,
                 reversal_of,
                 "生成データの取り消し" if reversal_of is not None else None,
             )
         )
+        if movement_allocations:
+            allocations_by_movement[movement_id] = movement_allocations
+        movement_costs[movement_id] = cost_amount
         totals[item_id] += delta
         balances[item_id] += delta
         if reversal_of is None:
@@ -242,11 +288,26 @@ def _generate_movements(
         )
         for index, row in enumerate(movement_rows)
     ]
+    invalid_cost_rows = [
+        (row[0], row[5], row[8])
+        for row in movement_rows
+        if (row[5] in {"out", "dispose"}) != (row[8] is not None)
+    ]
+    if invalid_cost_rows:
+        raise RuntimeError(f"出庫・廃棄原価の生成が不正です: {invalid_cost_rows[:5]}")
     conn.executemany(
         "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, reason, "
-        "delta, unit_price, used_for, reversal_of, note, moved_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "delta, unit_price, cost_amount, used_for, reversal_of, note, moved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows_with_time,
+    )
+    conn.executemany(
+        "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (?, ?, ?)",
+        [
+            (movement_id, lot_id, quantity)
+            for movement_id, movement_allocations in allocations_by_movement.items()
+            for lot_id, quantity in movement_allocations
+        ],
     )
     conn.executemany(
         "UPDATE items SET quantity = ? WHERE id = ?",

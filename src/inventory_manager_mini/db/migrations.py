@@ -14,9 +14,15 @@ from inventory_manager_mini.core.errors import (
 )
 from inventory_manager_mini.db.backup import copy_database
 from inventory_manager_mini.db.connection import connect, transaction
-from inventory_manager_mini.db.integrity import compute_aggregates, find_limit_violations
+from inventory_manager_mini.db.integrity import (
+    compute_aggregates,
+    find_fifo_migration_violations,
+    find_fifo_violations,
+    find_limit_violations,
+    replay_allocations,
+)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIN_SUPPORTED_SCHEMA_VERSION = 1
 
 
@@ -425,15 +431,149 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    replay = replay_allocations(conn)
+    if replay.violations:
+        raise UnsupportedSchemaError(
+            "FIFO 履歴の再生に失敗しました: " + "、".join(replay.violations[:20])
+        )
+
+    rows = conn.execute(
+        "SELECT id, item_id, client_id, purchaser_id, staff_id, reason, delta, used_for, "
+        "reversal_of, note, moved_at FROM stock_movements ORDER BY id"
+    ).fetchall()
+    conn.execute(
+        """CREATE TABLE stock_movements_new (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES items(id),
+            client_id INTEGER NOT NULL REFERENCES clients(id),
+            purchaser_id INTEGER NOT NULL REFERENCES purchasers(id),
+            staff_id INTEGER NOT NULL REFERENCES staff(id),
+            reason TEXT NOT NULL CHECK (reason IN ('in','out','return','dispose','adjust')),
+            delta INTEGER NOT NULL CHECK (
+                typeof(delta) = 'integer' AND delta BETWEEN -1000000 AND 1000000
+            ),
+            unit_price INTEGER CHECK (
+                unit_price IS NULL OR
+                (typeof(unit_price) = 'integer' AND unit_price BETWEEN 0 AND 10000000)
+            ),
+            cost_amount INTEGER CHECK (
+                cost_amount IS NULL OR
+                (typeof(cost_amount) = 'integer' AND cost_amount BETWEEN -100000000 AND 100000000)
+            ),
+            used_for TEXT,
+            reversal_of INTEGER UNIQUE REFERENCES stock_movements(id),
+            note TEXT,
+            moved_at TEXT NOT NULL DEFAULT (datetime('now')),
+            CHECK (
+                reversal_of IS NOT NULL
+                OR (reason = 'in' AND delta > 0)
+                OR (reason IN ('out','return','dispose') AND delta < 0)
+                OR reason = 'adjust'
+            ),
+            CHECK ((reason IN ('out','dispose')) = (cost_amount IS NOT NULL)),
+            CHECK (
+                cost_amount IS NULL
+                OR (reversal_of IS NULL AND cost_amount >= 0)
+                OR (reversal_of IS NOT NULL AND cost_amount <= 0)
+            ),
+            CHECK (reason NOT IN ('out','return','dispose') OR unit_price IS NULL)
+        )"""
+    )
+    conn.executemany(
+        "INSERT INTO stock_movements_new (id, item_id, client_id, purchaser_id, staff_id, "
+        "reason, delta, unit_price, cost_amount, used_for, reversal_of, note, moved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                int(row[0]),
+                int(row[1]),
+                int(row[2]),
+                int(row[3]),
+                int(row[4]),
+                str(row[5]),
+                int(row[6]),
+                replay.unit_prices.get(int(row[0])),
+                replay.cost_amounts.get(int(row[0])),
+                row[7],
+                row[8],
+                row[9],
+                str(row[10]),
+            )
+            for row in rows
+        ],
+    )
+    conn.execute("DROP TABLE stock_movements")
+    conn.execute("ALTER TABLE stock_movements_new RENAME TO stock_movements")
+    conn.execute("CREATE INDEX idx_movements_item ON stock_movements(item_id, moved_at)")
+    conn.execute("CREATE INDEX idx_movements_client_date ON stock_movements(client_id, moved_at)")
+    conn.execute(
+        "CREATE INDEX idx_movements_purchaser_date ON stock_movements(purchaser_id, moved_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_movements_item_purchase ON stock_movements "
+        "(item_id, moved_at DESC, id DESC) WHERE reason = 'in' AND reversal_of IS NULL"
+    )
+    conn.execute(
+        "CREATE INDEX idx_movements_item_lot ON stock_movements(item_id, moved_at, id) "
+        "WHERE reversal_of IS NULL AND delta > 0 AND reason IN ('in','adjust')"
+    )
+    conn.execute(
+        """CREATE TABLE stock_allocations (
+            id INTEGER PRIMARY KEY,
+            movement_id INTEGER NOT NULL REFERENCES stock_movements(id),
+            lot_id INTEGER NOT NULL REFERENCES stock_movements(id),
+            quantity INTEGER NOT NULL CHECK (
+                typeof(quantity) = 'integer'
+                AND quantity BETWEEN -1000000 AND 1000000 AND quantity <> 0
+            ),
+            UNIQUE (movement_id, lot_id)
+        )"""
+    )
+    conn.execute("CREATE INDEX idx_allocations_lot ON stock_allocations(lot_id)")
+    conn.executemany(
+        "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (?, ?, ?)",
+        [
+            (movement_id, lot_id, quantity)
+            for movement_id, lot_allocations in replay.allocations.items()
+            for lot_id, quantity in lot_allocations
+        ],
+    )
+    totals = compute_aggregates(conn, version=4)
+    conn.execute(
+        "UPDATE total_aggregates SET inbound_quantity = ?, outbound_quantity = ?, "
+        "disposed_quantity = ?, expenditure = ?, disposal_amount = ? WHERE id = 1",
+        tuple(
+            totals[column]
+            for column in (
+                "inbound_quantity",
+                "outbound_quantity",
+                "disposed_quantity",
+                "expenditure",
+                "disposal_amount",
+            )
+        ),
+    )
+    fifo_violations = find_fifo_violations(conn)
+    if fifo_violations:
+        raise UnsupportedSchemaError(
+            "FIFO 整合検査に失敗しました: " + "、".join(fifo_violations[:20])
+        )
+
+
 MIGRATIONS: dict[int, MigrationStep] = {
     2: MigrationStep(_MIGRATION_V2_SQL),
     3: MigrationStep(_migrate_v2_to_v3, find_limit_violations, rebuilds_tables=True),
+    4: MigrationStep(_migrate_v3_to_v4, find_fifo_migration_violations, rebuilds_tables=True),
 }
 
 SCHEMA_SPECS: dict[int, SchemaSpec] = {
     1: _schema_spec_from_ddl(_SCHEMA_V1_DDL),
     2: _schema_spec_from_ddl(_SCHEMA_V1_DDL + "\n" + _MIGRATION_V2_SQL),
     3: _schema_spec_from_ddl(
+        files("inventory_manager_mini.db").joinpath("schema_v3.sql").read_text(encoding="utf-8")
+    ),
+    4: _schema_spec_from_ddl(
         files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
     ),
 }
@@ -605,6 +745,7 @@ def check_migration_prechecks(
         precheck = _migration_step(migrations[target_version]).precheck
         if precheck is not None:
             violations.extend(precheck(conn))
+    violations = list(dict.fromkeys(violations))
     if violations:
         details = "、".join(violations[:20])
         if len(violations) > 20:

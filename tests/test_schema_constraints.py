@@ -86,13 +86,16 @@ def _insert_movement(
     client_id: int | None = 1,
     purchaser_id: int | None = 1,
     unit_price: int | None = 0,
+    cost_amount: object = None,
 ) -> None:
+    if cost_amount is None and reason in {"out", "dispose"}:
+        cost_amount = 0
     conn.execute(
         """INSERT INTO stock_movements
         (item_id, client_id, purchaser_id, staff_id, reason, delta,
-         unit_price, reversal_of)
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?)""",
-        (item_id, client_id, purchaser_id, reason, delta, unit_price, reversal_of),
+         unit_price, cost_amount, reversal_of)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)""",
+        (item_id, client_id, purchaser_id, reason, delta, unit_price, cost_amount, reversal_of),
     )
 
 
@@ -148,7 +151,7 @@ def test_movement_unit_price_check(schema_conn: sqlite3.Connection, unit_price: 
         ("in", 1.5, 0),
         ("in", 1, 10_000_001),
         ("in", 1, 1.5),
-        ("out", -10_001, 10_000),
+        ("out", -10_001, MAX_UNIT_PRICE + 1),
     ],
 )
 def test_movement_checks_reject_out_of_range_or_non_integer_values(
@@ -210,20 +213,20 @@ def test_item_integer_columns_reject_text_and_out_of_range(
 
 
 @pytest.mark.parametrize(
-    ("reason", "delta", "unit_price"),
+    ("reason", "delta", "unit_price", "cost_amount"),
     [
-        ("in", MAX_STOCK_QUANTITY, None),
-        ("in", MAX_STOCK_QUANTITY, 0),
-        ("in", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
-        ("return", -MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
-        ("adjust", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
-        ("adjust", -MAX_STOCK_QUANTITY, MAX_UNIT_PRICE),
-        ("out", -MAX_STOCK_QUANTITY, None),
-        ("out", -MAX_STOCK_QUANTITY, 0),
-        ("dispose", -MAX_STOCK_QUANTITY, 0),
-        ("out", -10_000, 10_000),
-        ("dispose", -10_000, 10_000),
-        ("out", -(MAX_MOVEMENT_AMOUNT // MAX_UNIT_PRICE), MAX_UNIT_PRICE),
+        ("in", MAX_STOCK_QUANTITY, None, None),
+        ("in", MAX_STOCK_QUANTITY, 0, None),
+        ("in", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE, None),
+        ("return", -MAX_STOCK_QUANTITY, None, None),
+        ("adjust", MAX_STOCK_QUANTITY, MAX_UNIT_PRICE, None),
+        ("adjust", -MAX_STOCK_QUANTITY, MAX_UNIT_PRICE, None),
+        ("out", -MAX_STOCK_QUANTITY, None, 0),
+        ("out", -MAX_STOCK_QUANTITY, None, MAX_MOVEMENT_AMOUNT),
+        ("dispose", -MAX_STOCK_QUANTITY, None, 0),
+        ("out", -10_000, None, MAX_MOVEMENT_AMOUNT),
+        ("dispose", -10_000, None, MAX_MOVEMENT_AMOUNT),
+        ("out", -(MAX_MOVEMENT_AMOUNT // MAX_UNIT_PRICE), None, MAX_MOVEMENT_AMOUNT),
     ],
 )
 def test_movement_checks_accept_values_up_to_the_business_limits(
@@ -231,19 +234,27 @@ def test_movement_checks_accept_values_up_to_the_business_limits(
     reason: str,
     delta: int,
     unit_price: int | None,
+    cost_amount: int | None,
 ) -> None:
-    _insert_movement(schema_conn, reason=reason, delta=delta, unit_price=unit_price)
+    _insert_movement(
+        schema_conn,
+        reason=reason,
+        delta=delta,
+        unit_price=unit_price,
+        cost_amount=cost_amount,
+    )
 
 
 @pytest.mark.parametrize(
-    ("reason", "delta", "unit_price"),
+    ("reason", "delta", "unit_price", "cost_amount"),
     [
-        ("out", -(MAX_STOCK_QUANTITY + 1), None),
-        ("adjust", -(MAX_STOCK_QUANTITY + 1), None),
-        ("in", "abc", None),
-        ("in", 1, "abc"),
-        ("dispose", -10_001, 10_000),
-        ("out", -1, MAX_UNIT_PRICE + 1),
+        ("out", -(MAX_STOCK_QUANTITY + 1), None, 0),
+        ("adjust", -(MAX_STOCK_QUANTITY + 1), None, None),
+        ("in", "abc", None, None),
+        ("in", 1, "abc", None),
+        ("dispose", -1, None, MAX_MOVEMENT_AMOUNT + 1),
+        ("out", -1, MAX_UNIT_PRICE + 1, 1),
+        ("out", -1, None, 1.5),
     ],
 )
 def test_movement_checks_reject_values_beyond_the_business_limits(
@@ -251,6 +262,7 @@ def test_movement_checks_reject_values_beyond_the_business_limits(
     reason: str,
     delta: object,
     unit_price: object,
+    cost_amount: object,
 ) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         _insert_movement(
@@ -258,15 +270,16 @@ def test_movement_checks_reject_values_beyond_the_business_limits(
             reason=reason,
             delta=delta,  # type: ignore[arg-type]
             unit_price=unit_price,  # type: ignore[arg-type]
+            cost_amount=cost_amount,
         )
 
 
 @pytest.mark.parametrize(
-    ("delta", "unit_price", "accepted"),
-    [(10_000, 10_000, True), (10_001, 10_000, False)],
+    ("cost_amount", "accepted"),
+    [(-MAX_MOVEMENT_AMOUNT, True), (-MAX_MOVEMENT_AMOUNT - 1, False), (1, False)],
 )
-def test_reversal_of_out_or_dispose_keeps_the_amount_limit(
-    schema_conn: sqlite3.Connection, delta: int, unit_price: int, accepted: bool
+def test_reversal_cost_amount_is_negative_and_within_the_limit(
+    schema_conn: sqlite3.Connection, cost_amount: int, accepted: bool
 ) -> None:
     for reason in ("out", "dispose"):
         schema_conn.execute("SAVEPOINT reversal_case")
@@ -275,8 +288,9 @@ def test_reversal_of_out_or_dispose_keeps_the_amount_limit(
                 _insert_movement(
                     schema_conn,
                     reason=reason,
-                    delta=delta,
-                    unit_price=unit_price,
+                    delta=1,
+                    unit_price=None,
+                    cost_amount=cost_amount,
                     reversal_of=1,
                 )
             else:
@@ -284,13 +298,78 @@ def test_reversal_of_out_or_dispose_keeps_the_amount_limit(
                     _insert_movement(
                         schema_conn,
                         reason=reason,
-                        delta=delta,
-                        unit_price=unit_price,
+                        delta=1,
+                        unit_price=None,
+                        cost_amount=cost_amount,
                         reversal_of=1,
                     )
         finally:
             schema_conn.execute("ROLLBACK TO reversal_case")
             schema_conn.execute("RELEASE reversal_case")
+
+
+def test_cost_amount_is_required_for_outflow_and_forbidden_for_other_reasons(
+    schema_conn: sqlite3.Connection,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, reason, "
+            "delta, unit_price, cost_amount) VALUES (1, 1, 1, 1, 'out', -1, NULL, NULL)"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, reason, "
+            "delta, cost_amount) VALUES (1, 1, 1, 1, 'in', 1, 0)"
+        )
+
+
+@pytest.mark.parametrize(
+    ("quantity", "accepted"),
+    [
+        (1, True),
+        (-1, True),
+        (MAX_STOCK_QUANTITY, True),
+        (-MAX_STOCK_QUANTITY, True),
+        (0, False),
+        (MAX_STOCK_QUANTITY + 1, False),
+        (1.5, False),
+        ("abc", False),
+    ],
+)
+def test_allocation_quantity_check(
+    schema_conn: sqlite3.Connection, quantity: object, accepted: bool
+) -> None:
+    if accepted:
+        schema_conn.execute(
+            "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (1, 1, ?)",
+            (quantity,),
+        )
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            schema_conn.execute(
+                "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (1, 1, ?)",
+                (quantity,),
+            )
+
+
+def test_allocation_requires_valid_references_and_unique_movement_lot_pair(
+    schema_conn: sqlite3.Connection,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (99, 1, 1)"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (1, 99, 1)"
+        )
+    schema_conn.execute(
+        "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (1, 1, 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (1, 1, -1)"
+        )
 
 
 @pytest.mark.parametrize("column", AGGREGATE_COLUMNS)
