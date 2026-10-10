@@ -130,6 +130,21 @@ def _measure_action(qtbot, probe: PaintProbe, action: Callable[[], None]) -> flo
     return completed_at - started_at
 
 
+def _require_exposed_viewport_paint(
+    window: MainWindow, probe: PaintProbe, *overlays: QDialog
+) -> None:
+    viewport = window.table.viewport()
+    viewport_global = QRect(viewport.mapToGlobal(QPoint(0, 0)), viewport.size())
+    left_edge = viewport_global.right() + 1
+    for overlay in overlays:
+        overlay_rect = overlay.frameGeometry()
+        if viewport_global.intersects(overlay_rect):
+            left_edge = min(left_edge, overlay_rect.left())
+    exposed_width = left_edge - viewport_global.left()
+    assert exposed_width >= 100, "一覧 viewport に非被覆領域がありません"
+    probe.require_paint_in(QRect(0, 0, exposed_width, viewport.height()))
+
+
 def _run_startup_probe(data_dir: Path) -> float:
     probe_script = r"""
 import sys
@@ -498,9 +513,16 @@ def test_inbound_save_to_table_paint(qtbot, performance_window) -> None:
     dialog.unit_price_edit.setText(str(item.reference_price))
     dialog.show()
     qtbot.waitUntil(dialog.isVisible, timeout=2000)
+    available = window.screen().availableGeometry()
+    dialog.resize(min(600, available.width() - 32), min(460, available.height() - 64))
+    dialog.move(
+        window.frameGeometry().right() - dialog.width() + 1,
+        window.frameGeometry().bottom() - dialog.height() + 1,
+    )
     ok_button = dialog.button_box.button(QDialogButtonBox.StandardButton.Ok)
     assert ok_button.isEnabled()
 
+    _require_exposed_viewport_paint(window, probe, dialog)
     window.item_model.modelReset.connect(probe.arm)
     probe.arm()
     started_at = time.perf_counter()
@@ -514,6 +536,52 @@ def test_inbound_save_to_table_paint(qtbot, performance_window) -> None:
     assert window._selected_item_id() == item_id
     print(f"入庫の保存から一覧再描画: {elapsed:.3f} 秒")
     assert elapsed <= 0.5, f"入庫の保存から一覧再描画まで {elapsed:.3f} 秒かかりました"
+
+
+def test_outflow_save_to_table_paint(qtbot, performance_window) -> None:
+    window, probe = performance_window
+    item_id = 1
+    source_row = window.item_model.row_of(item_id)
+    assert source_row is not None
+    item = window.item_model.row_at(source_row)
+    assert item.quantity > 0
+    proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
+    window.table.selectRow(proxy_index.row())
+
+    dialog = StockMoveDialog(window.context, Reason.OUT, item_id=item_id, parent=window)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(dialog.staff_combo.findData(1))
+    dialog.quantity_spin.setValue(1)
+    dialog.used_for_edit.setText("性能計測")
+    dialog.show()
+    qtbot.waitUntil(dialog.isVisible, timeout=2000)
+    available = window.screen().availableGeometry()
+    dialog.resize(min(600, available.width() - 32), min(460, available.height() - 64))
+    dialog.move(
+        window.frameGeometry().right() - dialog.width() + 1,
+        window.frameGeometry().bottom() - dialog.height() + 1,
+    )
+    ok_button = dialog.button_box.button(QDialogButtonBox.StandardButton.Ok)
+    assert ok_button.isEnabled()
+
+    _require_exposed_viewport_paint(window, probe, dialog)
+    window.item_model.modelReset.connect(probe.arm)
+    probe.arm()
+    started_at = time.perf_counter()
+    qtbot.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+    painted_at = _wait_for_paint(qtbot, probe)
+    elapsed = painted_at - started_at
+
+    refreshed_row = window.item_model.row_of(item_id)
+    assert refreshed_row is not None
+    assert window.item_model.row_at(refreshed_row).quantity == item.quantity - 1
+    assert window._selected_item_id() == item_id
+    movement = window.context.inventory.list_history(item_id)[-1]
+    assert movement.reason is Reason.OUT
+    assert movement.delta == -1
+    assert movement.cost_amount is not None
+    print(f"FIFO 出庫の保存から一覧再描画: {elapsed:.3f} 秒")
+    assert elapsed <= 0.5, f"出庫の保存から一覧再描画まで {elapsed:.3f} 秒かかりました"
 
 
 def test_reversal_save_to_table_paint(qtbot, performance_window, monkeypatch) -> None:
@@ -557,16 +625,7 @@ def test_reversal_save_to_table_paint(qtbot, performance_window, monkeypatch) ->
         )
 
         def submit() -> None:
-            viewport = window.table.viewport()
-            viewport_global = QRect(viewport.mapToGlobal(QPoint(0, 0)), viewport.size())
-            left_edge = viewport_global.right() + 1
-            for overlay in (history, dialog):
-                overlay_rect = overlay.frameGeometry()
-                if viewport_global.intersects(overlay_rect):
-                    left_edge = min(left_edge, overlay_rect.left())
-            exposed_width = left_edge - viewport_global.left()
-            assert exposed_width >= 100, "一覧 viewport に非被覆領域がありません"
-            probe.require_paint_in(QRect(0, 0, exposed_width, viewport.height()))
+            _require_exposed_viewport_paint(window, probe, history, dialog)
             probe.arm()
             started_at.append(time.perf_counter())
             qtbot.mouseClick(
