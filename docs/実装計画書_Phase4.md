@@ -84,18 +84,18 @@
 
 #### C. アラートドック `ui/widgets/alert_panel.py`
 
-- [ ] `LowStockTableModel(QAbstractTableModel)`: 列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ。数値は右寄せ、推奨発注数 `None` は空欄。`set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替え、`row_at(row)` を持つ
-- [ ] `OpenUrlButtonDelegate(QStyledItemDelegate)`: 販売ページ列用のカスタムデリゲート。`paint()` で `QStyle.drawControl(CE_PushButton, ...)` により押しボタンを描画し、URL 空行は不活性(無効表示)。`editorEvent()` でクリック(マウス左ボタン解放)を検知し、URL を `validate_purchase_url` で再検証して開く。大量行での生成コストとメモリ消費を避けるため `setIndexWidget` は使用しない
-- [ ] `AlertPanel(context, parent=None)`(`QDockWidget`)
-  - [ ] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし、販売ページ列に `OpenUrlButtonDelegate` を設定)
-  - [ ] `refresh()` は `run_guarded` 経由で `context.inventory.list_low_stock()` を呼び、モデルとタイトル「低在庫 (N)」を更新する
-  - [ ] 行のダブルクリックで `item_activated(int)` を発火する(品目 ID)
-  - [ ] 販売ページの押下処理: デリゲートまたはパネル側で `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
-- [ ] `tests/test_alert_panel.py`
-  - [ ] 起動スモーク、列見出し、管理番号順、件数タイトル(0 件・複数件)
-  - [ ] 廃止品目が含まれないこと、閾値 0・数量 0 が含まれること
-  - [ ] ダブルクリックで品目 ID のシグナルが発火すること
-  - [ ] 販売ページボタンデリゲート: URL なしで不活性描画・クリック無反応、`http`/`https` のクリックで `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
+- [x] `LowStockTableModel(QAbstractTableModel)`: 列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ。数値は右寄せ、推奨発注数 `None` は空欄。`set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替え、`row_at(row)` を持つ
+- [x] `OpenUrlButtonDelegate(QStyledItemDelegate)`: 販売ページ列用のカスタムデリゲート。`paint()` で `QStyle.drawControl(CE_PushButton, ...)` により押しボタンを描画し、URL 空行は不活性(無効表示)。`editorEvent()` でクリック(マウス左ボタン解放)を検知し、URL を `validate_purchase_url` で再検証して開く。大量行での生成コストとメモリ消費を避けるため `setIndexWidget` は使用しない
+- [x] `AlertPanel(context, parent=None)`(`QDockWidget`)
+  - [x] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし、販売ページ列に `OpenUrlButtonDelegate` を設定)
+  - [x] `refresh()` は `run_guarded` 経由で `context.inventory.list_low_stock()` を呼び、モデルとタイトル「低在庫 (N)」を更新する
+  - [x] 行のダブルクリックで `item_activated(int)` を発火する(品目 ID)
+  - [x] 販売ページの押下処理: デリゲートまたはパネル側で `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
+- [x] `tests/test_alert_panel.py`
+  - [x] 起動スモーク、列見出し、管理番号順、件数タイトル(0 件・複数件)
+  - [x] 廃止品目が含まれないこと、閾値 0・数量 0 が含まれること
+  - [x] ダブルクリックで品目 ID のシグナルが発火すること
+  - [x] 販売ページボタンデリゲート: URL なしで不活性描画・クリック無反応、`http`/`https` のクリックで `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
 
 #### D. MainWindow への組み込み `ui/main_window.py`
 
