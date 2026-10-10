@@ -1,7 +1,7 @@
 # Phase 4 実装計画書(低在庫アラート)
 
 - 作成日: 2026-10-10
-- ステータス: 計画(未着手)
+- ステータス: 承認
 - 作業ブランチ: `feature/phase4-alert-dock`(4a)→ `feature/phase4-startup-notice`(4b)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3.1・5.5・5.6・6.2・6.3・6.4・7.5・8・9 章)、[実装計画書_Phase2](実装計画書_Phase2.md)、[実装計画書_Phase3](実装計画書_Phase3.md)
 - 改訂履歴: 2026-10-10 初版。判定の `is_active` 条件の修正、販売ページボタンの範囲、ドック行ダブルクリック時の絞り込み解除、ドックの並び順、PR 分割を決定
@@ -69,56 +69,56 @@
 
 #### A. 低在庫判定の修正
 
-- [ ] `db/repositories.py` の `ItemRepository.list` で、`is_low_stock` の算出式と `low_stock_only` の条件に `i.is_active = 1` を加える。`list_low_stock()` の結果が変わらないことを確認する
-- [ ] `tests/test_repositories.py`・`tests/test_inventory_service.py` に境界ケースを追加する
-  - [ ] 数量が閾値ちょうど(低在庫)・閾値 + 1(対象外)・閾値 0 かつ数量 0(低在庫)
-  - [ ] 廃止品目は `include_inactive=True` でも `is_low_stock` が偽で、`low_stock_only` に含まれない
-  - [ ] 再有効化で低在庫に戻る
-- [ ] 既存のテストが廃止品目の低在庫を前提にしていれば、新しい契約へ更新する
+- [x] `db/repositories.py` の `ItemRepository.list` で、`is_low_stock` の算出式と `low_stock_only` の条件に `i.is_active = 1` を加える。`list_low_stock()` の結果が変わらないことを確認する
+- [x] `tests/test_repositories.py`・`tests/test_inventory_service.py` に境界ケースを追加する
+  - [x] 数量が閾値ちょうど(低在庫)・閾値 + 1(対象外)・閾値 0 かつ数量 0(低在庫)
+  - [x] 廃止品目は `include_inactive=True` でも `is_low_stock` が偽で、`low_stock_only` に含まれない
+  - [x] 再有効化で低在庫に戻る
+- [x] 既存のテストが廃止品目の低在庫を前提にしていれば、新しい契約へ更新する
 
 #### B. 行着色 `ui/models/item_table_model.py`
 
-- [ ] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数とし、文字色との十分なコントラスト(黒文字に対し 4.5:1 以上、例: `#FFF3CD`)を確保する
-- [ ] `tests/test_item_table_model.py`: 低在庫行のみ背景が返ること、非低在庫行は `None`、廃止行は背景なし・グレー文字のままであること
-- [ ] ソート・絞り込み用プロキシを経由しても着色が維持されること、行選択時にも選択状態が正常に視認できることを `tests/test_main_window.py` で確認する
+- [x] 低在庫行の `BackgroundRole` を追加する(`is_low_stock` が真の行すべての列)。色は定数とし、文字色との十分なコントラスト(黒文字に対し 4.5:1 以上、例: `#FFF3CD`)を確保する
+- [x] `tests/test_item_table_model.py`: 低在庫行のみ背景が返ること、非低在庫行は `None`、廃止行は背景なし・グレー文字のままであること
+- [x] ソート・絞り込み用プロキシを経由しても着色が維持されること、行選択時にも選択状態が正常に視認できることを `tests/test_main_window.py` で確認する
 
 #### C. アラートドック `ui/widgets/alert_panel.py`
 
-- [ ] `LowStockTableModel(QAbstractTableModel)`: 列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ。数値は右寄せ、推奨発注数 `None` は空欄。`set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替え、`row_at(row)` を持つ
-- [ ] `OpenUrlButtonDelegate(QStyledItemDelegate)`: 販売ページ列用のカスタムデリゲート。`paint()` で `QStyle.drawControl(CE_PushButton, ...)` により押しボタンを描画し、URL 空行は不活性(無効表示)。`editorEvent()` でクリック(マウス左ボタン解放)を検知し、URL を `validate_purchase_url` で再検証して開く。大量行での生成コストとメモリ消費を避けるため `setIndexWidget` は使用しない
-- [ ] `AlertPanel(context, parent=None)`(`QDockWidget`)
-  - [ ] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし、販売ページ列に `OpenUrlButtonDelegate` を設定)
-  - [ ] `refresh()` は `run_guarded` 経由で `context.inventory.list_low_stock()` を呼び、モデルとタイトル「低在庫 (N)」を更新する
-  - [ ] 行のダブルクリックで `item_activated(int)` を発火する(品目 ID)
-  - [ ] 販売ページの押下処理: デリゲートまたはパネル側で `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
-- [ ] `tests/test_alert_panel.py`
-  - [ ] 起動スモーク、列見出し、管理番号順、件数タイトル(0 件・複数件)
-  - [ ] 廃止品目が含まれないこと、閾値 0・数量 0 が含まれること
-  - [ ] ダブルクリックで品目 ID のシグナルが発火すること
-  - [ ] 販売ページボタンデリゲート: URL なしで不活性描画・クリック無反応、`http`/`https` のクリックで `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
+- [x] `LowStockTableModel(QAbstractTableModel)`: 列は管理番号・品名・メーカー型番・数量・閾値・推奨発注数・発注主体・販売ページ。数値は右寄せ、推奨発注数 `None` は空欄。`set_rows(rows: list[ItemRow])` は `beginResetModel`/`endResetModel` で入れ替え、`row_at(row)` を持つ
+- [x] `OpenUrlButtonDelegate(QStyledItemDelegate)`: 販売ページ列用のカスタムデリゲート。`paint()` で `QStyle.drawControl(CE_PushButton, ...)` により押しボタンを描画し、URL 空行は不活性(無効表示)。`editorEvent()` でクリック(マウス左ボタン解放)を検知し、URL を `validate_purchase_url` で再検証して開く。大量行での生成コストとメモリ消費を避けるため `setIndexWidget` は使用しない
+- [x] `AlertPanel(context, parent=None)`(`QDockWidget`)
+  - [x] `QTableView` + `LowStockTableModel`(行単位・単一選択、ソートなし、販売ページ列に `OpenUrlButtonDelegate` を設定)
+  - [x] `refresh()` は `run_guarded` 経由で `context.inventory.list_low_stock()` を呼び、モデルとタイトル「低在庫 (N)」を更新する
+  - [x] 行のダブルクリックで `item_activated(int)` を発火する(品目 ID)
+  - [x] 販売ページの押下処理: デリゲートまたはパネル側で `validate_purchase_url` で再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。検証エラーは `run_guarded` で表示する
+- [x] `tests/test_alert_panel.py`
+  - [x] 起動スモーク、列見出し、管理番号順、件数タイトル(0 件・複数件)
+  - [x] 廃止品目が含まれないこと、閾値 0・数量 0 が含まれること
+  - [x] ダブルクリックで品目 ID のシグナルが発火すること
+  - [x] 販売ページボタンデリゲート: URL なしで不活性描画・クリック無反応、`http`/`https` のクリックで `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)、`javascript:` やホスト名なしなど不正 URL では呼ばれず、エラーが表示されること(DB 異常データは `unchecked_constraints` は使わず、モデルへ直接行を渡して検証する)
 
 #### D. MainWindow への組み込み `ui/main_window.py`
 
-- [ ] `AlertPanel` を右側のドックとして追加し、`refresh()` の中でドックも再読込する。`refresh_items`(絞り込み・検索)では再読込しない
-- [ ] `MainWindow._open_item_dialog()` は `dialog.exec()` のみを呼び、終了後の `self.refresh()` を削除する。新規登録・編集の成功時の再読込は、既存の `ItemDialog._save()` の `data_changed` 通知に一本化する
-- [ ] 「表示」メニューに `alert_panel.toggleViewAction()`(「アラートパネル」)を追加する
-- [ ] `item_activated` の処理を次の順序で実装する
-  - [ ] 最初に `search_timer.stop()` を呼び、開始済みの検索タイマーによる遅延再読込を防ぐ
-  - [ ] `QSignalBlocker` で検索欄・各コンボ・カテゴリ・「低在庫のみ」・「廃止品目を含む」と表示メニューの対応するアクションのシグナルをブロックし、すべての条件を解除する。シグナルによる同期に頼らず、「廃止品目を含む」のチェックボックスとアクションをともに未選択にする
-  - [ ] ブロック解除後に `refresh_items()` を 1 回だけ呼ぶ。`refresh()` は呼ばず、ドックは再取得しない
-  - [ ] 該当品目の行をソースモデルからプロキシへ変換して選択し、`scrollTo` する
-- [ ] `tests/test_main_window.py`(追記)
-  - [ ] 在庫操作・取り消し・閾値変更(ItemDialog 編集)・廃止・再有効化のそれぞれで、行着色・ドックの内容・件数が即時に変わること
-  - [ ] 新規登録・編集では実際の `ItemDialog._save()` を通し、操作直前からの `list_items()` と `list_low_stock()` の呼び出し回数を検証する。保存成功時はそれぞれ 1 回、キャンセル時はどちらも 0 回であること
-  - [ ] 検索・絞り込みを変更してもドックの内容が変わらないこと
-  - [ ] 絞り込み中にドックの行をダブルクリックすると、条件が解除され該当行が選択されること(廃止品目はドックに出ないため対象外)
-  - [ ] 検索入力直後のタイマー待機中にドックの行をダブルクリックし、検索タイマーが停止すること。タイマー間隔(300ms)を超えてイベントを処理した後も、ダブルクリック直前からの `list_items()` が 1 回、`list_low_stock()` が 0 回で、該当行の選択が維持されること。「廃止品目を含む」のチェックボックスと表示メニューのアクションがともに未選択になること
-  - [ ] 表示メニューからドックを閉じて再表示できること
-  - [ ] 1366×768・文字サイズ 100%・150% でウィンドウ枠を含めて作業領域内に収まり、ドック内の主要列とボタンへ到達できること
+- [x] `AlertPanel` を右側のドックとして追加し、`refresh()` の中でドックも再読込する。`refresh_items`(絞り込み・検索)では再読込しない
+- [x] `MainWindow._open_item_dialog()` は `dialog.exec()` のみを呼び、終了後の `self.refresh()` を削除する。新規登録・編集の成功時の再読込は、既存の `ItemDialog._save()` の `data_changed` 通知に一本化する
+- [x] 「表示」メニューに `alert_panel.toggleViewAction()`(「アラートパネル」)を追加する
+- [x] `item_activated` の処理を次の順序で実装する
+  - [x] 最初に `search_timer.stop()` を呼び、開始済みの検索タイマーによる遅延再読込を防ぐ
+  - [x] `QSignalBlocker` で検索欄・各コンボ・カテゴリ・「低在庫のみ」・「廃止品目を含む」と表示メニューの対応するアクションのシグナルをブロックし、すべての条件を解除する。シグナルによる同期に頼らず、「廃止品目を含む」のチェックボックスとアクションをともに未選択にする
+  - [x] ブロック解除後に `refresh_items()` を 1 回だけ呼ぶ。`refresh()` は呼ばず、ドックは再取得しない
+  - [x] 該当品目の行をソースモデルからプロキシへ変換して選択し、`scrollTo` する
+- [x] `tests/test_main_window.py`(追記)
+  - [x] 在庫操作・取り消し・閾値変更(ItemDialog 編集)・廃止・再有効化のそれぞれで、行着色・ドックの内容・件数が即時に変わること
+  - [x] 新規登録・編集では実際の `ItemDialog._save()` を通し、操作直前からの `list_items()` と `list_low_stock()` の呼び出し回数を検証する。保存成功時はそれぞれ 1 回、キャンセル時はどちらも 0 回であること
+  - [x] 検索・絞り込みを変更してもドックの内容が変わらないこと
+  - [x] 絞り込み中にドックの行をダブルクリックすると、条件が解除され該当行が選択されること(廃止品目はドックに出ないため対象外)
+  - [x] 検索入力直後のタイマー待機中にドックの行をダブルクリックし、検索タイマーが停止すること。タイマー間隔(300ms)を超えてイベントを処理した後も、ダブルクリック直前からの `list_items()` が 1 回、`list_low_stock()` が 0 回で、該当行の選択が維持されること。「廃止品目を含む」のチェックボックスと表示メニューのアクションがともに未選択になること
+  - [x] 表示メニューからドックを閉じて再表示できること
+  - [x] 1366×768・文字サイズ 100%・150% でウィンドウ枠を含めて作業領域内に収まり、ドック内の主要列とボタンへ到達できること
 
 #### E. 4a の仕上げ
 
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 4a の PR を作成し、CI 成功後にマージする
 
 ### 4b. 起動時通知・性能・文書(`feature/phase4-startup-notice`)

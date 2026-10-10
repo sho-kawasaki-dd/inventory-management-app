@@ -320,7 +320,7 @@ class ItemRepository:
             conditions.append("i.location_id = ?")
             parameters.append(filter.location_id)
         if filter.low_stock_only:
-            conditions.append("i.quantity <= i.reorder_threshold")
+            conditions.append("i.is_active = 1 AND i.quantity <= i.reorder_threshold")
         if not filter.include_inactive:
             conditions.append("i.is_active = 1")
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
@@ -344,7 +344,7 @@ class ItemRepository:
             SELECT {_qualified_columns(_ITEM_COLUMNS, "i")},
                 cl.name AS client_name, pu.name AS purchaser_name,
                 ct.path AS category_path, lo.name AS location_name,
-                (i.quantity <= i.reorder_threshold) AS is_low_stock,
+                (i.is_active = 1 AND i.quantity <= i.reorder_threshold) AS is_low_stock,
                 purchase.moved_at AS last_purchased_at, purchase.delta AS lot_quantity
             FROM items i
             JOIN clients cl ON cl.id = i.client_id

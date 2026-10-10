@@ -213,6 +213,43 @@ def test_stock_operations_validate_active_item_staff_and_negative_stock(
         inventory.dispose(item.id, 1, 1)
 
 
+def test_low_stock_listing_tracks_boundaries_and_item_reactivation(
+    inventory: InventoryService,
+) -> None:
+    at_threshold = inventory.create_item(
+        _new_item(name="閾値一致", initial_quantity=2, initial_staff_id=1)
+    )
+    above_threshold = inventory.create_item(
+        _new_item(name="閾値超過", initial_quantity=3, initial_staff_id=1)
+    )
+    zero_threshold = inventory.create_item(_new_item(name="閾値ゼロ", reorder_threshold=0))
+
+    rows = {row.id: row for row in inventory.list_items(ItemFilter())}
+    assert rows[at_threshold.id].is_low_stock is True
+    assert rows[above_threshold.id].is_low_stock is False
+    assert rows[zero_threshold.id].is_low_stock is True
+    assert {row.id for row in inventory.list_low_stock()} == {
+        at_threshold.id,
+        zero_threshold.id,
+    }
+
+    inventory.deactivate_item(zero_threshold.id)
+    inactive_row = next(
+        row
+        for row in inventory.list_items(ItemFilter(include_inactive=True))
+        if row.id == zero_threshold.id
+    )
+    assert inactive_row.is_low_stock is False
+    assert zero_threshold.id not in {row.id for row in inventory.list_low_stock()}
+
+    inventory.reactivate_item(zero_threshold.id)
+    reactivated_row = next(
+        row for row in inventory.list_items(ItemFilter()) if row.id == zero_threshold.id
+    )
+    assert reactivated_row.is_low_stock is True
+    assert zero_threshold.id in {row.id for row in inventory.list_low_stock()}
+
+
 def test_reversing_receipt_does_not_restore_reference_price(inventory: InventoryService) -> None:
     item = inventory.create_item(_new_item(initial_quantity=2, initial_staff_id=1))
     receipt = inventory.receive(item.id, 1, 3, unit_price=250, update_reference_price=True)
