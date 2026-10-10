@@ -378,7 +378,7 @@
   - [x] 一覧のダブルクリックで履歴が開くこと
   - [x] 1366×768 の画面で文字サイズ 100%・150% の全 3 ダイアログが、タスクバーとウィンドウ枠を考慮した作業領域内に収まること。長い品名・メモ・エラーでも全入力欄とボタンへ到達できること
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 3b の PR を作成し、CI 成功後にマージする
+- [x] 3b の PR を作成し、CI 成功後にマージする
 - [x] 本書のステータスを更新する
 
 ### 3c-1. FIFO 原価計上: core/db・最小限の UI 互換対応(`feature/phase3-fifo-core`)
