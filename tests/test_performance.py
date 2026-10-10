@@ -10,6 +10,7 @@ import threading
 import time
 from argparse import Namespace
 from collections.abc import Callable, Iterator
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,10 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox
 from inventory_manager_mini.core.models import PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
-from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
+from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
 from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
+from inventory_manager_mini.db.integrity import compute_aggregates
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
@@ -206,14 +208,54 @@ def test_startup_to_first_table_paint(performance_db: Path, tmp_path: Path) -> N
     assert elapsed <= 3.0
 
 
-def test_service_save_with_large_history(performance_db: Path) -> None:
+def test_service_outflow_save_with_large_history(performance_db: Path) -> None:
     conn = connect(performance_db)
     try:
         service = InventoryService(conn)
+        assert conn.execute("SELECT quantity FROM items WHERE id = 1").fetchone()[0] > 0
         started_at = time.perf_counter()
-        service.receive(1, 1, 1)
+        movement = service.issue(1, 1, 1, "性能計測")
         elapsed = time.perf_counter() - started_at
-        print(f"品目 5,000・履歴 100,000 件で入庫保存: {elapsed:.3f} 秒")
+        assert movement.cost_amount is not None
+        print(f"品目 5,000・履歴 100,000 件で出庫保存: {elapsed:.3f} 秒")
+        assert elapsed <= 0.5
+    finally:
+        conn.close()
+
+
+def test_service_outflow_save_with_many_lots(performance_db: Path) -> None:
+    conn = connect(performance_db)
+    try:
+        service = InventoryService(conn)
+        item_id = 1
+        item = conn.execute(
+            "SELECT quantity, client_id, purchaser_id FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if item[0]:
+            service.issue(item_id, 1, item[0], "ロット性能計測の初期在庫整理")
+
+        moved_at = utc_now_str()
+        with transaction(conn):
+            conn.executemany(
+                "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, "
+                "reason, delta, unit_price, moved_at) VALUES (?, ?, ?, 1, 'in', 1, 1, ?)",
+                [(item_id, item[1], item[2], moved_at)] * 1000,
+            )
+            conn.execute("UPDATE items SET quantity = 1000 WHERE id = ?", (item_id,))
+            conn.execute(
+                "UPDATE total_aggregates SET inbound_quantity = inbound_quantity + 1000 "
+                "WHERE id = 1"
+            )
+
+        started_at = time.perf_counter()
+        movement = service.issue(item_id, 1, 1000, "1,000 ロット性能計測")
+        elapsed = time.perf_counter() - started_at
+        allocation_count = conn.execute(
+            "SELECT COUNT(*) FROM stock_allocations WHERE movement_id = ?", (movement.id,)
+        ).fetchone()[0]
+        assert movement.cost_amount == 1000
+        assert allocation_count == 1000
+        print(f"1 品目・1,000 ロットの出庫保存: {elapsed:.3f} 秒")
         assert elapsed <= 0.5
     finally:
         conn.close()
@@ -244,7 +286,7 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
         conn.close()
 
 
-def test_v3_migration_with_large_history(performance_db: Path, tmp_path: Path) -> None:
+def test_v2_to_v4_migration_with_large_history(performance_db: Path, tmp_path: Path) -> None:
     source = sqlite3.connect(performance_db)
     legacy_path = tmp_path / "legacy-v2.db"
     legacy = sqlite3.connect(legacy_path, autocommit=True)
@@ -260,7 +302,14 @@ def test_v3_migration_with_large_history(performance_db: Path, tmp_path: Path) -
                 "items",
                 "stock_movements",
             ):
-                rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                if table == "stock_movements":
+                    rows = source.execute(
+                        "SELECT id, item_id, client_id, purchaser_id, staff_id, reason, delta, "
+                        "unit_price, used_for, reversal_of, note, moved_at "
+                        "FROM stock_movements"
+                    ).fetchall()
+                else:
+                    rows = source.execute(f"SELECT * FROM {table}").fetchall()
                 if rows:
                     placeholders = ", ".join("?" for _ in rows[0])
                     legacy.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
@@ -280,7 +329,72 @@ def test_v3_migration_with_large_history(performance_db: Path, tmp_path: Path) -
         assert conn.execute("SELECT COUNT(*) FROM total_aggregates").fetchone() == (1,)
     finally:
         conn.close()
-    print(f"履歴 100,000 件の v3 移行(事前検査・バックアップ・集計初期化): {elapsed:.3f} 秒")
+    print(f"履歴 100,000 件の v2→v4 移行(事前検査・バックアップ・FIFO 再生): {elapsed:.3f} 秒")
+
+
+def test_v4_migration_with_large_history(performance_db: Path, tmp_path: Path) -> None:
+    source = connect(performance_db)
+    legacy_path = tmp_path / "legacy-v3.db"
+    legacy = sqlite3.connect(legacy_path, autocommit=True)
+    try:
+        schema_v3 = files("inventory_manager_mini.db").joinpath("schema_v3.sql")
+        legacy.executescript(schema_v3.read_text(encoding="utf-8"))
+        with transaction(legacy):
+            for table in (
+                "clients",
+                "purchasers",
+                "staff",
+                "categories",
+                "locations",
+                "items",
+            ):
+                rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                if rows:
+                    placeholders = ", ".join("?" for _ in rows[0])
+                    legacy.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
+            movement_rows = source.execute(
+                "SELECT id, item_id, client_id, purchaser_id, staff_id, reason, delta, "
+                "unit_price, used_for, reversal_of, note, moved_at FROM stock_movements"
+            ).fetchall()
+            legacy.executemany(
+                "INSERT INTO stock_movements (id, item_id, client_id, purchaser_id, staff_id, "
+                "reason, delta, unit_price, used_for, reversal_of, note, moved_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                movement_rows,
+            )
+            aggregates = compute_aggregates(legacy, version=3)
+            legacy.execute(
+                "UPDATE total_aggregates SET inbound_quantity = ?, outbound_quantity = ?, "
+                "disposed_quantity = ?, expenditure = ?, disposal_amount = ? WHERE id = 1",
+                tuple(
+                    aggregates[column]
+                    for column in (
+                        "inbound_quantity",
+                        "outbound_quantity",
+                        "disposed_quantity",
+                        "expenditure",
+                        "disposal_amount",
+                    )
+                ),
+            )
+            legacy.execute("PRAGMA user_version = 3")
+    finally:
+        source.close()
+        legacy.close()
+
+    started_at = time.perf_counter()
+    conn = open_database(
+        legacy_path,
+        tmp_path / "v4-migration-backups",
+        backup_timestamp=lambda: "20261010_120000",
+    )
+    elapsed = time.perf_counter() - started_at
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+        assert conn.execute("SELECT COUNT(*) FROM stock_allocations").fetchone()[0] > 0
+    finally:
+        conn.close()
+    print(f"履歴 100,000 件の v3→v4 移行(事前検査・バックアップ・FIFO 再生): {elapsed:.3f} 秒")
 
 
 def test_search_to_table_paint(qtbot, monkeypatch, performance_window) -> None:
