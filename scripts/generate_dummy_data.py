@@ -144,7 +144,11 @@ def _generate_movements(
     years: int,
     rng: random.Random,
     now: datetime,
+    ensure_positive_active_quantities: bool = False,
 ) -> None:
+    if ensure_positive_active_quantities and movement_count < item_count + 6:
+        raise ValueError("有効品目の数量を正にするには、品目数 + 6 件以上の履歴が必要です")
+
     balances = [0] * (item_count + 1)
     totals = [0] * (item_count + 1)
     movement_rows: list[tuple[object, ...]] = []
@@ -255,8 +259,11 @@ def _generate_movements(
         reversal_target,
     )
 
+    regular_movement_count = (
+        movement_count - item_count if ensure_positive_active_quantities else movement_count
+    )
     reason_options = ("in", "out", "return", "dispose", "adjust")
-    while len(movement_rows) < movement_count:
+    while len(movement_rows) < regular_movement_count:
         item_id = rng.randint(1, item_count)
         reason = reason_options[(len(movement_rows) - 6) % len(reason_options)]
         quantity = rng.randint(1, 8)
@@ -275,6 +282,21 @@ def _generate_movements(
             delta = quantity
 
         append_movement(item_id, reason, delta)
+
+    if ensure_positive_active_quantities:
+        active_item_ids = [
+            row[0] for row in conn.execute("SELECT id FROM items WHERE is_active = 1 ORDER BY id")
+        ]
+        if not active_item_ids:
+            raise ValueError("有効品目がないため、正の在庫を持つ性能 DB を生成できません")
+        for item_id in active_item_ids:
+            if balances[item_id] == 0:
+                append_movement(item_id, "in", 1)
+        padding_index = 0
+        while len(movement_rows) < movement_count:
+            item_id = active_item_ids[padding_index % len(active_item_ids)]
+            append_movement(item_id, "in", 1)
+            padding_index += 1
 
     duration_seconds = years * 365.2425 * 24 * 60 * 60
     start = now - timedelta(seconds=duration_seconds)
@@ -330,7 +352,9 @@ def _generate_movements(
     )
 
 
-def generate_database(args: argparse.Namespace) -> tuple[int, int, float]:
+def generate_database(
+    args: argparse.Namespace, *, ensure_positive_active_quantities: bool = False
+) -> tuple[int, int, float]:
     path = args.db.expanduser().resolve()
     if path.exists():
         if not args.force:
@@ -352,7 +376,15 @@ def generate_database(args: argparse.Namespace) -> tuple[int, int, float]:
         with transaction(conn):
             categories = _insert_masters(conn)
             _insert_items(conn, args.items, categories, rng, now)
-            _generate_movements(conn, args.items, args.movements, args.years, rng, now)
+            _generate_movements(
+                conn,
+                args.items,
+                args.movements,
+                args.years,
+                rng,
+                now,
+                ensure_positive_active_quantities,
+            )
         reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
         if reasons:
             raise RuntimeError("生成データの整合性検査に失敗しました: " + "、".join(reasons))

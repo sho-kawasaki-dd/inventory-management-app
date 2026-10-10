@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from inventory_manager_mini.core.models import MovementRow
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.movement_table_model import MovementTableModel
@@ -60,6 +62,10 @@ class HistoryDialog(QDialog):
 
         available = self.screen().availableGeometry()
         self.resize(min(1050, available.width() - 24), min(620, available.height() - 48))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        center_dialog(self)
 
     def _refresh(self, select_movement_id: int | None = None) -> None:
         succeeded, item = run_guarded(self, lambda: self.context.inventory.get_item(self.item_id))

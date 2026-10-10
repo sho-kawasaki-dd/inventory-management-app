@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 from inventory_manager_mini.core.models import REASON_LABELS, MovementRow
 from inventory_manager_mini.core.timeutil import format_local
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 
 
@@ -81,6 +83,10 @@ class ReversalDialog(QDialog):
 
         available = self.screen().availableGeometry()
         self.resize(min(650, available.width() - 24), min(520, available.height() - 48))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        center_dialog(self)
 
     def _load_item(self) -> None:
         succeeded, item = run_guarded(
