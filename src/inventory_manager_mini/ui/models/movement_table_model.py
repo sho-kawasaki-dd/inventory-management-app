@@ -19,6 +19,7 @@ class MovementTableModel(QAbstractTableModel):
         ("種別", "reason"),
         ("数量", "delta"),
         ("単価", "unit_price"),
+        ("原価金額", "cost_amount"),
         ("クライアント", "client_name"),
         ("発注主体", "purchaser_name"),
         ("担当者", "staff_name"),
@@ -26,7 +27,7 @@ class MovementTableModel(QAbstractTableModel):
         ("メモ", "note"),
         ("取り消し状態", "reversal_status"),
     )
-    _NUMERIC_COLUMNS = {0, 3, 4}
+    _NUMERIC_COLUMNS = {0, 3, 4, 5}
     _GRAY_FOREGROUND = QBrush(QColor(Qt.GlobalColor.gray))
 
     def __init__(self, parent=None) -> None:
@@ -103,6 +104,6 @@ class MovementTableModel(QAbstractTableModel):
             return ""
         if column == 3:
             return f"{value:+,}"
-        if column == 4:
+        if column in (4, 5):
             return f"{value:,}円"
         return str(value)

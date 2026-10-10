@@ -43,13 +43,14 @@ def test_headers_and_newest_first_order() -> None:
         ]
     )
 
-    assert model.columnCount() == 11
-    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(11)] == [
+    assert model.columnCount() == 12
+    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(12)] == [
         "履歴 ID",
         "日時",
         "種別",
         "数量",
         "単価",
+        "原価金額",
         "クライアント",
         "発注主体",
         "担当者",
@@ -80,12 +81,13 @@ def test_display_values_roles_and_canceled_foreground(
                 reason=Reason.OUT,
                 delta=-1234,
                 unit_price=123456,
+                cost_amount=1234567,
                 used_for="会議室",
                 note="備品補充",
                 moved_at="2026-02-03 04:05:06",
                 is_reversed=True,
             ),
-            _movement(11, reversal_of=10, delta=1234),
+            _movement(11, reversal_of=10, delta=1234, cost_amount=-1234567),
         ]
     )
     display = Qt.ItemDataRole.DisplayRole
@@ -95,15 +97,18 @@ def test_display_values_roles_and_canceled_foreground(
     assert model.data(model.index(0, 2), display) == "出庫"
     assert model.data(model.index(0, 3), display) == "-1,234"
     assert model.data(model.index(0, 4), display) == "123,456円"
-    assert model.data(model.index(0, 5), display) == "総務"
-    assert model.data(model.index(0, 6), display) == "本部"
-    assert model.data(model.index(0, 7), display) == "担当者A"
-    assert model.data(model.index(0, 8), display) == "会議室"
-    assert model.data(model.index(0, 9), display) == "備品補充"
-    assert model.data(model.index(0, 10), display) == "取り消し済み"
+    assert model.data(model.index(0, 5), display) == "1,234,567円"
+    assert model.data(model.index(0, 6), display) == "総務"
+    assert model.data(model.index(0, 7), display) == "本部"
+    assert model.data(model.index(0, 8), display) == "担当者A"
+    assert model.data(model.index(0, 9), display) == "会議室"
+    assert model.data(model.index(0, 10), display) == "備品補充"
+    assert model.data(model.index(0, 11), display) == "取り消し済み"
     assert model.data(model.index(0, 3), raw) == -1234
+    assert model.data(model.index(0, 5), raw) == 1234567
     assert model.data(model.index(1, 3), display) == "+1,234"
-    assert model.data(model.index(1, 10), display) == "#10 の取り消し"
+    assert model.data(model.index(1, 5), display) == "-1,234,567円"
+    assert model.data(model.index(1, 11), display) == "#10 の取り消し"
     assert model.data(model.index(0, 0), Qt.ItemDataRole.ForegroundRole) == QBrush(
         QColor(Qt.GlobalColor.gray)
     )
@@ -119,12 +124,13 @@ def test_none_values_are_blank_and_numeric_columns_are_right_aligned() -> None:
 
     assert model.data(model.index(0, 0)) == "1234"
     assert model.data(model.index(0, 4)) == ""
-    assert model.data(model.index(0, 8)) == ""
+    assert model.data(model.index(0, 5)) == ""
     assert model.data(model.index(0, 9)) == ""
     assert model.data(model.index(0, 10)) == ""
-    for column in (0, 3, 4):
+    assert model.data(model.index(0, 11)) == ""
+    for column in (0, 3, 4, 5):
         assert model.data(model.index(0, column), Qt.ItemDataRole.TextAlignmentRole) == right
-    assert model.data(model.index(0, 5), Qt.ItemDataRole.TextAlignmentRole) is None
+    assert model.data(model.index(0, 6), Qt.ItemDataRole.TextAlignmentRole) is None
 
 
 def test_set_rows_and_row_lookups() -> None:

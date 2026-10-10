@@ -108,6 +108,9 @@ class StockMoveDialog(QDialog):
         self.preview_label = QLabel("操作後数量: -", form_widget)
         self.preview_label.setWordWrap(True)
         self.form_layout.addRow("操作後数量", self.preview_label)
+        self.estimate_label = QLabel("見積原価: - / 単価未登録数量: -", form_widget)
+        self.estimate_label.setWordWrap(True)
+        self.form_layout.addRow("FIFO 見積", self.estimate_label)
         self.error_label = QLabel(form_widget)
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet("color: #b42318")
@@ -209,6 +212,7 @@ class StockMoveDialog(QDialog):
         self.quantity_label.setText("実数" if is_stocktake else "数量")
         self.form_layout.setRowVisible(self.used_for_edit, reason is Reason.OUT)
         self.form_layout.setRowVisible(self.unit_price_edit, reason is Reason.IN)
+        self.form_layout.setRowVisible(self.estimate_label, reason in (Reason.OUT, Reason.DISPOSE))
         self.quantity_spin.setRange(0 if is_stocktake else 1, MAX_STOCK_QUANTITY)
         self._stocktake_quantity_invalid = False
         if is_stocktake and self._selected_item is not None:
@@ -270,6 +274,7 @@ class StockMoveDialog(QDialog):
                     else:
                         messages.append("単価を数値に変換できません")
 
+        estimate = None
         if reason in (Reason.OUT, Reason.DISPOSE) and item is not None:
             try:
                 estimate = self.context.inventory.estimate_outflow(item.id, quantity)
@@ -278,6 +283,14 @@ class StockMoveDialog(QDialog):
             else:
                 if estimate.cost_amount > MAX_MOVEMENT_AMOUNT:
                     messages.append(f"1 操作の金額は {MAX_MOVEMENT_AMOUNT:,} 円以下にしてください")
+
+        if estimate is None:
+            self.estimate_label.setText("見積原価: - / 単価未登録数量: -")
+        else:
+            self.estimate_label.setText(
+                f"見積原価: {estimate.cost_amount:,} 円 / "
+                f"単価未登録数量: {estimate.unpriced_quantity:,} 個"
+            )
 
         if resulting_quantity is None:
             self.preview_label.setText("操作後数量: -")

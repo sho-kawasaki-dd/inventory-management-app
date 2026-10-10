@@ -6,7 +6,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import MAX_STOCK_QUANTITY, NewItem
+from inventory_manager_mini.core.models import MAX_STOCK_QUANTITY, Allocation, NewItem
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
@@ -159,6 +159,104 @@ def test_successful_reversal_refreshes_history_and_reselects_original(
     assert dialog_context.inventory.get_item(item.id).quantity == 4
     assert dialog_context.inventory.get_item(item.id).reference_price == 250
     assert changes == [True]
+
+
+@pytest.mark.parametrize(
+    ("operation", "unit_price", "expected_cost"),
+    [("issue", 10, 10), ("issue", 0, 0), ("return", 10, None)],
+)
+def test_history_reversal_preserves_cost_and_reverses_allocations(
+    qtbot, dialog_context, monkeypatch, operation: str, unit_price: int, expected_cost: int | None
+) -> None:
+    item = _create_item(dialog_context)
+    lot = dialog_context.inventory.receive(item.id, 1, 2, unit_price=unit_price)
+    if operation == "issue":
+        movement = dialog_context.inventory.issue(item.id, 1, 1, "テスト")
+    else:
+        movement = dialog_context.inventory.return_to_supplier(item.id, 1, 1)
+
+    dialog = HistoryDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+    row_index = dialog.model.row_of(movement.id)
+    assert row_index is not None
+    dialog.table.selectRow(row_index)
+    assert dialog.reverse_button.isEnabled()
+
+    def execute_and_save(reversal_dialog: ReversalDialog) -> QDialog.DialogCode:
+        reversal_dialog.staff_combo.setCurrentIndex(1)
+        reversal_dialog._save()
+        assert reversal_dialog.result() == QDialog.DialogCode.Accepted
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ReversalDialog, "exec", execute_and_save)
+    dialog._open_reversal()
+
+    reversal = next(
+        row
+        for row in dialog_context.inventory.list_history(item.id)
+        if row.reversal_of == movement.id
+    )
+    assert movement.cost_amount == expected_cost
+    assert reversal.cost_amount == (None if expected_cost is None else -expected_cost)
+    assert reversal.unit_price == movement.unit_price
+    original_allocations = dialog_context.inventory.allocations.list_for_movement(movement.id)
+    reversal_allocations = dialog_context.inventory.allocations.list_for_movement(reversal.id)
+    assert original_allocations == (Allocation(lot.id, -movement.delta),)
+    assert reversal_allocations == tuple(
+        Allocation(allocation.lot_id, -allocation.quantity) for allocation in original_allocations
+    )
+    original_row = dialog.model.row_of(movement.id)
+    assert original_row is not None
+    assert dialog.model.row_at(original_row).is_reversed
+
+
+def test_history_can_reverse_consumption_then_its_receipt(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = _create_item(dialog_context)
+    receipt = dialog_context.inventory.receive(item.id, 1, 2, unit_price=10)
+    issue = dialog_context.inventory.issue(item.id, 1, 1, "テスト")
+    dialog = HistoryDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    def execute_and_save(reversal_dialog: ReversalDialog) -> QDialog.DialogCode:
+        reversal_dialog.staff_combo.setCurrentIndex(1)
+        reversal_dialog._save()
+        assert reversal_dialog.result() == QDialog.DialogCode.Accepted
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ReversalDialog, "exec", execute_and_save)
+    receipt_row = dialog.model.row_of(receipt.id)
+    assert receipt_row is not None
+    dialog.table.selectRow(receipt_row)
+    assert not dialog.reverse_button.isEnabled()
+    assert dialog.reverse_button.toolTip() == (
+        "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で消費されているため取り消せません"
+    )
+
+    issue_row = dialog.model.row_of(issue.id)
+    assert issue_row is not None
+    dialog.table.selectRow(issue_row)
+    assert dialog.reverse_button.isEnabled()
+    dialog._open_reversal()
+
+    receipt_row = dialog.model.row_of(receipt.id)
+    assert receipt_row is not None
+    dialog.table.selectRow(receipt_row)
+    assert dialog.reverse_button.isEnabled()
+    dialog._open_reversal()
+
+    history = dialog_context.inventory.list_history(item.id)
+    issue_reversal = next(row for row in history if row.reversal_of == issue.id)
+    receipt_reversal = next(row for row in history if row.reversal_of == receipt.id)
+    assert issue_reversal.cost_amount == -10
+    assert receipt_reversal.unit_price == receipt.unit_price == 10
+    assert receipt_reversal.cost_amount is None
+    assert dialog_context.inventory.allocations.list_for_movement(issue_reversal.id) == (
+        Allocation(receipt.id, -1),
+    )
+    assert dialog_context.inventory.allocations.list_for_movement(receipt_reversal.id) == ()
+    assert dialog_context.inventory.get_item(item.id).quantity == 0
 
 
 def test_reversal_requires_active_staff_and_saves_only_on_success(qtbot, dialog_context) -> None:
