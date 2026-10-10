@@ -222,6 +222,6 @@ class DashboardRow:
     inbound_quantity: int
     outbound_quantity: int
     expenditure: int
-    unpriced_issue_count: int
+    unpriced_issue_quantity: int
     disposed_quantity: int
     disposal_amount: int

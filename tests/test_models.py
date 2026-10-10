@@ -164,7 +164,7 @@ def test_dashboard_model_and_enum_values() -> None:
         "inbound_quantity",
         "outbound_quantity",
         "expenditure",
-        "unpriced_issue_count",
+        "unpriced_issue_quantity",
         "disposed_quantity",
         "disposal_amount",
     }
