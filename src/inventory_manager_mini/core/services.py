@@ -22,12 +22,15 @@ from inventory_manager_mini.core.errors import (
     ReversalNotAllowedError,
     ValidationError,
 )
+from inventory_manager_mini.core.fifo import plan_fifo_allocations
 from inventory_manager_mini.core.models import (
     MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
+    Allocation,
     Category,
     Client,
+    FifoEstimate,
     Item,
     ItemFilter,
     ItemRow,
@@ -42,6 +45,7 @@ from inventory_manager_mini.core.models import (
     StockMovement,
 )
 from inventory_manager_mini.core.timeutil import (
+    is_before_utc,
     local_timestamp_for_filename,
     utc_now,
     utc_now_str,
@@ -68,6 +72,7 @@ from inventory_manager_mini.db.migrations import (
     migrate_schema,
 )
 from inventory_manager_mini.db.repositories import (
+    AllocationRepository,
     ItemRepository,
     MasterRepository,
     MovementRepository,
@@ -197,6 +202,7 @@ class InventoryService:
         self.clock = clock
         self.items = ItemRepository(conn)
         self.movements = MovementRepository(conn)
+        self.allocations = AllocationRepository(conn)
         self.masters = MasterRepository(conn)
         self.aggregates = TotalAggregatesRepository(conn)
 
@@ -365,12 +371,16 @@ class InventoryService:
         with transaction(self.conn):
             item = self._require_active_item(item_id)
             staff = self._require_active_staff(staff_id)
+            delta = actual - item.quantity
+            unit_price = item.reference_price if delta > 0 else None
+            if unit_price is not None:
+                unit_price = _optional_integer(unit_price, "適用単価", 0, MAX_UNIT_PRICE)
             return self._record_movement(
                 item,
                 staff.id,
                 Reason.ADJUST,
-                actual - item.quantity,
-                item.reference_price,
+                delta,
+                unit_price,
                 None,
                 normalized_note,
             )
@@ -390,11 +400,21 @@ class InventoryService:
             item = self._require_active_item(original.item_id)
             staff = self._require_active_staff(staff_id)
             delta = -original.delta
-            if item.quantity + delta < 0:
-                raise NegativeStockError("取り消し後の在庫数が負になるため実行できません")
             if item.quantity + delta > MAX_STOCK_QUANTITY:
                 raise ValidationError(
                     "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません"
+                )
+            if original.delta > 0:
+                remaining = self.allocations.lot_remaining(original.id)
+                if remaining != original.delta:
+                    raise ReversalNotAllowedError(
+                        "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で消費されているため取り消せません"
+                    )
+                reversal_allocations: tuple[Allocation, ...] = ()
+            else:
+                reversal_allocations = tuple(
+                    Allocation(allocation.lot_id, -allocation.quantity)
+                    for allocation in self.allocations.list_for_movement(original.id)
                 )
             return self._record_movement(
                 item,
@@ -407,7 +427,18 @@ class InventoryService:
                 client_id=original.client_id,
                 purchaser_id=original.purchaser_id,
                 reversal_of=original.id,
+                allocations=reversal_allocations,
+                cost_amount=(None if original.cost_amount is None else -original.cost_amount),
             )
+
+    def estimate_outflow(self, item_id: int, quantity: int) -> FifoEstimate:
+        requested = _integer(quantity, "数量", 1, MAX_STOCK_QUANTITY)
+        with read_transaction(self.conn):
+            self._require_item(_integer(item_id, "品目 ID", 1))
+            _, estimate = plan_fifo_allocations(
+                self.allocations.list_available_lots(item_id), requested
+            )
+            return estimate
 
     def list_history(self, item_id: int) -> list[MovementRow]:
         return self.movements.list_by_item(item_id)
@@ -430,10 +461,15 @@ class InventoryService:
             if item is None or not item.is_active:
                 return "廃止品目の履歴は取り消せません"
             resulting_quantity = item.quantity - original.delta
-            if resulting_quantity < 0:
-                return "取り消し後の在庫数が負になるため実行できません"
             if resulting_quantity > MAX_STOCK_QUANTITY:
                 return "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません"
+            if original.delta > 0:
+                remaining = self.allocations.lot_remaining(original.id)
+                if remaining != original.delta:
+                    return (
+                        "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で"
+                        "消費されているため取り消せません"
+                    )
             return None
 
     def _change_stock(
@@ -456,14 +492,23 @@ class InventoryService:
             resulting_quantity = item.quantity + delta
             if resulting_quantity > MAX_STOCK_QUANTITY:
                 raise ValidationError("操作後の在庫数が上限(1,000,000)を超えます")
-            effective_price = item.reference_price if unit_price is None else unit_price
-            effective_price = _optional_integer(effective_price, "適用単価", 0, MAX_UNIT_PRICE)
-            if (
-                reason in {Reason.OUT, Reason.DISPOSE}
-                and effective_price is not None
-                and abs(delta) * effective_price > MAX_MOVEMENT_AMOUNT
-            ):
-                raise ValidationError("1 操作の金額が上限(100,000,000円)を超えます")
+            effective_price: int | None = None
+            if reason is Reason.IN:
+                effective_price = item.reference_price if unit_price is None else unit_price
+                effective_price = _optional_integer(effective_price, "適用単価", 0, MAX_UNIT_PRICE)
+            allocations: tuple[Allocation, ...] = ()
+            cost_amount: int | None = None
+            if delta < 0:
+                allocations, estimate = plan_fifo_allocations(
+                    self.allocations.list_available_lots(item.id), -delta
+                )
+                if reason in {Reason.OUT, Reason.DISPOSE}:
+                    cost_amount = estimate.cost_amount
+                    if cost_amount > MAX_MOVEMENT_AMOUNT:
+                        raise ValidationError("1 操作の金額が上限(100,000,000円)を超えます")
+            movement_price = (
+                effective_price if delta > 0 and reason in {Reason.IN, Reason.ADJUST} else None
+            )
             if (
                 reason is Reason.IN
                 and update_reference_price
@@ -478,9 +523,11 @@ class InventoryService:
                 staff.id,
                 reason,
                 delta,
-                effective_price,
+                movement_price,
                 used_for,
                 normalized_note,
+                allocations=allocations,
+                cost_amount=cost_amount,
             )
 
     def _record_movement(
@@ -496,7 +543,13 @@ class InventoryService:
         client_id: int | None = None,
         purchaser_id: int | None = None,
         reversal_of: int | None = None,
+        allocations: tuple[Allocation, ...] = (),
+        cost_amount: int | None = None,
     ) -> StockMovement:
+        moved_at = utc_now_str(self.clock())
+        latest_moved_at = self.movements.latest_moved_at(item.id)
+        if latest_moved_at is not None and is_before_utc(moved_at, latest_moved_at):
+            raise ValidationError("記録時刻が対象品目の最新履歴より前のため保存できません")
         movement = self.movements.insert(
             item_id=item.id,
             client_id=item.client_id if client_id is None else client_id,
@@ -505,28 +558,30 @@ class InventoryService:
             reason=reason,
             delta=delta,
             unit_price=unit_price,
+            cost_amount=cost_amount,
             used_for=used_for,
             reversal_of=reversal_of,
             note=note,
-            moved_at=utc_now_str(self.clock()),
+            moved_at=moved_at,
         )
+        self.allocations.insert_many(movement.id, allocations)
         self.items.add_quantity(item.id, delta)
-        self.aggregates.apply(self._aggregate_deltas(reason, delta, unit_price))
+        self.aggregates.apply(self._aggregate_deltas(reason, delta, cost_amount))
         return movement
 
     @staticmethod
-    def _aggregate_deltas(reason: Reason, delta: int, unit_price: int | None) -> dict[str, int]:
+    def _aggregate_deltas(reason: Reason, delta: int, cost_amount: int | None) -> dict[str, int]:
         if reason is Reason.IN:
             return {"inbound_quantity": delta}
         if reason is Reason.OUT:
             changes = {"outbound_quantity": -delta}
-            if unit_price is not None:
-                changes["expenditure"] = -delta * unit_price
+            if cost_amount is not None:
+                changes["expenditure"] = cost_amount
             return changes
         if reason is Reason.DISPOSE:
             changes = {"disposed_quantity": -delta}
-            if unit_price is not None:
-                changes["disposal_amount"] = -delta * unit_price
+            if cost_amount is not None:
+                changes["disposal_amount"] = cost_amount
             return changes
         return {}
 

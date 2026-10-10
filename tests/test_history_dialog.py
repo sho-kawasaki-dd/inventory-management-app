@@ -59,7 +59,10 @@ def test_history_dialog_loads_item_and_orders_history_newest_first(qtbot, dialog
         ("already_reversed", "この履歴はすでに取り消されています"),
         ("zero_adjustment", "差分 0 の棚卸履歴は取り消せません"),
         ("inactive_item", "廃止品目の履歴は取り消せません"),
-        ("negative_stock", "取り消し後の在庫数が負になるため実行できません"),
+        (
+            "consumed_lot",
+            "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で消費されているため取り消せません",
+        ),
         (
             "above_limit",
             "取り消し後の在庫数が上限(1,000,000)を超えるため実行できません",
@@ -73,7 +76,7 @@ def test_history_selection_disables_reversal_with_reason(
         item = _create_item(dialog_context, quantity=MAX_STOCK_QUANTITY - 2)
         target = dialog_context.inventory.issue(item.id, 1, 2, "テスト")
         dialog_context.inventory.stocktake(item.id, 1, MAX_STOCK_QUANTITY)
-    elif case == "negative_stock":
+    elif case == "consumed_lot":
         item = _create_item(dialog_context)
         target = dialog_context.inventory.receive(item.id, 1, 2)
         dialog_context.inventory.dispose(item.id, 1, 2)

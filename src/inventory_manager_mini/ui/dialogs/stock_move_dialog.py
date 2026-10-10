@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from inventory_manager_mini.core.errors import DomainError
 from inventory_manager_mini.core.models import (
     MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
@@ -269,13 +270,14 @@ class StockMoveDialog(QDialog):
                     else:
                         messages.append("単価を数値に変換できません")
 
-        if (
-            reason in (Reason.OUT, Reason.DISPOSE)
-            and item is not None
-            and item.reference_price is not None
-            and quantity * item.reference_price > MAX_MOVEMENT_AMOUNT
-        ):
-            messages.append(f"1 操作の金額は {MAX_MOVEMENT_AMOUNT:,} 円以下にしてください")
+        if reason in (Reason.OUT, Reason.DISPOSE) and item is not None:
+            try:
+                estimate = self.context.inventory.estimate_outflow(item.id, quantity)
+            except DomainError as error:
+                messages.append(str(error))
+            else:
+                if estimate.cost_amount > MAX_MOVEMENT_AMOUNT:
+                    messages.append(f"1 操作の金額は {MAX_MOVEMENT_AMOUNT:,} 円以下にしてください")
 
         if resulting_quantity is None:
             self.preview_label.setText("操作後数量: -")

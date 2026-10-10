@@ -13,6 +13,7 @@ from inventory_manager_mini.core.errors import (
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     MAX_STOCK_QUANTITY,
+    Allocation,
     Category,
     Client,
     Item,
@@ -20,6 +21,7 @@ from inventory_manager_mini.core.models import (
     ItemRow,
     ItemUpdate,
     Location,
+    Lot,
     MovementRow,
     PurchaseInfo,
     Purchaser,
@@ -36,7 +38,8 @@ _ITEM_COLUMNS = (
     "application, reference_price, note, is_active, created_at, updated_at"
 )
 _MOVEMENT_COLUMNS = (
-    "id, item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price, used_for, "
+    "id, item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price, cost_amount, "
+    "used_for, "
     "reversal_of, note, moved_at"
 )
 
@@ -94,6 +97,7 @@ def _movement_from_row(row: sqlite3.Row) -> StockMovement:
         reversal_of=None if row["reversal_of"] is None else int(row["reversal_of"]),
         note=None if row["note"] is None else str(row["note"]),
         moved_at=str(row["moved_at"]),
+        cost_amount=None if row["cost_amount"] is None else int(row["cost_amount"]),
     )
 
 
@@ -419,6 +423,7 @@ class MovementRepository:
         reason: Reason,
         delta: int,
         unit_price: int | None,
+        cost_amount: int | None = None,
         used_for: str | None,
         reversal_of: int | None,
         note: str | None,
@@ -427,9 +432,9 @@ class MovementRepository:
         cursor = _execute(
             self.conn,
             """INSERT INTO stock_movements
-            (item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price,
+            (item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price, cost_amount,
              used_for, reversal_of, note, moved_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 item_id,
                 client_id,
@@ -438,6 +443,7 @@ class MovementRepository:
                 reason.value,
                 delta,
                 unit_price,
+                cost_amount,
                 used_for,
                 reversal_of,
                 note,
@@ -472,6 +478,14 @@ class MovementRepository:
             (movement_id,),
         ).fetchone()
         return bool(row["result"])
+
+    def latest_moved_at(self, item_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT moved_at FROM stock_movements WHERE item_id = ? "
+            "ORDER BY moved_at DESC, id DESC LIMIT 1",
+            (item_id,),
+        ).fetchone()
+        return None if row is None else str(row["moved_at"])
 
     def list_by_item(self, item_id: int) -> list[MovementRow]:
         return self._list("WHERE m.item_id = ?", (item_id,))
@@ -526,6 +540,69 @@ class MovementRepository:
                 )
             )
         return result
+
+
+class AllocationRepository:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.conn.row_factory = sqlite3.Row
+
+    def list_available_lots(self, item_id: int) -> list[Lot]:
+        rows = self.conn.execute(
+            """SELECT lot.id, lot.moved_at, lot.delta - COALESCE(SUM(a.quantity), 0)
+                    AS remaining_quantity, lot.unit_price, lot.purchaser_id
+            FROM stock_movements AS lot
+            LEFT JOIN stock_allocations AS a ON a.lot_id = lot.id
+            WHERE lot.item_id = ? AND lot.reversal_of IS NULL AND lot.delta > 0
+                AND lot.reason IN ('in', 'adjust')
+                AND NOT EXISTS (
+                    SELECT 1 FROM stock_movements AS r WHERE r.reversal_of = lot.id
+                )
+            GROUP BY lot.id
+            HAVING remaining_quantity > 0
+            ORDER BY lot.moved_at, lot.id""",
+            (item_id,),
+        ).fetchall()
+        return [
+            Lot(
+                id=int(row["id"]),
+                moved_at=str(row["moved_at"]),
+                remaining_quantity=int(row["remaining_quantity"]),
+                unit_price=None if row["unit_price"] is None else int(row["unit_price"]),
+                purchaser_id=int(row["purchaser_id"]),
+            )
+            for row in rows
+        ]
+
+    def list_for_movement(self, movement_id: int) -> tuple[Allocation, ...]:
+        rows = self.conn.execute(
+            "SELECT lot_id, quantity FROM stock_allocations WHERE movement_id = ? ORDER BY lot_id",
+            (movement_id,),
+        ).fetchall()
+        return tuple(Allocation(int(row["lot_id"]), int(row["quantity"])) for row in rows)
+
+    def insert_many(self, movement_id: int, allocations: Sequence[Allocation]) -> None:
+        try:
+            self.conn.executemany(
+                "INSERT INTO stock_allocations (movement_id, lot_id, quantity) VALUES (?, ?, ?)",
+                [(movement_id, value.lot_id, value.quantity) for value in allocations],
+            )
+        except sqlite3.IntegrityError as error:
+            raise ValidationError("引当明細の整合性を確認してください") from error
+
+    def lot_remaining(self, lot_id: int) -> int | None:
+        row = self.conn.execute(
+            """SELECT lot.delta - COALESCE(SUM(a.quantity), 0) AS remaining_quantity
+            FROM stock_movements AS lot
+            LEFT JOIN stock_allocations AS a ON a.lot_id = lot.id
+            WHERE lot.id = ? AND lot.delta > 0 AND lot.reversal_of IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM stock_movements AS r WHERE r.reversal_of = lot.id
+                )
+            GROUP BY lot.id""",
+            (lot_id,),
+        ).fetchone()
+        return None if row is None else int(row["remaining_quantity"])
 
 
 class MasterRepository:

@@ -107,7 +107,12 @@ def test_each_stock_operation_saves_and_emits_change(
     assert movement.delta == expected_delta
     assert movement.staff_id == 1
     assert movement.used_for == used_for
-    assert movement.unit_price == 500
+    expected_price = 500 if reason in (Reason.IN, Reason.ADJUST) and expected_delta > 0 else None
+    assert movement.unit_price == expected_price
+    if reason in (Reason.OUT, Reason.DISPOSE):
+        assert movement.cost_amount == abs(expected_delta) * 500
+    else:
+        assert movement.cost_amount is None
     assert movement.note == "記録メモ"
     assert dialog_context.inventory.get_item(item.id).quantity == initial_quantity + expected_delta
     assert changes == [True]
@@ -202,6 +207,36 @@ def test_quantity_boundaries_and_operation_amount_are_validated(qtbot, dialog_co
         amount_dialog.quantity_spin.setValue(10_001)
         assert not _ok_button(amount_dialog).isEnabled()
         assert f"{MAX_MOVEMENT_AMOUNT:,}" in amount_dialog.error_label.text()
+
+
+def test_fifo_limit_validation_ignores_changed_reference_price(qtbot, dialog_context) -> None:
+    item = _create_item(dialog_context, quantity=10_000, reference_price=10_000)
+    dialog_context.inventory.conn.execute(
+        "UPDATE items SET reference_price = ? WHERE id = ?", (MAX_UNIT_PRICE, item.id)
+    )
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.quantity_spin.setValue(10_000)
+
+    assert _ok_button(dialog).isEnabled()
+    estimate = dialog_context.inventory.estimate_outflow(item.id, 10_000)
+    assert estimate.cost_amount == MAX_MOVEMENT_AMOUNT
+
+
+def test_unpriced_only_fifo_outflow_remains_saveable(qtbot, dialog_context) -> None:
+    item = _create_item(dialog_context, quantity=MAX_STOCK_QUANTITY, reference_price=None)
+    dialog = StockMoveDialog(dialog_context, Reason.OUT, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.quantity_spin.setValue(MAX_STOCK_QUANTITY)
+
+    assert _ok_button(dialog).isEnabled()
+    dialog._save()
+    movement = dialog_context.inventory.list_history(item.id)[-1]
+    assert (movement.unit_price, movement.cost_amount) == (None, 0)
 
 
 def test_inbound_price_validation_and_other_reasons_ignore_price(qtbot, dialog_context) -> None:

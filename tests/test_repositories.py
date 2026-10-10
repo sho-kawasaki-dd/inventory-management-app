@@ -18,6 +18,7 @@ from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
+    Allocation,
     ItemFilter,
     ItemUpdate,
     Reason,
@@ -25,12 +26,14 @@ from inventory_manager_mini.core.models import (
 from inventory_manager_mini.db.connection import connect_memory
 from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS
 from inventory_manager_mini.db.repositories import (
+    AllocationRepository,
     ItemRepository,
     MasterRepository,
     MovementRepository,
     SettingsRepository,
     TotalAggregatesRepository,
 )
+from tests.conftest import unchecked_constraints
 
 
 @pytest.fixture
@@ -116,11 +119,13 @@ def _insert_movement(
     reversal_of: int | None = None,
     moved_at: str = "2026-01-01 00:00:00",
 ) -> None:
+    cost_amount = 0 if reason in {"out", "dispose"} else None
+    effective_unit_price = None if reason in {"out", "return", "dispose"} else unit_price
     conn.execute(
         """INSERT INTO stock_movements
-        (id, item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price,
+        (id, item_id, client_id, purchaser_id, staff_id, reason, delta, unit_price, cost_amount,
          used_for, reversal_of, moved_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
         (
             movement_id,
             item_id,
@@ -128,7 +133,8 @@ def _insert_movement(
             purchaser_id,
             reason,
             delta,
-            unit_price,
+            effective_unit_price,
+            cost_amount,
             used_for,
             reversal_of,
             moved_at,
@@ -320,6 +326,7 @@ def test_movement_repository_maps_rows_orders_and_detects_reversals(
         reason=Reason.OUT,
         delta=-1,
         unit_price=None,
+        cost_amount=100,
         used_for="会議室",
         reversal_of=None,
         note=None,
@@ -366,6 +373,51 @@ def test_movement_repository_maps_rows_orders_and_detects_reversals(
     assert isinstance(duplicate.value.__cause__, sqlite3.IntegrityError)
 
 
+def test_allocation_repository_lists_lots_and_tracks_remaining_quantity(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    movements = MovementRepository(repository_conn)
+    allocations = AllocationRepository(repository_conn)
+    lot = movements.insert(
+        item_id=1,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=Reason.IN,
+        delta=3,
+        unit_price=100,
+        used_for=None,
+        reversal_of=None,
+        note=None,
+        moved_at="2026-01-01 00:00:00",
+    )
+    issue = movements.insert(
+        item_id=1,
+        client_id=1,
+        purchaser_id=1,
+        staff_id=1,
+        reason=Reason.OUT,
+        delta=-2,
+        unit_price=None,
+        cost_amount=200,
+        used_for="用途",
+        reversal_of=None,
+        note=None,
+        moved_at="2026-01-02 00:00:00",
+    )
+    allocations.insert_many(issue.id, (Allocation(lot.id, 2),))
+
+    available = allocations.list_available_lots(1)
+    assert [(value.id, value.remaining_quantity, value.unit_price) for value in available] == [
+        (lot.id, 1, 100)
+    ]
+    assert allocations.list_for_movement(issue.id) == (Allocation(lot.id, 2),)
+    assert allocations.lot_remaining(lot.id) == 1
+    assert movements.latest_moved_at(1) == "2026-01-02 00:00:00"
+    assert movements.latest_moved_at(999) is None
+
+
 def test_find_quantity_mismatches_reports_only_differences(
     repository_conn: sqlite3.Connection,
 ) -> None:
@@ -395,13 +447,14 @@ def test_find_invalid_reversals_detects_all_inconsistent_cases(
     repo = MovementRepository(repository_conn)
     assert repo.find_invalid_reversals() == [5, 8]
 
-    repository_conn.execute("UPDATE stock_movements SET delta = -4 WHERE id = 2")
-    repository_conn.execute("UPDATE stock_movements SET item_id = 2 WHERE id = 7")
-    repository_conn.execute("UPDATE stock_movements SET reason = 'out' WHERE id = 2")
-    repository_conn.execute("UPDATE stock_movements SET client_id = 2 WHERE id = 2")
-    repository_conn.execute("UPDATE stock_movements SET purchaser_id = 2 WHERE id = 2")
-    repository_conn.execute("UPDATE stock_movements SET unit_price = 200 WHERE id = 2")
-    repository_conn.execute("UPDATE stock_movements SET used_for = '別用途' WHERE id = 2")
+    with unchecked_constraints(repository_conn):
+        repository_conn.execute("UPDATE stock_movements SET delta = -4 WHERE id = 2")
+        repository_conn.execute("UPDATE stock_movements SET item_id = 2 WHERE id = 7")
+        repository_conn.execute("UPDATE stock_movements SET reason = 'out' WHERE id = 2")
+        repository_conn.execute("UPDATE stock_movements SET client_id = 2 WHERE id = 2")
+        repository_conn.execute("UPDATE stock_movements SET purchaser_id = 2 WHERE id = 2")
+        repository_conn.execute("UPDATE stock_movements SET unit_price = 200 WHERE id = 2")
+        repository_conn.execute("UPDATE stock_movements SET used_for = '別用途' WHERE id = 2")
     assert repo.find_invalid_reversals() == [2, 5, 7, 8]
 
     repository_conn.execute("PRAGMA foreign_keys = OFF")

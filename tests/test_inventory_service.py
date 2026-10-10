@@ -22,6 +22,7 @@ from inventory_manager_mini.core.models import (
     MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
+    Allocation,
     ItemFilter,
     ItemUpdate,
     NewItem,
@@ -31,7 +32,11 @@ from inventory_manager_mini.core.models import (
 from inventory_manager_mini.core.services import BackupService, InventoryService, MasterService
 from inventory_manager_mini.db import repositories
 from inventory_manager_mini.db.connection import connect, transaction
-from inventory_manager_mini.db.integrity import AGGREGATE_COLUMNS, compute_aggregates
+from inventory_manager_mini.db.integrity import (
+    AGGREGATE_COLUMNS,
+    compute_aggregates,
+    replay_allocations,
+)
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from tests.conftest import unchecked_constraints
 
@@ -179,8 +184,9 @@ def test_stock_operations_record_reasons_prices_and_quantity(inventory: Inventor
         (Reason.DISPOSE, -1),
         (Reason.ADJUST, 2),
     ]
-    assert (inbound.unit_price, outbound.unit_price, outbound.used_for) == (120, 120, "会議室")
-    assert (returned.unit_price, disposed.unit_price, stocktake.unit_price) == (120, 120, 120)
+    assert (inbound.unit_price, outbound.unit_price, outbound.used_for) == (120, None, "会議室")
+    assert outbound.cost_amount == 200
+    assert (returned.unit_price, disposed.unit_price, stocktake.unit_price) == (None, None, 120)
     assert inventory.get_item(item.id).quantity == 12  # type: ignore[union-attr]
 
 
@@ -235,7 +241,7 @@ def test_reverse_rejects_all_blocked_cases(inventory: InventoryService) -> None:
     consumed_item = inventory.create_item(_new_item(name="消費品"))
     consumed_receipt = inventory.receive(consumed_item.id, 1, 2)
     inventory.issue(consumed_item.id, 1, 2, "利用")
-    with pytest.raises(NegativeStockError):
+    with pytest.raises(ReversalNotAllowedError):
         inventory.reverse(consumed_receipt.id, 2)
 
     inactive_item = inventory.create_item(
@@ -386,8 +392,8 @@ def test_issue_amount_limit_is_exact_and_failure_is_atomic(
     )
     before = inventory.aggregates.get()
     movement = inventory.issue(exact_item.id, 1, 10_000, "用途")
-    assert movement.unit_price is not None
-    assert abs(movement.delta) * movement.unit_price == MAX_MOVEMENT_AMOUNT
+    assert movement.unit_price is None
+    assert movement.cost_amount == MAX_MOVEMENT_AMOUNT
     assert inventory.aggregates.get()["expenditure"] == before["expenditure"] + MAX_MOVEMENT_AMOUNT
 
     disposed_item = inventory.create_item(
@@ -419,6 +425,20 @@ def test_issue_amount_limit_is_exact_and_failure_is_atomic(
         seeded_conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0] == movement_count
     )
     assert inventory.aggregates.get() == aggregates_before
+
+
+def test_issue_amount_limit_uses_fifo_cost_not_reference_price(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(_new_item(name="ロット価格", reference_price=0))
+    inventory.receive(item.id, 1, 10_000, unit_price=10_001)
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(ValidationError, match="1 操作の金額"):
+        inventory.issue(item.id, 1, 10_000, "用途")
+
+    assert _snapshot(seeded_conn) == before
 
 
 def test_amount_limit_does_not_apply_to_initial_receipt_return_or_stocktake(
@@ -484,7 +504,13 @@ def test_reversal_block_reason_and_reverse_enforce_quantity_limit(
 def _snapshot(conn: sqlite3.Connection) -> dict[str, list[tuple[object, ...]]]:
     return {
         table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")]
-        for table in ("categories", "items", "stock_movements", "total_aggregates")
+        for table in (
+            "categories",
+            "items",
+            "stock_movements",
+            "stock_allocations",
+            "total_aggregates",
+        )
     }
 
 
@@ -688,12 +714,14 @@ def test_applied_reference_price_is_validated_when_unit_price_is_omitted(
         )
     before = _snapshot(seeded_conn)
 
-    for operation in ("receive", "issue", "return", "dispose"):
-        with pytest.raises(ValidationError, match="適用単価"):
-            _run_operation(inventory, operation, item.id, 1)
-    with pytest.raises(ValidationError):
-        inventory.stocktake(item.id, 1, 3)
-    assert _snapshot(seeded_conn) == before
+    with pytest.raises(ValidationError, match="適用単価"):
+        inventory.receive(item.id, 1, 1)
+    with pytest.raises(ValidationError, match="適用単価"):
+        inventory.stocktake(item.id, 1, 6)
+    reduced = inventory.stocktake(item.id, 1, 3)
+    assert reduced.unit_price is None
+    assert len(inventory.list_history(item.id)) == len(before["stock_movements"]) + 1
+    assert inventory.get_item(item.id).quantity == 3  # type: ignore[union-attr]
 
     assert inventory.receive(item.id, 1, 1, unit_price=10).unit_price == 10
 
@@ -710,7 +738,8 @@ def test_amount_limit_is_exact_for_dispose_none_zero_and_reversal(
         )
     )
     disposal = inventory.dispose(disposed_item.id, 1, 10_000)
-    assert abs(disposal.delta) * (disposal.unit_price or 0) == MAX_MOVEMENT_AMOUNT
+    assert disposal.unit_price is None
+    assert disposal.cost_amount == MAX_MOVEMENT_AMOUNT
     assert inventory.aggregates.get()["disposal_amount"] == MAX_MOVEMENT_AMOUNT
     inventory.reverse(disposal.id, 2)
     assert inventory.aggregates.get()["disposal_amount"] == 0
@@ -732,9 +761,167 @@ def test_amount_limit_is_exact_for_dispose_none_zero_and_reversal(
         )
     )
     assert inventory.issue(unpriced.id, 1, MAX_STOCK_QUANTITY, "用途").unit_price is None
-    assert inventory.dispose(zero_priced.id, 1, MAX_STOCK_QUANTITY).unit_price == 0
+    zero_disposal = inventory.dispose(zero_priced.id, 1, MAX_STOCK_QUANTITY)
+    assert (zero_disposal.unit_price, zero_disposal.cost_amount) == (None, 0)
     assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
     assert inventory.aggregates.get()["expenditure"] == 0
+
+
+def test_fifo_estimate_allocation_and_reversal_restore_the_same_lots(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(
+        _new_item(name="FIFO", initial_quantity=2, initial_staff_id=1, reference_price=10)
+    )
+    second_lot = inventory.receive(item.id, 1, 3, unit_price=20)
+
+    assert inventory.estimate_outflow(item.id, 4).cost_amount == 60
+    movement = inventory.issue(item.id, 1, 4, "用途")
+    first_lot = inventory.list_history(item.id)[0]
+    allocations = seeded_conn.execute(
+        "SELECT lot_id, quantity FROM stock_allocations WHERE movement_id = ? ORDER BY lot_id",
+        (movement.id,),
+    ).fetchall()
+    assert [(row["lot_id"], row["quantity"]) for row in allocations] == [
+        (first_lot.id, 2),
+        (second_lot.id, 2),
+    ]
+    assert (movement.unit_price, movement.cost_amount) == (None, 60)
+
+    reversal = inventory.reverse(movement.id, 2)
+    restored = seeded_conn.execute(
+        "SELECT lot_id, quantity FROM stock_allocations WHERE movement_id = ? ORDER BY lot_id",
+        (reversal.id,),
+    ).fetchall()
+    assert [(row["lot_id"], row["quantity"]) for row in restored] == [
+        (first_lot.id, -2),
+        (second_lot.id, -2),
+    ]
+    assert (reversal.unit_price, reversal.cost_amount) == (None, -60)
+    assert inventory.estimate_outflow(item.id, 5).cost_amount == 80
+    assert inventory.aggregates.get()["expenditure"] == 0
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+    replay = replay_allocations(seeded_conn)
+    assert replay.violations == ()
+    assert replay.cost_amounts[movement.id] == 60
+    assert replay.cost_amounts[reversal.id] == -60
+    assert replay.allocations[movement.id] == tuple(
+        (int(row["lot_id"]), int(row["quantity"])) for row in allocations
+    )
+
+
+def test_fifo_unpriced_lots_and_nonexpense_decreases(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(
+        _new_item(name="単価不明", initial_quantity=2, initial_staff_id=1, reference_price=None)
+    )
+    inventory.receive(item.id, 1, 2, unit_price=0)
+
+    estimate = inventory.estimate_outflow(item.id, 3)
+    assert (estimate.cost_amount, estimate.unpriced_quantity) == (0, 2)
+    issued = inventory.issue(item.id, 1, 3, "用途")
+    assert (issued.cost_amount, issued.unit_price) == (0, None)
+    assert inventory.aggregates.get()["expenditure"] == 0
+    inventory.reverse(issued.id, 2)
+
+    returned = inventory.return_to_supplier(item.id, 1, 1)
+    counted = inventory.stocktake(item.id, 1, 2)
+    assert (returned.unit_price, counted.unit_price) == (None, None)
+    assert (returned.cost_amount, counted.cost_amount) == (None, None)
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+
+
+def test_all_decrease_reversals_restore_the_original_allocations(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(
+        _new_item(name="取消引当", initial_quantity=10, initial_staff_id=1, reference_price=10)
+    )
+    inventory.receive(item.id, 1, 5, unit_price=20)
+    movements = [
+        inventory.issue(item.id, 1, 2, "用途"),
+        inventory.dispose(item.id, 1, 2),
+        inventory.return_to_supplier(item.id, 1, 2),
+        inventory.stocktake(item.id, 1, 7),
+    ]
+
+    for movement in reversed(movements):
+        original_allocations = inventory.allocations.list_for_movement(movement.id)
+        reversal = inventory.reverse(movement.id, 2)
+        reversal_allocations = inventory.allocations.list_for_movement(reversal.id)
+        assert reversal_allocations == tuple(
+            Allocation(allocation.lot_id, -allocation.quantity)
+            for allocation in original_allocations
+        )
+        assert reversal.unit_price == movement.unit_price
+        assert reversal.cost_amount == (
+            None if movement.cost_amount is None else -movement.cost_amount
+        )
+
+    replay = replay_allocations(seeded_conn)
+    assert replay.violations == ()
+    assert inventory.get_item(item.id).quantity == 15  # type: ignore[union-attr]
+    assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
+
+
+def test_consumed_lot_can_be_reversed_after_undoing_the_consumption(
+    inventory: InventoryService,
+) -> None:
+    item = inventory.create_item(
+        _new_item(name="部分消費", initial_quantity=2, initial_staff_id=1, reference_price=10)
+    )
+    receipt = inventory.receive(item.id, 1, 2, unit_price=20)
+    issue = inventory.issue(item.id, 1, 3, "用途")
+    reason = (
+        "この入庫(在庫増加)はすでに出庫・廃棄・返品・棚卸減少で消費されているため取り消せません"
+    )
+
+    assert inventory.reversal_block_reason(receipt.id) == reason
+    with pytest.raises(ReversalNotAllowedError, match="すでに出庫"):
+        inventory.reverse(receipt.id, 2)
+
+    issue_reversal = inventory.reverse(issue.id, 2)
+    receipt_reversal = inventory.reverse(receipt.id, 2)
+    assert issue_reversal.cost_amount == -40
+    assert receipt_reversal.unit_price == receipt.unit_price == 20
+    updated_item = inventory.get_item(item.id)
+    assert updated_item is not None
+    assert updated_item.quantity == 2
+
+
+def test_same_second_and_later_inventory_timestamps_are_allowed(
+    inventory: InventoryService,
+) -> None:
+    item = inventory.create_item(_new_item(name="同秒"))
+    first = inventory.receive(item.id, 1, 1, unit_price=10)
+    second = inventory.receive(item.id, 1, 1, unit_price=20)
+    issue = inventory.issue(item.id, 1, 1, "同秒")
+    inventory.reverse(issue.id, 2)
+    assert first.moved_at == second.moved_at == issue.moved_at
+
+    inventory.clock = lambda: datetime(2026, 1, 15, 12, 0, 1, tzinfo=UTC)
+    later = inventory.receive(item.id, 1, 1, unit_price=30)
+    assert later.moved_at == "2026-01-15 12:00:01"
+
+
+def test_inventory_operations_reject_clock_rollback_atomically(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    item = inventory.create_item(_new_item(initial_quantity=3, initial_staff_id=1))
+    issue = inventory.issue(item.id, 1, 1, "用途")
+    before = _snapshot(seeded_conn)
+    inventory.clock = lambda: datetime(2026, 1, 15, 11, 59, tzinfo=UTC)
+
+    with pytest.raises(ValidationError, match="最新履歴より前"):
+        inventory.receive(item.id, 1, 1, unit_price=500, update_reference_price=True)
+    with pytest.raises(ValidationError, match="最新履歴より前"):
+        inventory.reverse(issue.id, 2)
+    assert _snapshot(seeded_conn) == before
 
 
 def test_zero_difference_stocktake_is_recorded_without_changing_totals(
@@ -747,7 +934,7 @@ def test_zero_difference_stocktake_is_recorded_without_changing_totals(
 
     movement = inventory.stocktake(item.id, 1, 3)
 
-    assert (movement.delta, movement.unit_price) == (0, 100)
+    assert (movement.delta, movement.unit_price) == (0, None)
     assert inventory.aggregates.get() == before
     assert inventory.reversal_block_reason(movement.id) == "差分 0 の棚卸履歴は取り消せません"
 
@@ -836,8 +1023,9 @@ def test_price_edit_changes_neither_totals_nor_past_history(
 
     assert inventory.aggregates.get() == totals_before
     assert [(row.id, row.unit_price) for row in inventory.list_history(item.id)] == history_before
-    assert inventory.reverse(issue.id, 2).unit_price == 100
-    assert inventory.issue(item.id, 1, 1, "改定後").unit_price == 999
+    assert inventory.reverse(issue.id, 2).unit_price is None
+    later_issue = inventory.issue(item.id, 1, 1, "改定後")
+    assert (later_issue.unit_price, later_issue.cost_amount) == (None, 100)
     assert inventory.aggregates.get() == compute_aggregates(seeded_conn)
 
 
