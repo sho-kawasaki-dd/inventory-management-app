@@ -140,7 +140,7 @@
 
 #### E. 5a の仕上げ
 
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 5a の PR を作成し、CI 成功後にマージする
 
 ### 5b. バックアップ・復元・再起動(`feature/phase5-backup-restore`)
