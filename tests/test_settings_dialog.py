@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,6 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.ui import display_settings
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs import settings_dialog as settings_dialog_module
 from inventory_manager_mini.ui.dialogs.settings_dialog import OS_DEFAULT_FONT_LABEL, SettingsDialog
@@ -19,15 +17,7 @@ from inventory_manager_mini.ui.display_settings import (
     capture_base_font,
 )
 from inventory_manager_mini.ui.main_window import MainWindow
-from tests.conftest import create_test_context
-
-
-@pytest.fixture
-def restore_app_font(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> Iterator[QFont]:
-    original = QFont(qapp.font())
-    monkeypatch.setattr(display_settings, "_base_font", None)
-    yield original
-    QApplication.setFont(original)
+from tests.conftest import assert_buttons_reachable, assert_fits_work_area, create_test_context
 
 
 @pytest.fixture
@@ -273,17 +263,13 @@ def test_dialog_fits_1366x768_work_area(
     dialog.show()
     qtbot.waitExposed(dialog)
 
-    frame = dialog.frameGeometry()
-    assert dialog.screen().availableGeometry().contains(frame)
-    assert frame.width() <= 1366
-    assert frame.height() <= 768 - 40
-    for button in (
+    assert_fits_work_area(dialog)
+    assert_buttons_reachable(
+        dialog,
         dialog.button_box.button(QDialogButtonBox.StandardButton.Ok),
         dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
         dialog.reset_button,
-    ):
-        assert button.isVisible()
-        assert dialog.rect().contains(button.geometry())
+    )
 
 
 def test_main_window_tools_menu_opens_dialog_and_applies_font_to_open_window(

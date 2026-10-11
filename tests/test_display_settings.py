@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -22,14 +21,6 @@ from inventory_manager_mini.ui.display_settings import (
 )
 
 LOGGER_NAME = "inventory_manager_mini.ui.display_settings"
-
-
-@pytest.fixture
-def restore_app_font(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> Iterator[QFont]:
-    original = QFont(qapp.font())
-    monkeypatch.setattr(display_settings, "_base_font", None)
-    yield original
-    QApplication.setFont(original)
 
 
 def _write(path: Path, content: str) -> Path:

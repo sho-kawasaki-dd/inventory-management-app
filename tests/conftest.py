@@ -7,6 +7,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QPoint, QRect
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QApplication, QWidget
 
 from inventory_manager_mini.config import AppPaths
 from inventory_manager_mini.core.reports import ReportService
@@ -18,8 +21,38 @@ from inventory_manager_mini.core.services import (
 )
 from inventory_manager_mini.db.connection import connect_memory
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from inventory_manager_mini.ui import display_settings
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.signals import DataBus
+
+# 1366×768 の画面からタスクバー分を除いた作業領域の目安
+WORK_AREA_WIDTH = 1366
+WORK_AREA_HEIGHT = 768 - 40
+
+
+@pytest.fixture
+def restore_app_font(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> Iterator[QFont]:
+    original = QFont(qapp.font())
+    monkeypatch.setattr(display_settings, "_base_font", None)
+    yield original
+    QApplication.setFont(original)
+
+
+def assert_fits_work_area(widget: QWidget) -> None:
+    """ウィンドウ枠を含めて画面の作業領域と 1366×768 の作業領域に収まることを検証する。"""
+    frame = widget.frameGeometry()
+    assert widget.screen().availableGeometry().contains(frame)
+    assert frame.width() <= WORK_AREA_WIDTH
+    assert frame.height() <= WORK_AREA_HEIGHT
+
+
+def assert_buttons_reachable(widget: QWidget, *buttons: QWidget) -> None:
+    """ボタンが表示され、スクロールせずに操作できる位置にあることを検証する。"""
+    bounds = widget.rect()
+    for button in buttons:
+        assert button.isVisible()
+        top_left = button.mapTo(widget, QPoint(0, 0))
+        assert bounds.contains(QRect(top_left, button.size()))
 
 
 @contextmanager
