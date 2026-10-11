@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from inventory_manager_mini.app import main, setup_logging
@@ -19,7 +20,7 @@ from inventory_manager_mini.core.models import ItemRow, NewItem
 from inventory_manager_mini.core.services import InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
-from inventory_manager_mini.ui import single_instance
+from inventory_manager_mini.ui import display_settings, single_instance
 from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
 from tests.test_single_instance import start_lock_holder, stop_lock_holder
@@ -67,6 +68,69 @@ def test_main_creates_database_and_log_shows_window_and_releases_lock(
     lock = single_instance.SingleInstanceLock(paths.lock_path)
     assert lock.try_acquire()
     lock.release()
+
+
+@pytest.mark.parametrize(
+    ("file_state", "contents"),
+    [
+        ("missing", None),
+        ("invalid-json", b"{not json"),
+        ("invalid-utf8", b"\xff\xfe"),
+        ("permission-error", b'{"font_scale_percent": 150}'),
+    ],
+)
+def test_main_uses_default_display_settings_when_settings_cannot_be_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    qtbot,
+    file_state: str,
+    contents: bytes | None,
+) -> None:
+    import inventory_manager_mini.app as app_module
+
+    paths = _paths(tmp_path)
+    if contents is not None:
+        paths.data_dir.mkdir(parents=True)
+        paths.ui_settings_path.write_bytes(contents)
+    applied_settings: list[display_settings.DisplaySettings] = []
+    monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(app_module, "apply_display_settings", applied_settings.append)
+    if file_state == "permission-error":
+        original_read_text = Path.read_text
+
+        def deny_settings_read(path: Path, *args: Any, **kwargs: Any) -> str:
+            if path == paths.ui_settings_path:
+                raise PermissionError("denied")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", deny_settings_read)
+
+    assert main(paths) == 0
+
+    assert applied_settings == [display_settings.default_display_settings()]
+
+
+def test_main_applies_saved_display_scale_before_showing_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qtbot
+) -> None:
+    paths = _paths(tmp_path)
+    paths.data_dir.mkdir(parents=True)
+    display_settings.save_display_settings(
+        paths.ui_settings_path, display_settings.DisplaySettings(None, 150)
+    )
+    original_font = QFont(QApplication.font())
+    monkeypatch.setattr(display_settings, "_base_font", QFont(original_font))
+    monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+
+    try:
+        assert main(paths) == 0
+        applied_font = QApplication.font()
+        if original_font.pointSizeF() > 0:
+            assert applied_font.pointSizeF() == pytest.approx(original_font.pointSizeF() * 1.5)
+        else:
+            assert applied_font.pixelSize() == round(original_font.pixelSize() * 1.5)
+    finally:
+        QApplication.setFont(original_font)
 
 
 def test_main_rejects_second_instance_without_opening_database_or_log(

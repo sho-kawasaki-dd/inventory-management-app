@@ -28,6 +28,10 @@ from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
+from inventory_manager_mini.ui.display_settings import (
+    apply_display_settings,
+    load_display_settings,
+)
 from inventory_manager_mini.ui.error_handling import (
     install_excepthook,
     run_guarded,
@@ -132,6 +136,8 @@ def main(paths: AppPaths | None = None) -> int:
     try:
         setup_logging(resolved_paths.log_path)
         install_excepthook(resolved_paths.log_path)
+        display_settings = load_display_settings(resolved_paths.ui_settings_path)
+        apply_display_settings(display_settings)
         logger.info("アプリを起動します: version=%s db=%s", __version__, resolved_paths.db_path)
         try:
             conn = open_database(
