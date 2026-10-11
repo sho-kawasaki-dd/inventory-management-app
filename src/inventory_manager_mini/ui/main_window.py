@@ -1,10 +1,14 @@
+import logging
 from importlib import import_module
+from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +33,8 @@ from inventory_manager_mini.ui.models.item_table_model import (
 )
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -174,6 +180,10 @@ class MainWindow(QMainWindow):
         self.csv_menu = file_menu.addMenu("CSV 出力")
         self.csv_menu.addAction(self.export_items_action)
         self.csv_menu.addAction(self.export_history_action)
+        file_menu.addSeparator()
+        self.backup_action = QAction("バックアップ", self)
+        self.backup_action.triggered.connect(self._create_backup)
+        file_menu.addAction(self.backup_action)
         file_menu.addSeparator()
         file_menu.addAction("終了", self.close)
 
@@ -388,6 +398,38 @@ class MainWindow(QMainWindow):
         )
         if path is not None:
             self.statusBar().showMessage(f"履歴を出力しました: {path}")
+
+    def _create_backup(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self, "バックアップの保存先を選択", str(self.context.paths.backup_dir)
+        )
+        if not selected:
+            return
+        dest_dir = Path(selected)
+
+        def run_backup() -> Path:
+            logger.info("バックアップを開始します: 保存先=%s", dest_dir)
+            try:
+                path = self.context.backup.create_current_backup(dest_dir)
+            except Exception:
+                logger.error("バックアップに失敗しました: 保存先=%s", dest_dir, exc_info=True)
+                raise
+            logger.info("バックアップが完了しました: ファイル=%s", path)
+            return path
+
+        self.statusBar().showMessage("バックアップを作成しています...")
+        self.statusBar().repaint()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            succeeded, path = run_guarded(self, run_backup)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if succeeded and path is not None:
+            message = f"バックアップを作成しました: {path}"
+            self.statusBar().showMessage(message)
+            QMessageBox.information(self, "バックアップ", message)
+        else:
+            self.statusBar().clearMessage()
 
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():

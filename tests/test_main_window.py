@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,11 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 
+from inventory_manager_mini.core import services
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
+from inventory_manager_mini.db.connection import connect, connect_readonly
+from inventory_manager_mini.db.migrations import create_schema
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
@@ -851,4 +855,161 @@ def test_csv_export_logs_start_success_and_failure(
     records = [r for r in caplog.records if r.name == "inventory_manager_mini.ui.csv_export"]
     assert [r.levelno for r in records] == [logging.INFO, logging.ERROR]
     assert str(broken) in records[1].getMessage()
+    assert records[1].exc_info is not None
+
+
+@pytest.fixture
+def backup_window(qtbot, tmp_path: Path):
+    db_path = tmp_path / "app.db"
+    conn = connect(db_path)
+    create_schema(conn)
+    conn.execute("PRAGMA wal_autocheckpoint = 0")
+    conn.execute("INSERT INTO clients (id, name) VALUES (1, 'クライアント')")
+    conn.execute("INSERT INTO purchasers (id, name) VALUES (1, '発注主体')")
+    conn.execute("INSERT INTO staff (id, name) VALUES (1, '担当者')")
+    conn.execute("INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ')")
+    InventoryService(conn).create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name="WAL内の品目",
+            category_id=1,
+            initial_quantity=1,
+            initial_staff_id=1,
+        )
+    )
+    window = MainWindow(create_test_context(conn, db_path=db_path))
+    qtbot.addWidget(window)
+    yield window
+    conn.close()
+
+
+def _patch_backup_dialog(monkeypatch, selected: Path | None) -> list[str]:
+    start_dirs: list[str] = []
+
+    def fake_get_existing_directory(_parent, _caption, start_dir):
+        start_dirs.append(start_dir)
+        return str(selected) if selected is not None else ""
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", fake_get_existing_directory)
+    return start_dirs
+
+
+def _capture_message_boxes(monkeypatch) -> dict[str, list[str]]:
+    messages: dict[str, list[str]] = {"information": [], "warning": []}
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda _p, _t, text: messages["information"].append(text)
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _p, _t, text: messages["warning"].append(text)
+    )
+    return messages
+
+
+def test_backup_creates_file_with_committed_wal_data_and_shows_path(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    dest_dir = tmp_path / "dest"
+    start_dirs = _patch_backup_dialog(monkeypatch, dest_dir)
+    messages = _capture_message_boxes(monkeypatch)
+    assert (tmp_path / "app.db-wal").stat().st_size > 0
+
+    window.backup_action.trigger()
+
+    created = list(dest_dir.glob("inventory_*.db"))
+    assert len(created) == 1
+    assert start_dirs == [str(window.context.paths.backup_dir)]
+    assert messages["information"] == [f"バックアップを作成しました: {created[0]}"]
+    assert str(created[0]) in window.statusBar().currentMessage()
+    backup_conn = connect_readonly(created[0])
+    try:
+        assert backup_conn.execute("SELECT name FROM items").fetchall() == [("WAL内の品目",)]
+    finally:
+        backup_conn.close()
+
+
+def test_backup_cancel_creates_nothing(backup_window, monkeypatch, tmp_path: Path) -> None:
+    messages = _capture_message_boxes(monkeypatch)
+    _patch_backup_dialog(monkeypatch, None)
+
+    backup_window.backup_action.trigger()
+
+    assert messages == {"information": [], "warning": []}
+    assert not (tmp_path / "backups").exists()
+
+
+def test_backup_to_unwritable_destination_shows_path_and_cause_and_keeps_running(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    _patch_backup_dialog(monkeypatch, dest_dir)
+    messages = _capture_message_boxes(monkeypatch)
+
+    def reject_copy(*_args, **_kwargs) -> None:
+        raise PermissionError("injected copy failure")
+
+    monkeypatch.setattr(services, "copy_database", reject_copy)
+
+    window.backup_action.trigger()
+
+    assert messages["information"] == []
+    assert len(messages["warning"]) == 1
+    assert str(dest_dir) in messages["warning"][0]
+    assert "injected copy failure" in messages["warning"][0]
+    assert window.statusBar().currentMessage() == ""
+    assert window.backup_action.isEnabled()
+    assert window.isEnabled()
+
+
+def test_backup_rejects_existing_file_and_keeps_running(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    dest_dir = tmp_path / "dest"
+    _patch_backup_dialog(monkeypatch, dest_dir)
+    messages = _capture_message_boxes(monkeypatch)
+    window.context.backup.clock = lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC)
+    window.context.backup.tz = UTC
+
+    window.backup_action.trigger()
+    window.backup_action.trigger()
+
+    assert len(messages["information"]) == 1
+    assert len(messages["warning"]) == 1
+    assert "すでに存在" in messages["warning"][0]
+    assert len(list(dest_dir.glob("inventory_*.db"))) == 1
+
+
+def test_backup_logs_start_success_and_failure(
+    backup_window, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    window = backup_window
+    _capture_message_boxes(monkeypatch)
+    logger_name = "inventory_manager_mini.ui.main_window"
+    caplog.set_level(logging.INFO, logger=logger_name)
+    dest_dir = tmp_path / "dest"
+    _patch_backup_dialog(monkeypatch, dest_dir)
+
+    window.backup_action.trigger()
+
+    records = [r for r in caplog.records if r.name == logger_name]
+    assert [r.levelno for r in records] == [logging.INFO, logging.INFO]
+    assert "開始" in records[0].getMessage()
+    assert str(dest_dir) in records[0].getMessage()
+    assert "完了" in records[1].getMessage()
+
+    caplog.clear()
+
+    def reject_copy(*_args, **_kwargs) -> None:
+        raise PermissionError("injected copy failure")
+
+    monkeypatch.setattr(services, "copy_database", reject_copy)
+    window.backup_action.trigger()
+
+    records = [r for r in caplog.records if r.name == logger_name]
+    assert [r.levelno for r in records] == [logging.INFO, logging.ERROR]
+    assert str(dest_dir) in records[1].getMessage()
     assert records[1].exc_info is not None
