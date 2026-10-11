@@ -79,6 +79,7 @@ def create_test_context(
         db_path=context_db_path,
         backup_dir=data_dir / "backups",
         lock_path=data_dir / "inventory.lock",
+        ui_settings_path=data_dir / "ui_settings.json",
         log_dir=data_dir / "logs",
         log_path=data_dir / "logs" / "app.log",
     )

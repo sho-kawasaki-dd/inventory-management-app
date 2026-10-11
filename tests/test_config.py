@@ -13,6 +13,7 @@ def test_resolve_paths_uses_environment_override() -> None:
         db_path=data_dir / "inventory.db",
         backup_dir=data_dir / "backups",
         lock_path=data_dir / "inventory.lock",
+        ui_settings_path=data_dir / "ui_settings.json",
         log_dir=data_dir / "logs",
         log_path=data_dir / "logs" / "app.log",
     )
@@ -35,6 +36,7 @@ def test_resolve_paths_uses_platformdirs_defaults(monkeypatch) -> None:
     paths = config.resolve_paths({})
 
     assert paths.data_dir == Path("test-user-data")
+    assert paths.ui_settings_path == Path("test-user-data") / "ui_settings.json"
     assert paths.log_dir == Path("test-user-log")
     assert calls == [
         ("data", config.APP_NAME, {"appauthor": False, "roaming": True}),

@@ -212,8 +212,8 @@
 
 #### L. 設定ファイルのパス `config.py`
 
-- [ ] `AppPaths` に `ui_settings_path`(`data_dir / "ui_settings.json"`)を追加し、`from_dirs` と `resolve_paths`(環境変数による上書きを含む)で設定する
-- [ ] `tests/test_config.py`: 既定のパスと `INVENTORY_MANAGER_MINI_DATA_DIR` 指定時のパス
+- [x] `AppPaths` に `ui_settings_path`(`data_dir / "ui_settings.json"`)を追加し、`from_dirs` と `resolve_paths`(環境変数による上書きを含む)で設定する
+- [x] `tests/test_config.py`: 既定のパスと `INVENTORY_MANAGER_MINI_DATA_DIR` 指定時のパス
 
 #### M. 表示設定 `ui/display_settings.py`(新規)
 
