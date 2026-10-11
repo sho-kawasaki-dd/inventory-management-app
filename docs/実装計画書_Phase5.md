@@ -202,8 +202,8 @@
 
 #### K. 5b の仕上げ
 
-- [ ] 開発計画書 7.2 の復元フロー・失敗時の対応表と実装を照合し、差異があれば同期する
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] 開発計画書 7.2 の復元フロー・失敗時の対応表と実装を照合し、差異があれば同期する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 5b の PR を作成し、CI 成功後にマージする
 
 ### 5c. 表示設定・設定ダイアログ・150% 検証・文書(`feature/phase5-display-settings`)
