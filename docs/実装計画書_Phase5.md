@@ -179,15 +179,15 @@
 
 #### I. 終了・再起動の制御 `app.py`
 
-- [ ] `MainWindow` に終了要求(通常 / 再起動 / 異常終了)を保持する属性を追加し、`QApplication.quit()` で終了する
-- [ ] `build_restart_command()` を追加する(`sys.frozen` なら `[sys.executable]`、そうでなければ `[sys.executable, "-m", "inventory_manager_mini"]`)
-- [ ] `main()`: イベントループ終了後、既存の `finally`(接続クローズ → ロック解放)を完了してから、再起動要求があれば `started, process_id = QProcess.startDetached(command[0], command[1:])` で戻り値 `(bool, int)` を分解する。先頭の成功フラグだけを判定し、タプル全体を真偽判定しない。`started` が偽なら復元済みである旨と手動再起動の案内を表示し、終了コード 1 を返す。異常終了要求は終了コード 1 を返し再起動しない
-- [ ] 再起動後の新プロセスがロックを取得できること(ロック解放が先であること)をテストで確認する
-- [ ] `tests/test_app.py`
-  - [ ] 再起動要求時に、接続クローズ・ロック解放の後に `startDetached` が呼ばれること(呼び出し順を記録)。成功時の差し替えは `(True, 12345)` を返し、成功扱いになること
-  - [ ] `startDetached` の差し替えが `(False, 0)` を返した場合、タプル自体は真でも起動失敗と判定され、復元済みである旨・手動起動の案内が表示され、終了コード 1 になること
-  - [ ] 異常終了要求では再起動しないこと
-  - [ ] `build_restart_command` が通常実行・凍結実行で正しいこと
+- [x] `MainWindow` に終了要求(通常 / 再起動 / 異常終了)を保持する属性を追加し、`QApplication.quit()` で終了する
+- [x] `build_restart_command()` を追加する(`sys.frozen` なら `[sys.executable]`、そうでなければ `[sys.executable, "-m", "inventory_manager_mini"]`)
+- [x] `main()`: イベントループ終了後、既存の `finally`(接続クローズ → ロック解放)を完了してから、再起動要求があれば `started, process_id = QProcess.startDetached(command[0], command[1:])` で戻り値 `(bool, int)` を分解する。先頭の成功フラグだけを判定し、タプル全体を真偽判定しない。`started` が偽なら復元済みである旨と手動再起動の案内を表示し、終了コード 1 を返す。異常終了要求は終了コード 1 を返し再起動しない
+- [x] 再起動後の新プロセスがロックを取得できること(ロック解放が先であること)をテストで確認する
+- [x] `tests/test_app.py`
+  - [x] 再起動要求時に、接続クローズ・ロック解放の後に `startDetached` が呼ばれること(呼び出し順を記録)。成功時の差し替えは `(True, 12345)` を返し、成功扱いになること
+  - [x] `startDetached` の差し替えが `(False, 0)` を返した場合、タプル自体は真でも起動失敗と判定され、復元済みである旨・手動起動の案内が表示され、終了コード 1 になること
+  - [x] 異常終了要求では再起動しないこと
+  - [x] `build_restart_command` が通常実行・凍結実行で正しいこと
 
 #### J. 5b のテスト(実ファイル DB・`tmp_path`)
 
