@@ -1,7 +1,7 @@
 from importlib import import_module
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,7 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from inventory_manager_mini.core.models import REASON_LABELS, ItemFilter, Reason
+from inventory_manager_mini.core.services import validate_purchase_url
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
@@ -129,6 +131,17 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self.stock_actions[Reason.ADJUST])
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.history_action)
+        self.toolbar.addAction(self.purchase_page_action)
+        self.toolbar.addSeparator()
+        self.csv_export_button = QToolButton(self.toolbar)
+        self.csv_export_button.setText("CSV 出力")
+        self.csv_export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.csv_export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.csv_export_menu = QMenu(self.csv_export_button)
+        self.csv_export_menu.addAction(self.export_items_action)
+        self.csv_export_menu.addAction(self.export_history_action)
+        self.csv_export_button.setMenu(self.csv_export_menu)
+        self.toolbar.addWidget(self.csv_export_button)
 
     def _build_table_context_menu(self) -> None:
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -144,6 +157,7 @@ class MainWindow(QMainWindow):
         separator.setSeparator(True)
         self.table.addAction(separator)
         self.table.addAction(self.history_action)
+        self.table.addAction(self.purchase_page_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -153,6 +167,14 @@ class MainWindow(QMainWindow):
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル")
+        self.export_items_action = QAction("在庫一覧", self)
+        self.export_items_action.triggered.connect(self._export_items_csv)
+        self.export_history_action = QAction("履歴(全品目)", self)
+        self.export_history_action.triggered.connect(self._export_all_history_csv)
+        self.csv_menu = file_menu.addMenu("CSV 出力")
+        self.csv_menu.addAction(self.export_items_action)
+        self.csv_menu.addAction(self.export_history_action)
+        file_menu.addSeparator()
         file_menu.addAction("終了", self.close)
 
         item_menu = self.menuBar().addMenu("品目")
@@ -166,6 +188,9 @@ class MainWindow(QMainWindow):
         self.toggle_active_action.triggered.connect(self._toggle_item_active)
         item_menu.addAction(self.toggle_active_action)
         item_menu.addSeparator()
+        self.purchase_page_action = QAction("販売ページを開く", self)
+        self.purchase_page_action.triggered.connect(self._open_purchase_page)
+        item_menu.addAction(self.purchase_page_action)
         self.history_action = QAction("履歴", self)
         self.history_action.triggered.connect(self._open_history)
         item_menu.addAction(self.history_action)
@@ -258,8 +283,8 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(max(index, 0))
         combo.blockSignals(False)
 
-    def refresh_items(self, *_args) -> None:
-        item_filter = ItemFilter(
+    def _current_item_filter(self) -> ItemFilter:
+        return ItemFilter(
             text=self.search_edit.text().strip() or None,
             client_id=self.client_combo.currentData(),
             purchaser_id=self.purchaser_combo.currentData(),
@@ -268,6 +293,9 @@ class MainWindow(QMainWindow):
             low_stock_only=self.low_stock_checkbox.isChecked(),
             include_inactive=self.inactive_checkbox.isChecked(),
         )
+
+    def refresh_items(self, *_args) -> None:
+        item_filter = self._current_item_filter()
         selected_id = self._selected_item_id()
         succeeded, rows = run_guarded(self, lambda: self.context.inventory.list_items(item_filter))
         if not succeeded or rows is None:
@@ -296,6 +324,9 @@ class MainWindow(QMainWindow):
         self.edit_action.setEnabled(has_selection)
         self.toggle_active_action.setEnabled(has_selection)
         self.history_action.setEnabled(has_selection)
+        self.purchase_page_action.setEnabled(
+            item is not None and bool(item.purchase_url and item.purchase_url.strip())
+        )
         can_move_stock = item is not None and item.is_active
         for action in self.stock_actions.values():
             action.setEnabled(can_move_stock)
@@ -324,6 +355,39 @@ class MainWindow(QMainWindow):
         item_id = self._selected_item_id()
         if item_id is not None:
             self._show_history(item_id)
+
+    def _open_purchase_page(self) -> None:
+        selected_id = self._selected_item_id()
+        if selected_id is None:
+            return
+        row = self.item_model.row_of(selected_id)
+        if row is None:
+            return
+        item = self.item_model.row_at(row)
+        succeeded, url = run_guarded(self, lambda: validate_purchase_url(item.purchase_url))
+        if succeeded and url is not None:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _export_items_csv(self) -> None:
+        item_filter = self._current_item_filter()
+        path = export_csv_with_dialog(
+            self,
+            "在庫一覧",
+            "在庫一覧",
+            lambda destination: self.context.reports.export_items_csv(destination, item_filter),
+        )
+        if path is not None:
+            self.statusBar().showMessage(f"在庫一覧を出力しました: {path}")
+
+    def _export_all_history_csv(self) -> None:
+        path = export_csv_with_dialog(
+            self,
+            "履歴(全品目)",
+            "履歴",
+            lambda destination: self.context.reports.export_history_csv(destination),
+        )
+        if path is not None:
+            self.statusBar().showMessage(f"履歴を出力しました: {path}")
 
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():

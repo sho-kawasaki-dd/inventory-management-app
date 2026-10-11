@@ -20,20 +20,19 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
 from inventory_manager_mini.core.models import PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
-from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
+from inventory_manager_mini.core.services import InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
 from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.integrity import compute_aggregates
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
-from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
-from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from scripts.generate_dummy_data import generate_database
+from tests.conftest import create_test_context
 
 pytestmark = pytest.mark.perf
 
@@ -97,14 +96,10 @@ def performance_window(qtbot, performance_db: Path) -> Iterator[tuple[MainWindow
         performance_db.parent,
         backup_timestamp=local_timestamp_for_filename,
     )
-    context = AppContext(
-        inventory=InventoryService(conn),
-        master=MasterService(conn),
-        settings=SettingsService(conn),
-        data_bus=DataBus(),
+    context = create_test_context(
+        conn,
         db_path=performance_db,
         schema_version=SCHEMA_VERSION,
-        app_version="0.1.0",
     )
     window = MainWindow(context)
     probe = PaintProbe(window)
@@ -272,14 +267,10 @@ def test_alert_panel_refresh_with_one_thousand_low_stock_items(
         performance_db, tmp_path / "alert-panel-data", 1000
     )
     conn = connect(db_path)
-    context = AppContext(
-        inventory=InventoryService(conn),
-        master=MasterService(conn),
-        settings=SettingsService(conn),
-        data_bus=DataBus(),
+    context = create_test_context(
+        conn,
         db_path=db_path,
         schema_version=SCHEMA_VERSION,
-        app_version="0.1.0",
     )
     panel = AlertPanel(context)
     qtbot.addWidget(panel)

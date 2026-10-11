@@ -1,21 +1,29 @@
+import csv
+import logging
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import MAX_STOCK_QUANTITY, Allocation, NewItem
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
-from inventory_manager_mini.ui.signals import DataBus
+from tests.conftest import create_test_context
 
 
 @pytest.fixture
-def dialog_context(inventory, master, settings) -> AppContext:
-    return AppContext(inventory, master, settings, DataBus(), Path(":memory:"), 3, "0.1.0")
+def dialog_context(seeded_conn, inventory, master, settings) -> AppContext:
+    return create_test_context(
+        seeded_conn,
+        inventory=inventory,
+        master=master,
+        settings=settings,
+        schema_version=3,
+    )
 
 
 def _create_item(context: AppContext, quantity: int = 0, reference_price: int | None = None):
@@ -413,3 +421,122 @@ def test_history_and_reversal_dialogs_fit_with_large_content(
     finally:
         history.setFont(original_font)
         reversal.setFont(original_font)
+
+
+def _patch_save_dialog(monkeypatch, selected: Path | None) -> None:
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda _parent, _caption, _default_name, _filter: (
+            str(selected) if selected is not None else "",
+            "",
+        ),
+    )
+
+
+def _read_csv(path: Path) -> list[list[str]]:
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.reader(stream))
+
+
+def _history_dialog_with_two_items(qtbot, context: AppContext, monkeypatch):
+    first = _create_item(context, quantity=2)
+    context.inventory.receive(first.id, 1, 3)
+    _create_item(context, quantity=1)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    dialog = HistoryDialog(context, first.id)
+    qtbot.addWidget(dialog)
+    return dialog, first
+
+
+def test_history_csv_exports_only_current_item(
+    qtbot, dialog_context, monkeypatch, tmp_path: Path
+) -> None:
+    dialog, first = _history_dialog_with_two_items(qtbot, dialog_context, monkeypatch)
+    destination = tmp_path / "history.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    dialog.export_button.click()
+
+    rows = _read_csv(destination)
+    assert rows[0][0] == "日時"
+    assert len(rows) - 1 == 2
+    assert {row[1] for row in rows[1:]} == {first.code}
+    assert len(dialog_context.inventory.list_all_history()) == 3
+
+
+def test_history_csv_cancel_creates_no_file(
+    qtbot, dialog_context, monkeypatch, tmp_path: Path
+) -> None:
+    dialog, _first = _history_dialog_with_two_items(qtbot, dialog_context, monkeypatch)
+    _patch_save_dialog(monkeypatch, None)
+
+    dialog.export_button.click()
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("answer", [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+def test_history_csv_confirms_overwrite_only_after_extension_completion(
+    qtbot, dialog_context, monkeypatch, tmp_path: Path, answer
+) -> None:
+    dialog, _first = _history_dialog_with_two_items(qtbot, dialog_context, monkeypatch)
+    existing = tmp_path / "out.csv"
+    existing.write_bytes(b"old")
+    _patch_save_dialog(monkeypatch, tmp_path / "out")
+    questions = []
+
+    def fake_question(_parent, _title, _text, _buttons, default):
+        questions.append(default)
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+    dialog.export_button.click()
+
+    assert questions == [QMessageBox.StandardButton.No]
+    if answer == QMessageBox.StandardButton.Yes:
+        assert _read_csv(existing)[0][0] == "日時"
+    else:
+        assert existing.read_bytes() == b"old"
+
+
+def test_history_csv_regular_csv_path_and_new_completed_path_need_no_confirmation(
+    qtbot, dialog_context, monkeypatch, tmp_path: Path
+) -> None:
+    dialog, _first = _history_dialog_with_two_items(qtbot, dialog_context, monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("追加の上書き確認は表示されないはずです")
+
+    monkeypatch.setattr(QMessageBox, "question", fail)
+    existing = tmp_path / "regular.csv"
+    existing.write_bytes(b"old")
+    _patch_save_dialog(monkeypatch, existing)
+    dialog.export_button.click()
+    _patch_save_dialog(monkeypatch, tmp_path / "fresh")
+    dialog.export_button.click()
+
+    assert _read_csv(existing)[0][0] == "日時"
+    assert _read_csv(tmp_path / "fresh.csv")[0][0] == "日時"
+
+
+def test_history_csv_failure_shows_error_and_logs(
+    qtbot, dialog_context, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    dialog, _first = _history_dialog_with_two_items(qtbot, dialog_context, monkeypatch)
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _parent, _title, message: warnings.append(message)
+    )
+    caplog.set_level(logging.INFO, logger="inventory_manager_mini.ui.csv_export")
+    destination = tmp_path / "missing" / "out.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    dialog.export_button.click()
+
+    assert len(warnings) == 1
+    assert str(destination) in warnings[0]
+    levels = [r.levelno for r in caplog.records if r.name == "inventory_manager_mini.ui.csv_export"]
+    assert levels == [logging.INFO, logging.ERROR]
+    assert dialog.isEnabled()

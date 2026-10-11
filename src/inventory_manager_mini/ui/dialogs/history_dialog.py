@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from inventory_manager_mini.core.models import MovementRow
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
 from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.error_handling import run_guarded
@@ -51,6 +53,9 @@ class HistoryDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        self.export_button = QPushButton("CSV 出力", self)
+        self.export_button.clicked.connect(self._export_csv)
+        buttons.addWidget(self.export_button)
         self.reverse_button = QPushButton("取り消し…", self)
         self.reverse_button.setEnabled(False)
         self.reverse_button.clicked.connect(self._open_reversal)
@@ -121,6 +126,16 @@ class HistoryDialog(QDialog):
             return
         self.reverse_button.setEnabled(reason is None)
         self.reverse_button.setToolTip(reason or "")
+
+    def _export_csv(self) -> None:
+        path = export_csv_with_dialog(
+            self,
+            "履歴",
+            "履歴",
+            lambda destination: self.context.reports.export_history_csv(destination, self.item_id),
+        )
+        if path is not None:
+            QMessageBox.information(self, "CSV 出力", f"履歴を出力しました:\n{path}")
 
     def _open_reversal(self) -> None:
         movement = self._selected_movement()

@@ -19,16 +19,24 @@ from inventory_manager_mini.ui.dialogs import master_dialog as master_dialog_mod
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.dialogs.master_dialog import MasterDialog, MasterTab, _CategoryTab
 from inventory_manager_mini.ui.main_window import MainWindow
-from inventory_manager_mini.ui.signals import DataBus
+from tests.conftest import create_test_context
 
 
 @pytest.fixture
 def dialog_context(
+    seeded_conn,
     inventory: InventoryService,
     master: MasterService,
     settings: SettingsService,
 ) -> AppContext:
-    return AppContext(inventory, master, settings, DataBus(), Path("test.db"), 1, "0.1.0")
+    return create_test_context(
+        seeded_conn,
+        inventory=inventory,
+        master=master,
+        settings=settings,
+        db_path=Path("test.db"),
+        schema_version=1,
+    )
 
 
 def _category_item(tab: _CategoryTab, category_id: int) -> QTreeWidgetItem | None:

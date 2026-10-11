@@ -4,16 +4,21 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+from inventory_manager_mini.config import AppPaths
+from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import (
     InventoryService,
     MasterService,
     SettingsService,
 )
 from inventory_manager_mini.db.connection import connect_memory
-from inventory_manager_mini.db.migrations import create_schema
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.signals import DataBus
 
 
 @contextmanager
@@ -53,6 +58,39 @@ class FixedClock:
     def advance(self, **kwargs: int) -> datetime:
         self.current += timedelta(**kwargs)
         return self.current
+
+
+def create_test_context(
+    conn: sqlite3.Connection,
+    *,
+    inventory: InventoryService | None = None,
+    master: MasterService | None = None,
+    settings: SettingsService | None = None,
+    db_path: Path | None = None,
+    schema_version: int = SCHEMA_VERSION,
+    app_version: str = "0.1.0",
+) -> AppContext:
+    context_db_path = db_path or Path(":memory:")
+    data_dir = context_db_path.parent
+    paths = AppPaths(
+        data_dir=data_dir,
+        db_path=context_db_path,
+        backup_dir=data_dir / "backups",
+        lock_path=data_dir / "inventory.lock",
+        log_dir=data_dir / "logs",
+        log_path=data_dir / "logs" / "app.log",
+    )
+    return AppContext(
+        inventory=inventory or InventoryService(conn),
+        master=master or MasterService(conn),
+        settings=settings or SettingsService(conn),
+        reports=ReportService(conn),
+        paths=paths,
+        data_bus=DataBus(),
+        db_path=context_db_path,
+        schema_version=schema_version,
+        app_version=app_version,
+    )
 
 
 @pytest.fixture

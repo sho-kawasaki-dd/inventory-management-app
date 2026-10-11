@@ -1,7 +1,7 @@
 # Phase 5 実装計画書(販売ページ導線・CSV・バックアップ/復元・表示設定)
 
 - 作成日: 2026-10-11
-- ステータス: 計画中
+- ステータス: 承認
 - 作業ブランチ: `feature/phase5-url-csv`(5a)→ `feature/phase5-backup-restore`(5b)→ `feature/phase5-display-settings`(5c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3.4・3.5・5.6・5.8・5.9・6.2・6.3・6.4・7.1・7.2・7.3・8・9 章)、[実装計画書_Phase2](実装計画書_Phase2.md)、[実装計画書_Phase3](実装計画書_Phase3.md)、[実装計画書_Phase4](実装計画書_Phase4.md)
 - 改訂履歴: 2026-10-11 初版。販売ページ導線の範囲、CSV の出力対象と導線、復元時の接続の扱い、長時間処理の実行方式、「既定に戻す」の範囲、バックアップの保存先指定、PR 分割を決定。同日レビュー反映: 再起動の成功判定、CSV の拡張子補完後の上書き確認、バックアップ出力エラー、原価列の期待値、表示設定の読み込み失敗、CSV 絞り込みテストを明確化。同日レビュー反映2: CSV・バックアップ・復元のログ記録タスク化、復元成功・失敗時の UI 活性制御とメッセージ表示順序の明確化、設定ダイアログ「既定に戻す」の確定タイミング(OK 押下時)、テスト用 AppContext 生成ヘルパーの共通化を追加
@@ -94,53 +94,53 @@
 
 #### A. core の改修
 
-- [ ] `core/errors.py` に `FileOutputError(DomainError)` を追加する(出力先に書き込めない場合。5b のバックアップでも共用し、UI は既存の `DomainError` 処理で表示する)
-- [ ] `core/reports.py` の `_write_csv` で `OSError` を `FileOutputError` に変換する(一時ファイルは `finally` で必ず削除し、既存ファイルは壊さない。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する)
-- [ ] `export_history_csv` に「原価金額」列を「単価」の後ろに追加する(開発計画書 5.8 の列順)。出庫・廃棄とそれらの取り消しは、保存済みの `cost_amount` をそのまま出力する。取り消し行の値は元行の符号反転済みなので、再度符号反転しない。入庫・返品・棚卸およびそれらの取り消しは空欄とする。原価 0 は `"0"` として空欄と区別し、数値セルは数式対策の対象外とする
-- [ ] `tests/test_csv.py`
-  - [ ] 原価金額の列順が「単価」の直後であること。出庫・廃棄は保存済み原価、各取り消しは符号反転した負の原価、入庫・返品・棚卸およびそれらの取り消しは空欄であること
-  - [ ] 原価 0 が `"0"` として出力され、負の原価に数式対策の `'` が付かず、取り消し行の符号が再反転しないこと
-  - [ ] 書き込み不可の出力先で `FileOutputError` が発生し、失敗後も既存ファイルのバイト列は変更されず、一時ファイルが残らないこと
-- [ ] `tests/test_errors.py`: `FileOutputError` が `DomainError` 派生であること
-- [ ] `tests/test_dependency_rules.py` が引き続き成功すること
+- [x] `core/errors.py` に `FileOutputError(DomainError)` を追加する(出力先に書き込めない場合。5b のバックアップでも共用し、UI は既存の `DomainError` 処理で表示する)
+- [x] `core/reports.py` の `_write_csv` で `OSError` を `FileOutputError` に変換する(一時ファイルは `finally` で必ず削除し、既存ファイルは壊さない。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する)
+- [x] `export_history_csv` に「原価金額」列を「単価」の後ろに追加する(開発計画書 5.8 の列順)。出庫・廃棄とそれらの取り消しは、保存済みの `cost_amount` をそのまま出力する。取り消し行の値は元行の符号反転済みなので、再度符号反転しない。入庫・返品・棚卸およびそれらの取り消しは空欄とする。原価 0 は `"0"` として空欄と区別し、数値セルは数式対策の対象外とする
+- [x] `tests/test_csv.py`
+  - [x] 原価金額の列順が「単価」の直後であること。出庫・廃棄は保存済み原価、各取り消しは符号反転した負の原価、入庫・返品・棚卸およびそれらの取り消しは空欄であること
+  - [x] 原価 0 が `"0"` として出力され、負の原価に数式対策の `'` が付かず、取り消し行の符号が再反転しないこと
+  - [x] 書き込み不可の出力先で `FileOutputError` が発生し、失敗後も既存ファイルのバイト列は変更されず、一時ファイルが残らないこと
+- [x] `tests/test_errors.py`: `FileOutputError` が `DomainError` 派生であること
+- [x] `tests/test_dependency_rules.py` が引き続き成功すること
 
 #### B. AppContext の拡張
 
-- [ ] `ui/context.py` の `AppContext` に `reports: ReportService` と `paths: AppPaths` を追加する(`BackupService` は 5b で追加)
-- [ ] `app.py` の `build_context` で `ReportService(conn)` を生成して渡す
-- [ ] `tests/conftest.py` にテスト用 `AppContext` を生成する共通フィクスチャ／ヘルパー関数(`create_test_context`)を追加し、既存のテストコードで直に生成している箇所を集約・更新する(5b での `BackupService` 追加時の改修工数を抑える)
+- [x] `ui/context.py` の `AppContext` に `reports: ReportService` と `paths: AppPaths` を追加する(`BackupService` は 5b で追加)
+- [x] `app.py` の `build_context` で `ReportService(conn)` を生成して渡す
+- [x] `tests/conftest.py` にテスト用 `AppContext` を生成する共通フィクスチャ／ヘルパー関数(`create_test_context`)を追加し、既存のテストコードで直に生成している箇所を集約・更新する(5b での `BackupService` 追加時の改修工数を抑える)
 
 #### C. 販売ページを開く導線 `ui/main_window.py`
 
-- [ ] 「品目」メニューに「販売ページを開く」の `QAction` を追加する(履歴の前、区切り線で分ける)。同じ `QAction` をツールバーの「参照」グループと一覧の右クリックメニューに追加する
-- [ ] `_update_selection_actions` で活性状態を更新する(品目が選択され URL がある場合のみ活性)。選択変更・再読込・品目編集後のいずれでも追従する
-- [ ] 押下処理: 選択品目の URL を `run_guarded` 内で `validate_purchase_url` により再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。`ItemDialog._open_purchase_url` と同じ手順にそろえる
-- [ ] `tests/test_main_window.py`
-  - [ ] URL あり・なし・未選択・廃止品目の活性状態
-  - [ ] `http`/`https` で `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)
-  - [ ] 不正な URL(`javascript:`・ホスト名なし)では呼ばれずエラーが表示されること(モデルへ直接データを与えて検証する)
-  - [ ] メニュー・ツールバー・右クリックメニューで同じ `QAction` が共有され、活性状態とラベルが一致すること
+- [x] 「品目」メニューに「販売ページを開く」の `QAction` を追加する(履歴の前、区切り線で分ける)。同じ `QAction` をツールバーの「参照」グループと一覧の右クリックメニューに追加する
+- [x] `_update_selection_actions` で活性状態を更新する(品目が選択され URL がある場合のみ活性)。選択変更・再読込・品目編集後のいずれでも追従する
+- [x] 押下処理: 選択品目の URL を `run_guarded` 内で `validate_purchase_url` により再検証し、通過した URL のみ `QDesktopServices.openUrl(QUrl(url))` に渡す。`ItemDialog._open_purchase_url` と同じ手順にそろえる
+- [x] `tests/test_main_window.py`
+  - [x] URL あり・なし・未選択・廃止品目の活性状態
+  - [x] `http`/`https` で `openUrl` が呼ばれること(`QDesktopServices.openUrl` を差し替え)
+  - [x] 不正な URL(`javascript:`・ホスト名なし)では呼ばれずエラーが表示されること(モデルへ直接データを与えて検証する)
+  - [x] メニュー・ツールバー・右クリックメニューで同じ `QAction` が共有され、活性状態とラベルが一致すること
 
 #### D. CSV 出力 `ui/main_window.py`
 
-- [ ] `refresh_items` が `ItemFilter` を組み立てる処理を `_current_item_filter()` に切り出し、一覧の更新と CSV 出力で共用する(挙動は変えない)
-- [ ] 「ファイル」メニューに「CSV 出力」サブメニュー(在庫一覧 / 履歴(全品目))を追加する。ツールバーに区切り線付きの「出力」グループを追加し、同じ `QAction` を持つドロップダウンボタンを置く
-- [ ] 保存先は `QFileDialog.getSaveFileName`(既定名は `在庫一覧_<日時>.csv`・`履歴_<日時>.csv`、拡張子 `.csv` を補う)。キャンセル時は何もしない。出力は待機カーソルを表示して `run_guarded` 内で実行し、成功時は保存先をステータスバーまたはメッセージで通知する
-- [ ] ダイアログ終了後の拡張子補完によってパスが変わり、補完後のファイルが存在する場合だけ、最終パスへの上書きを追加確認する(既定ボタンは「いいえ」)。拒否・キャンセル時は何も出力しない。通常の `.csv` 選択はダイアログ側の上書き確認に任せ、二重確認を避ける
-- [ ] CSV 出力の開始・出力成功・出力失敗(保存先・件数・例外情報など)を INFO / ERROR ログに記録する(個人情報・品目詳細などの DB 内容は出力しない)
-- [ ] `ui/dialogs/history_dialog.py` に「CSV 出力」ボタンを追加し、当該品目の履歴を `export_history_csv(path, item_id)` で出力する。保存先・拡張子補完・補完後の上書き確認・エラー表示・ログ記録は MainWindow と同じ手順とし、共通の補助関数に切り出す
-- [ ] `tests/test_main_window.py`・`tests/test_history_dialog.py`(`QFileDialog.getSaveFileName` を差し替え)
-  - [ ] 在庫一覧 CSV が現在の検索・絞り込み条件(検索語・クライアント・発注主体・カテゴリ・保管場所・低在庫のみ・廃止を含む)を反映すること。全条件をパラメータ化して検証する
-  - [ ] 親カテゴリ選択で子孫カテゴリの品目も含まれることと、複数条件の組み合わせの代表例を 1 件以上検証すること。期待する品目 ID 集合をテスト内で管理し、一覧と CSV を一意な管理番号で照合して対象品目が一致することを確認する(件数だけの比較にしない)
-  - [ ] 履歴 CSV(全品目)と当該品目の履歴 CSV の件数が正しいこと
-  - [ ] キャンセル時にファイルが作られないこと
-  - [ ] MainWindow と履歴ビューで、拡張子なしの入力に `.csv` が補完されること。補完後のファイルが存在する場合だけ追加確認され、「いいえ」・キャンセルでは既存バイト列が保持され、「はい」では出力されること。通常の `.csv` 選択では追加確認されないこと
-  - [ ] 出力失敗(読み取り専用の出力先など)でエラー表示され、アプリが継続すること
-  - [ ] CSV 出力の開始・成功・失敗時のログ出力(INFO / ERROR)が正しく記録されること
+- [x] `refresh_items` が `ItemFilter` を組み立てる処理を `_current_item_filter()` に切り出し、一覧の更新と CSV 出力で共用する(挙動は変えない)
+- [x] 「ファイル」メニューに「CSV 出力」サブメニュー(在庫一覧 / 履歴(全品目))を追加する。ツールバーに区切り線付きの「出力」グループを追加し、同じ `QAction` を持つドロップダウンボタンを置く
+- [x] 保存先は `QFileDialog.getSaveFileName`(既定名は `在庫一覧_<日時>.csv`・`履歴_<日時>.csv`、拡張子 `.csv` を補う)。キャンセル時は何もしない。出力は待機カーソルを表示して `run_guarded` 内で実行し、成功時は保存先をステータスバーまたはメッセージで通知する
+- [x] ダイアログ終了後の拡張子補完によってパスが変わり、補完後のファイルが存在する場合だけ、最終パスへの上書きを追加確認する(既定ボタンは「いいえ」)。拒否・キャンセル時は何も出力しない。通常の `.csv` 選択はダイアログ側の上書き確認に任せ、二重確認を避ける
+- [x] CSV 出力の開始・出力成功・出力失敗(保存先・件数・例外情報など)を INFO / ERROR ログに記録する(個人情報・品目詳細などの DB 内容は出力しない)
+- [x] `ui/dialogs/history_dialog.py` に「CSV 出力」ボタンを追加し、当該品目の履歴を `export_history_csv(path, item_id)` で出力する。保存先・拡張子補完・補完後の上書き確認・エラー表示・ログ記録は MainWindow と同じ手順とし、共通の補助関数に切り出す
+- [x] `tests/test_main_window.py`・`tests/test_history_dialog.py`(`QFileDialog.getSaveFileName` を差し替え)
+  - [x] 在庫一覧 CSV が現在の検索・絞り込み条件(検索語・クライアント・発注主体・カテゴリ・保管場所・低在庫のみ・廃止を含む)を反映すること。全条件をパラメータ化して検証する
+  - [x] 親カテゴリ選択で子孫カテゴリの品目も含まれることと、複数条件の組み合わせの代表例を 1 件以上検証すること。期待する品目 ID 集合をテスト内で管理し、一覧と CSV を一意な管理番号で照合して対象品目が一致することを確認する(件数だけの比較にしない)
+  - [x] 履歴 CSV(全品目)と当該品目の履歴 CSV の件数が正しいこと
+  - [x] キャンセル時にファイルが作られないこと
+  - [x] MainWindow と履歴ビューで、拡張子なしの入力に `.csv` が補完されること。補完後のファイルが存在する場合だけ追加確認され、「いいえ」・キャンセルでは既存バイト列が保持され、「はい」では出力されること。通常の `.csv` 選択では追加確認されないこと
+  - [x] 出力失敗(読み取り専用の出力先など)でエラー表示され、アプリが継続すること
+  - [x] CSV 出力の開始・成功・失敗時のログ出力(INFO / ERROR)が正しく記録されること
 
 #### E. 5a の仕上げ
 
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 5a の PR を作成し、CI 成功後にマージする
 
 ### 5b. バックアップ・復元・再起動(`feature/phase5-backup-restore`)

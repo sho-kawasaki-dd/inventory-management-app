@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
@@ -16,20 +14,17 @@ from inventory_manager_mini.core.models import (
 )
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
-from inventory_manager_mini.ui.signals import DataBus
-from tests.conftest import unchecked_constraints
+from tests.conftest import create_test_context, unchecked_constraints
 
 
 @pytest.fixture
-def dialog_context(inventory, master, settings) -> AppContext:
-    return AppContext(
+def dialog_context(seeded_conn, inventory, master, settings) -> AppContext:
+    return create_test_context(
+        seeded_conn,
         inventory=inventory,
         master=master,
         settings=settings,
-        data_bus=DataBus(),
-        db_path=Path(":memory:"),
         schema_version=3,
-        app_version="0.1.0",
     )
 
 
@@ -53,16 +48,14 @@ def _ok_button(dialog: StockMoveDialog):
 
 @pytest.mark.parametrize("reason", list(Reason))
 def test_reason_combo_uses_shared_labels_and_initial_reason(
-    qtbot, reason: Reason, inventory, master, settings
+    qtbot, reason: Reason, seeded_conn, inventory, master, settings
 ) -> None:
-    context = AppContext(
+    context = create_test_context(
+        seeded_conn,
         inventory=inventory,
         master=master,
         settings=settings,
-        data_bus=DataBus(),
-        db_path=Path(":memory:"),
         schema_version=3,
-        app_version="0.1.0",
     )
     dialog = StockMoveDialog(context, reason)
     qtbot.addWidget(dialog)
