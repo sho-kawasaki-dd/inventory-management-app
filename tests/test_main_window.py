@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import csv
+import logging
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import QDialog, QMessageBox
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
@@ -232,6 +235,18 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     assert toolbar_actions[8].isSeparator()
     assert toolbar_actions[9] is window.history_action
     assert toolbar_actions[10] is window.purchase_page_action
+    assert toolbar_actions[11].isSeparator()
+    assert window.toolbar.widgetForAction(toolbar_actions[12]) is window.csv_export_button
+    assert window.csv_export_button.text() == "CSV 出力"
+    assert window.csv_export_menu.actions() == [
+        window.export_items_action,
+        window.export_history_action,
+    ]
+    file_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "ファイル")
+    csv_menu = next(a.menu() for a in file_menu.actions() if a.text() == "CSV 出力")
+    assert csv_menu.actions() == [window.export_items_action, window.export_history_action]
+    assert window.export_items_action.text() == "在庫一覧"
+    assert window.export_history_action.text() == "履歴(全品目)"
     assert window.table.actions()[:3] == item_actions
     assert window.table.actions()[3].isSeparator()
     assert window.table.actions()[4:9] == stock_actions
@@ -608,3 +623,232 @@ def test_window_with_dock_fits_1366x768_work_area(qtbot, window_with_items, scal
         assert table.horizontalHeader().length() > 0
     finally:
         window.setFont(original_font)
+
+
+def _patch_save_dialog(monkeypatch, selected: Path | None) -> list[str]:
+    default_names: list[str] = []
+
+    def fake_get_save_file_name(_parent, _caption, default_name, _filter):
+        default_names.append(default_name)
+        return (str(selected) if selected is not None else "", "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_get_save_file_name)
+    return default_names
+
+
+def _read_csv(path: Path) -> list[list[str]]:
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.reader(stream))
+
+
+def _forbid_overwrite_question(monkeypatch) -> None:
+    def fail(*_args, **_kwargs):
+        raise AssertionError("追加の上書き確認は表示されないはずです")
+
+    monkeypatch.setattr(QMessageBox, "question", fail)
+
+
+def _apply_filters(window: MainWindow, filters: dict[str, Any]) -> None:
+    window.search_edit.setText(str(filters.get("search", "")))
+    window.client_combo.setCurrentIndex(window.client_combo.findData(filters.get("client")))
+    window.purchaser_combo.setCurrentIndex(
+        window.purchaser_combo.findData(filters.get("purchaser"))
+    )
+    window.location_combo.setCurrentIndex(window.location_combo.findData(filters.get("location")))
+    category = filters.get("category")
+    window.category_picker.set_current_category_id(category)
+    window.category_picker.category_changed.emit(category)
+    window.low_stock_checkbox.setChecked(bool(filters.get("low_only")))
+    window.inactive_checkbox.setChecked(bool(filters.get("inactive")))
+    window.search_timer.stop()
+    window.refresh_items()
+
+
+@pytest.mark.parametrize(
+    ("filters", "expected"),
+    [
+        ({}, {"A", "C"}),
+        ({"inactive": True}, {"A", "B", "C"}),
+        ({"search": "鉛"}, {"A"}),
+        ({"client": 2, "inactive": True}, {"B"}),
+        ({"purchaser": 1}, {"A", "C"}),
+        ({"category": 1}, {"A", "C"}),
+        ({"category": 1, "inactive": True}, {"A", "B", "C"}),
+        ({"category": 2}, {"A", "C"}),
+        ({"location": 2, "inactive": True}, {"B"}),
+        ({"low_only": True}, {"C"}),
+        ({"inactive": True, "client": 1, "location": 1}, {"A"}),
+        ({"category": 1, "low_only": True}, {"C"}),
+    ],
+)
+def test_items_csv_reflects_current_filters(
+    window_with_items, monkeypatch, tmp_path: Path, filters: dict[str, Any], expected: set[str]
+) -> None:
+    window, first, second = window_with_items
+    low_item = window.context.inventory.create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name="閾値ゼロ品目",
+            category_id=2,
+            initial_quantity=0,
+            initial_staff_id=1,
+            reorder_threshold=0,
+        )
+    )
+    window.context.data_bus.data_changed.emit()
+    codes = {"A": first.code, "B": second.code, "C": low_item.code}
+    _apply_filters(window, filters)
+    listed_codes = {
+        window.item_model.row_at(row).code for row in range(window.item_model.rowCount())
+    }
+    assert listed_codes == {codes[key] for key in expected}
+
+    destination = tmp_path / "items.csv"
+    _patch_save_dialog(monkeypatch, destination)
+    window.export_items_action.trigger()
+
+    rows = _read_csv(destination)
+    assert rows[0][0] == "管理番号"
+    assert {row[0] for row in rows[1:]} == listed_codes
+    assert len(rows) - 1 == len(listed_codes)
+
+
+def test_csv_export_default_names_use_label_and_local_timestamp(
+    window_with_items, monkeypatch
+) -> None:
+    window, _first, _second = window_with_items
+    default_names = _patch_save_dialog(monkeypatch, None)
+
+    window.export_items_action.trigger()
+    window.export_history_action.trigger()
+
+    assert default_names[0].startswith("在庫一覧_")
+    assert default_names[1].startswith("履歴_")
+    assert all(name.endswith(".csv") for name in default_names)
+    assert all(len(name.split("_", 1)[1]) == len("YYYYMMDD_HHMMSS.csv") for name in default_names)
+
+
+def test_history_csv_exports_all_items(window_with_items, monkeypatch, tmp_path: Path) -> None:
+    window, first, _second = window_with_items
+    window.context.inventory.receive(first.id, 1, 3)
+    destination = tmp_path / "history.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    window.export_history_action.trigger()
+
+    rows = _read_csv(destination)
+    assert rows[0][0] == "日時"
+    assert len(rows) - 1 == len(window.context.inventory.list_all_history()) == 3
+    assert str(destination) in window.statusBar().currentMessage()
+
+
+def test_csv_export_cancel_creates_no_file(window_with_items, monkeypatch, tmp_path: Path) -> None:
+    window, _first, _second = window_with_items
+    _patch_save_dialog(monkeypatch, None)
+
+    window.export_items_action.trigger()
+    window.export_history_action.trigger()
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("answer", [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+def test_csv_export_confirms_overwrite_only_after_extension_completion(
+    window_with_items, monkeypatch, tmp_path: Path, answer
+) -> None:
+    window, _first, _second = window_with_items
+    existing = tmp_path / "out.csv"
+    existing.write_bytes(b"old")
+    _patch_save_dialog(monkeypatch, tmp_path / "out")
+    questions = []
+
+    def fake_question(_parent, _title, _text, _buttons, default):
+        questions.append(default)
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+    window.export_items_action.trigger()
+
+    assert questions == [QMessageBox.StandardButton.No]
+    if answer == QMessageBox.StandardButton.Yes:
+        assert _read_csv(existing)[0][0] == "管理番号"
+    else:
+        assert existing.read_bytes() == b"old"
+
+
+def test_csv_export_completes_extension_without_extra_confirmation(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, _first, _second = window_with_items
+    _forbid_overwrite_question(monkeypatch)
+    _patch_save_dialog(monkeypatch, tmp_path / "out")
+
+    window.export_items_action.trigger()
+
+    assert _read_csv(tmp_path / "out.csv")[0][0] == "管理番号"
+    assert not (tmp_path / "out").exists()
+
+
+def test_csv_export_does_not_confirm_regular_csv_path_again(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, _first, _second = window_with_items
+    existing = tmp_path / "out.csv"
+    existing.write_bytes(b"old")
+    _forbid_overwrite_question(monkeypatch)
+    _patch_save_dialog(monkeypatch, existing)
+
+    window.export_items_action.trigger()
+
+    assert _read_csv(existing)[0][0] == "管理番号"
+
+
+def test_csv_export_failure_shows_error_and_keeps_app_running(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, first, _second = window_with_items
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _parent, _title, message: warnings.append(message)
+    )
+    destination = tmp_path / "missing" / "out.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    window.export_items_action.trigger()
+
+    assert len(warnings) == 1
+    assert str(destination) in warnings[0]
+    assert not destination.exists()
+    _select_item(window, first.id)
+    assert window.edit_action.isEnabled()
+
+
+def test_csv_export_logs_start_success_and_failure(
+    window_with_items, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    window, _first, _second = window_with_items
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: None)
+    caplog.set_level(logging.INFO, logger="inventory_manager_mini.ui.csv_export")
+    destination = tmp_path / "items.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    window.export_items_action.trigger()
+
+    records = [r for r in caplog.records if r.name == "inventory_manager_mini.ui.csv_export"]
+    assert [r.levelno for r in records] == [logging.INFO, logging.INFO]
+    assert "開始" in records[0].getMessage()
+    assert "完了" in records[1].getMessage()
+    assert str(destination) in records[1].getMessage()
+
+    caplog.clear()
+    broken = tmp_path / "missing" / "items.csv"
+    _patch_save_dialog(monkeypatch, broken)
+
+    window.export_items_action.trigger()
+
+    records = [r for r in caplog.records if r.name == "inventory_manager_mini.ui.csv_export"]
+    assert [r.levelno for r in records] == [logging.INFO, logging.ERROR]
+    assert str(broken) in records[1].getMessage()
+    assert records[1].exc_info is not None
