@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
+import sqlite3
+import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +21,7 @@ from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.db.connection import connect, connect_readonly
-from inventory_manager_mini.db.migrations import create_schema
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
@@ -1264,3 +1268,247 @@ def test_restore_logs_each_stage(backup_window, monkeypatch, tmp_path: Path, cap
     assert "検査・準備が完了" in messages[1]
     assert "上書きを開始" in messages[2]
     assert "復元が完了" in messages[3]
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _table_rows(db_path: Path) -> dict[str, list[tuple[Any, ...]]]:
+    conn = connect_readonly(db_path)
+    try:
+        tables = ("items", "stock_movements", "stock_allocations", "settings", "total_aggregates")
+        return {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()  # noqa: S608
+            for table in tables
+        }
+    finally:
+        conn.close()
+
+
+def _user_version(db_path: Path) -> int:
+    conn = connect_readonly(db_path)
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _isolate_temp_dir(monkeypatch, tmp_path: Path) -> Path:
+    temp_root = tmp_path / "restore-tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    return temp_root
+
+
+def _make_invalid_restore_source(path: Path, case: str) -> Path:
+    _make_restore_source(path, "不正な復元元")
+    if case == "version_zero":
+        conn = sqlite3.connect(path, autocommit=True)
+        conn.execute("PRAGMA user_version = 0")
+        conn.close()
+    elif case == "too_new":
+        conn = sqlite3.connect(path, autocommit=True)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+        conn.close()
+    elif case == "schema_mismatch":
+        conn = connect(path)
+        conn.execute("DROP TRIGGER trg_items_updated_at")
+        conn.close()
+    elif case == "business_violation":
+        conn = connect(path)
+        conn.execute("UPDATE items SET quantity = 99 WHERE id = 1")
+        conn.close()
+    elif case == "corrupt":
+        data = bytearray(path.read_bytes())
+        data[4096:] = b"\xff" * (len(data) - 4096)
+        path.write_bytes(bytes(data))
+    return path
+
+
+def test_restore_result_matches_source_and_keeps_ui_settings_file(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    source_hash = _sha256(source)
+    expected = _table_rows(source)
+    ui_settings = tmp_path / "ui_settings.json"
+    ui_settings.write_text('{"font_scale_percent": 125}', encoding="utf-8")
+    ui_settings_hash = _sha256(ui_settings)
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+
+    window.restore_action.trigger()
+
+    assert window.exit_request is ExitRequest.RESTART
+    assert _table_rows(tmp_path / "app.db") == expected
+    assert _user_version(tmp_path / "app.db") == SCHEMA_VERSION
+    assert _sha256(source) == source_hash
+    assert _sha256(ui_settings) == ui_settings_hash
+
+
+@pytest.mark.parametrize(
+    "case", ["version_zero", "too_new", "schema_mismatch", "corrupt", "business_violation"]
+)
+def test_restore_rejects_invalid_sources_without_changing_current_database(
+    backup_window, monkeypatch, tmp_path: Path, case: str
+) -> None:
+    window = backup_window
+    source = _make_invalid_restore_source(tmp_path / f"{case}.db", case)
+    source_hash = _sha256(source)
+    before = _table_rows(tmp_path / "app.db")
+    temp_root = _isolate_temp_dir(monkeypatch, tmp_path)
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+
+    window.restore_action.trigger()
+
+    assert record["questions"] == []
+    assert len(record["warning"]) == 1
+    assert "復元を中止" in record["warning"][0]
+    assert _table_rows(tmp_path / "app.db") == before
+    assert _sha256(source) == source_hash
+    assert not (tmp_path / "backups").exists()
+    assert list(temp_root.iterdir()) == []
+    assert window.isEnabled()
+    assert window.exit_request is ExitRequest.NORMAL
+
+
+def test_restore_migrates_old_version_source_and_shows_migration_notice(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = tmp_path / "source-v3.db"
+    conn = connect(source)
+    try:
+        schema_v3 = files("inventory_manager_mini.db").joinpath("schema_v3.sql")
+        create_schema(conn, schema_v3.read_text(encoding="utf-8"), version=3)
+        conn.execute("INSERT INTO clients (id, name) VALUES (1, 'クライアント')")
+        conn.execute("INSERT INTO purchasers (id, name) VALUES (1, '発注主体')")
+        conn.execute("INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ')")
+        conn.execute(
+            "INSERT INTO items (client_id, purchaser_id, code, name, category_id) "
+            "VALUES (1, 1, 'EQ-0001', '旧版の品目', 1)"
+        )
+    finally:
+        conn.close()
+    source_hash = _sha256(source)
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+
+    window.restore_action.trigger()
+
+    text, _default = record["questions"][0]
+    assert "元の版数: 3(最新版へ移行済み)" in text
+    assert window.exit_request is ExitRequest.RESTART
+    assert _user_version(tmp_path / "app.db") == SCHEMA_VERSION
+    assert _item_names(tmp_path / "app.db") == ["旧版の品目"]
+    assert _sha256(source) == source_hash
+
+
+def _fail_inspection_after_overwrite(monkeypatch, window: MainWindow, failures: int | None) -> None:
+    """上書き後の検査を failures 回(None なら常に)失敗させる。"""
+    original = window.context.backup._inspect_path
+    calls = 0
+
+    def inspect_path(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if failures is None or calls <= failures:
+            raise InvalidBackupError(("injected inspection failure",))
+        original(path)
+
+    monkeypatch.setattr(window.context.backup, "_inspect_path", inspect_path)
+
+
+@pytest.mark.parametrize(
+    ("stage", "enabled", "exit_request", "message_kind"),
+    [
+        ("pre_backup", True, ExitRequest.NORMAL, "warning"),
+        ("overwrite", True, ExitRequest.NORMAL, "warning"),
+        ("recovery", False, ExitRequest.ABNORMAL, "critical"),
+    ],
+)
+def test_restore_real_failures_report_stage_and_control_resumption(
+    backup_window,
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+    stage: str,
+    enabled: bool,
+    exit_request: ExitRequest,
+    message_kind: str,
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    window.context.backup.clock = lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC)
+    window.context.backup.tz = UTC
+    backup_dir = tmp_path / "backups"
+    auto_backup = backup_dir / "pre-restore_20261003_030405.db"
+    if stage == "pre_backup":
+        backup_dir.mkdir()
+        auto_backup.write_bytes(b"existing")
+    else:
+        _fail_inspection_after_overwrite(monkeypatch, window, 1 if stage == "overwrite" else None)
+    logger_name = "inventory_manager_mini.ui.main_window"
+    caplog.set_level(logging.INFO, logger=logger_name)
+
+    window.restore_action.trigger()
+
+    assert window.isEnabled() is enabled
+    assert window.exit_request is exit_request
+    assert record["information"] == []
+    assert len(record[message_kind]) == 1
+    if stage == "pre_backup":
+        assert auto_backup.read_bytes() == b"existing"
+        assert _item_names(tmp_path / "app.db") == ["WAL内の品目"]
+    else:
+        assert str(auto_backup) in record[message_kind][0]
+    if stage == "overwrite":
+        assert _item_names(tmp_path / "app.db") == ["WAL内の品目"]
+    errors = [r for r in caplog.records if r.name == logger_name and r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert f"段階={stage}" in errors[0].getMessage()
+    assert errors[0].exc_info is not None
+
+
+def test_open_connection_reads_recovered_data_after_failed_overwrite(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    conn = window.context.backup.conn
+    assert conn is not None
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    _fail_inspection_after_overwrite(monkeypatch, window, 1)
+    # 上書き前に開いたままの接続でページ・WAL を読み込ませておく
+    assert [row[0] for row in conn.execute("SELECT name FROM items")] == ["WAL内の品目"]
+
+    window.restore_action.trigger()
+
+    assert [row[0] for row in conn.execute("SELECT name FROM items")] == ["WAL内の品目"]
+    assert window.context.backup.inspect_database(conn, SCHEMA_VERSION) == []
+    assert {window.item_model.row_at(row).name for row in range(window.item_model.rowCount())} == {
+        "WAL内の品目"
+    }
+    # 復旧後も開いたままの接続で書き込みでき、別接続から読める
+    conn.execute("UPDATE items SET name = '更新後' WHERE id = 1")
+    assert _item_names(tmp_path / "app.db") == ["更新後"]
+    assert window.isEnabled()
+    assert window.exit_request is ExitRequest.NORMAL
+
+
+def test_restore_logs_rejected_source_as_error(
+    backup_window, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    source = _make_invalid_restore_source(tmp_path / "invalid.db", "version_zero")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    logger_name = "inventory_manager_mini.ui.main_window"
+    caplog.set_level(logging.INFO, logger=logger_name)
+
+    backup_window.restore_action.trigger()
+
+    records = [r for r in caplog.records if r.name == logger_name]
+    assert [r.levelno for r in records] == [logging.INFO, logging.ERROR]
+    assert "検査・準備を開始" in records[0].getMessage()
+    assert "復元元を利用できません" in records[1].getMessage()
+    assert records[1].exc_info is not None
