@@ -29,6 +29,8 @@ from inventory_manager_mini.core.services import PreparedRestore, validate_purch
 from inventory_manager_mini.core.timeutil import format_local
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
+from inventory_manager_mini.ui.dialogs.settings_dialog import SettingsDialog
+from inventory_manager_mini.ui.display_settings import load_display_settings
 from inventory_manager_mini.ui.error_handling import run_guarded, show_unexpected_error
 from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
@@ -251,6 +253,11 @@ class MainWindow(QMainWindow):
         self.inactive_checkbox.toggled.connect(self.include_inactive_action.setChecked)
         view_menu.addAction(self.include_inactive_action)
         view_menu.addAction(self.alert_panel.toggleViewAction())
+
+        tools_menu = self.menuBar().addMenu("ツール")
+        self.settings_action = QAction("設定", self)
+        self.settings_action.triggered.connect(self._open_settings_dialog)
+        tools_menu.addAction(self.settings_action)
 
         help_menu = self.menuBar().addMenu("ヘルプ")
         help_menu.addAction("バージョン情報", self._show_about)
@@ -671,6 +678,11 @@ class MainWindow(QMainWindow):
             initial_tab=master_dialog_module.MasterTab(tab_name.lower()),
             parent=self,
         )
+        dialog.exec()
+
+    def _open_settings_dialog(self) -> None:
+        current = load_display_settings(self.context.paths.ui_settings_path)
+        dialog = SettingsDialog(self.context, current, parent=self)
         dialog.exec()
 
     def _toggle_item_active(self) -> None:
