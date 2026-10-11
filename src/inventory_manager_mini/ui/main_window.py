@@ -1,4 +1,5 @@
 import logging
+from enum import Enum, auto
 from importlib import import_module
 from pathlib import Path
 
@@ -22,11 +23,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
 from inventory_manager_mini.core.models import REASON_LABELS, ItemFilter, Reason
-from inventory_manager_mini.core.services import validate_purchase_url
+from inventory_manager_mini.core.services import PreparedRestore, validate_purchase_url
+from inventory_manager_mini.core.timeutil import format_local
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
-from inventory_manager_mini.ui.error_handling import run_guarded
+from inventory_manager_mini.ui.error_handling import run_guarded, show_unexpected_error
 from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
@@ -36,11 +39,20 @@ from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 logger = logging.getLogger(__name__)
 
+MAX_REJECTION_REASONS = 20
+
+
+class ExitRequest(Enum):
+    NORMAL = auto()
+    RESTART = auto()
+    ABNORMAL = auto()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self.context = context
+        self.exit_request = ExitRequest.NORMAL
         self.setWindowTitle("Inventory Manager mini")
         self.resize(1000, 650)
         self.setMinimumSize(800, 600)
@@ -184,6 +196,9 @@ class MainWindow(QMainWindow):
         self.backup_action = QAction("バックアップ", self)
         self.backup_action.triggered.connect(self._create_backup)
         file_menu.addAction(self.backup_action)
+        self.restore_action = QAction("復元", self)
+        self.restore_action.triggered.connect(self._restore_backup)
+        file_menu.addAction(self.restore_action)
         file_menu.addSeparator()
         file_menu.addAction("終了", self.close)
 
@@ -430,6 +445,174 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "バックアップ", message)
         else:
             self.statusBar().clearMessage()
+
+    def _restore_backup(self) -> None:
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "復元するバックアップを選択",
+            str(self.context.paths.backup_dir),
+            "データベース (*.db)",
+        )
+        if not selected:
+            return
+        source = Path(selected)
+        prepared = self._prepare_restore(source)
+        if prepared is None:
+            return
+        try:
+            if self._confirm_restore(source, prepared):
+                self._apply_restore(prepared)
+        finally:
+            prepared.close()
+
+    def _prepare_restore(self, source: Path) -> PreparedRestore | None:
+        rejection: InvalidBackupError | None = None
+
+        def run_prepare() -> PreparedRestore | None:
+            nonlocal rejection
+            logger.info("復元の検査・準備を開始します: 復元元=%s", source)
+            try:
+                prepared = self.context.backup.prepare_restore(source)
+            except InvalidBackupError as error:
+                rejection = error
+                logger.error("復元元を利用できません: 復元元=%s", source, exc_info=True)
+                return None
+            except Exception:
+                logger.error("復元の検査・準備に失敗しました: 復元元=%s", source, exc_info=True)
+                raise
+            logger.info("復元の検査・準備が完了しました: 復元元=%s", source)
+            return prepared
+
+        self.statusBar().showMessage("復元元を検査しています...")
+        self.statusBar().repaint()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            _succeeded, prepared = run_guarded(self, run_prepare)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+        if rejection is not None:
+            reasons = list(rejection.reasons)
+            message = "復元元を利用できないため、復元を中止しました。\n" + "\n".join(
+                f"・{reason}" for reason in reasons[:MAX_REJECTION_REASONS]
+            )
+            if len(reasons) > MAX_REJECTION_REASONS:
+                message += f"\n他 {len(reasons) - MAX_REJECTION_REASONS} 件"
+            QMessageBox.warning(self, "復元できません", message)
+        return prepared
+
+    def _confirm_restore(self, source: Path, prepared: PreparedRestore) -> bool:
+        version_text = f"{prepared.source_version}"
+        if prepared.source_version < self.context.schema_version:
+            version_text += "(最新版へ移行済み)"
+        last_moved_at = (
+            "なし" if prepared.last_moved_at is None else format_local(prepared.last_moved_at)
+        )
+        message = (
+            f"復元元: {source}\n"
+            f"元の版数: {version_text}\n"
+            f"品目数: {prepared.item_count:,} 件\n"
+            f"履歴数: {prepared.movement_count:,} 件\n"
+            f"最終履歴日時: {last_moved_at}\n\n"
+            "現在のデータは復元元の内容で置き換えられます。\n"
+            "復元前に現在のデータを自動バックアップします"
+            f"(保存先: {self.context.paths.backup_dir})。\n"
+            "完了後にアプリを再起動します。\n\n"
+            "復元しますか？"
+        )
+        answer = QMessageBox.question(
+            self,
+            "復元の確認",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _apply_restore(self, prepared: PreparedRestore) -> None:
+        paths = self.context.paths
+        restore_error: RestoreError | None = None
+        unexpected_error: Exception | None = None
+        pre_restore_path: Path | None = None
+
+        self.setEnabled(False)
+        self.statusBar().showMessage("復元しています...")
+        self.repaint()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        logger.info("復元の上書きを開始します: 復元元=%s 復元先=%s", prepared.path, paths.db_path)
+        try:
+            pre_restore_path = self.context.backup.apply_restore(
+                prepared, paths.db_path, paths.backup_dir
+            )
+        except RestoreError as error:
+            restore_error = error
+            logger.error(
+                "復元に失敗しました: 段階=%s 復旧=%s 自動バックアップ=%s",
+                error.stage,
+                error.recovered,
+                error.backup_path,
+                exc_info=True,
+            )
+        except Exception as error:
+            unexpected_error = error
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+
+        if unexpected_error is not None:
+            # 現行 DB の状態が不明なため、DB 操作を再開しない
+            show_unexpected_error(None, unexpected_error)
+            self._request_exit(ExitRequest.ABNORMAL)
+        elif restore_error is not None:
+            self._handle_restore_error(restore_error)
+        else:
+            logger.info("復元が完了しました: 復元前バックアップ=%s", pre_restore_path)
+            self.setEnabled(True)
+            QMessageBox.information(
+                self,
+                "復元",
+                f"復元が完了しました。再起動します。\n復元前のバックアップ: {pre_restore_path}",
+            )
+            self._request_exit(ExitRequest.RESTART)
+
+    def _handle_restore_error(self, error: RestoreError) -> None:
+        if error.stage == "recovery":
+            # 無効化したウィンドウを親にするとダイアログを操作できないため親なしで表示する
+            QMessageBox.critical(
+                None,
+                "復元に失敗しました",
+                f"{error.message}\n\n"
+                f"自動バックアップ: {error.backup_path}\n"
+                f"ログ: {self.context.paths.log_path}\n\n"
+                "アプリを終了します。アプリの全プロセスが終了したことを確認し、"
+                "現行のデータベースと付随する -wal・-shm ファイルを別の場所へ退避してから、"
+                "自動バックアップを現行のデータベースのパスへ配置して再起動してください。"
+                "退避したファイルと自動バックアップは、復旧を確認するまで削除しないでください。",
+            )
+            self._request_exit(ExitRequest.ABNORMAL)
+            return
+
+        self.setEnabled(True)
+        if error.stage == "pre_backup":
+            QMessageBox.warning(
+                self,
+                "復元に失敗しました",
+                f"{error.message}\n保存先: {self.context.paths.backup_dir}\n"
+                "現在のデータは変更されていません。",
+            )
+            return
+        logger.info("現行データベースを自動復旧しました: 自動バックアップ=%s", error.backup_path)
+        QMessageBox.warning(
+            self,
+            "復元に失敗しました",
+            f"{error.message}\n自動バックアップ: {error.backup_path}\n復元前の状態に戻しました。",
+        )
+        self.refresh()
+
+    def _request_exit(self, request: ExitRequest) -> None:
+        self.exit_request = request
+        self.close()
+        QApplication.quit()
 
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():

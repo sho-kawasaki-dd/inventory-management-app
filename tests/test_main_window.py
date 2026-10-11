@@ -13,13 +13,14 @@ from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 from inventory_manager_mini.core import services
+from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
 from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import create_schema
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
-from inventory_manager_mini.ui.main_window import MainWindow
+from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
 from tests.conftest import create_test_context
 
 
@@ -1013,3 +1014,253 @@ def test_backup_logs_start_success_and_failure(
     assert [r.levelno for r in records] == [logging.INFO, logging.ERROR]
     assert str(dest_dir) in records[1].getMessage()
     assert records[1].exc_info is not None
+
+
+def _make_restore_source(path: Path, item_name: str) -> Path:
+    conn = connect(path)
+    try:
+        create_schema(conn)
+        conn.execute("INSERT INTO clients (id, name) VALUES (1, 'クライアント')")
+        conn.execute("INSERT INTO purchasers (id, name) VALUES (1, '発注主体')")
+        conn.execute("INSERT INTO staff (id, name) VALUES (1, '担当者')")
+        conn.execute("INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ')")
+        InventoryService(conn).create_item(
+            NewItem(
+                client_id=1,
+                purchaser_id=1,
+                name=item_name,
+                category_id=1,
+                initial_quantity=2,
+                initial_staff_id=1,
+            )
+        )
+    finally:
+        conn.close()
+    return path
+
+
+def _patch_restore_dialogs(
+    monkeypatch, source: Path | None, answer: QMessageBox.StandardButton
+) -> dict[str, list[Any]]:
+    record: dict[str, list[Any]] = {
+        "questions": [],
+        "information": [],
+        "warning": [],
+        "critical": [],
+    }
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source) if source is not None else "", ""),
+    )
+
+    def question(_parent, _title, text, _buttons, default):
+        record["questions"].append((text, default))
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", question)
+    for kind in ("information", "warning", "critical"):
+        monkeypatch.setattr(
+            QMessageBox,
+            kind,
+            lambda _p, _t, text, kind=kind: record[kind].append(text),
+        )
+    return record
+
+
+def _item_names(db_path: Path) -> list[str]:
+    conn = connect_readonly(db_path)
+    try:
+        return [row[0] for row in conn.execute("SELECT name FROM items ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def _record_prepared_restores(monkeypatch, window: MainWindow) -> list[Any]:
+    prepared_list: list[Any] = []
+    original = window.context.backup.prepare_restore
+
+    def recording_prepare(source_path):
+        prepared = original(source_path)
+        prepared_list.append(prepared)
+        return prepared
+
+    monkeypatch.setattr(window.context.backup, "prepare_restore", recording_prepare)
+    return prepared_list
+
+
+def test_restore_replaces_database_and_requests_restart(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    source_bytes = source.read_bytes()
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    prepared_list = _record_prepared_restores(monkeypatch, window)
+
+    window.restore_action.trigger()
+
+    assert _item_names(tmp_path / "app.db") == ["復元元の品目"]
+    assert source.read_bytes() == source_bytes
+    assert len(list((tmp_path / "backups").glob("pre-restore_*.db"))) == 1
+    assert window.exit_request is ExitRequest.RESTART
+    assert window.isEnabled()
+    text, default = record["questions"][0]
+    assert default == QMessageBox.StandardButton.No
+    for expected in (str(source), "品目数: 1 件", "履歴数: 1 件", "再起動", "自動バックアップ"):
+        assert expected in text
+    assert "再起動します" in record["information"][0]
+    assert not prepared_list[0].path.parent.exists()
+
+
+def test_restore_declined_keeps_database_and_cleans_temporary_files(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
+    prepared_list = _record_prepared_restores(monkeypatch, window)
+
+    window.restore_action.trigger()
+
+    assert _item_names(tmp_path / "app.db") == ["WAL内の品目"]
+    assert window.exit_request is ExitRequest.NORMAL
+    assert not (tmp_path / "backups").exists()
+    assert not prepared_list[0].path.parent.exists()
+
+
+def test_restore_cancel_in_file_dialog_does_nothing(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    record = _patch_restore_dialogs(monkeypatch, None, QMessageBox.StandardButton.Yes)
+
+    backup_window.restore_action.trigger()
+
+    assert record["questions"] == []
+    assert _item_names(tmp_path / "app.db") == ["WAL内の品目"]
+
+
+def test_restore_rejects_invalid_file_with_limited_reasons(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    invalid = tmp_path / "invalid.db"
+    invalid.write_text("not a database", encoding="utf-8")
+    record = _patch_restore_dialogs(monkeypatch, invalid, QMessageBox.StandardButton.Yes)
+
+    window.restore_action.trigger()
+
+    assert record["questions"] == []
+    assert len(record["warning"]) == 1
+    assert "復元を中止" in record["warning"][0]
+    assert _item_names(tmp_path / "app.db") == ["WAL内の品目"]
+    assert window.isEnabled()
+    assert window.exit_request is ExitRequest.NORMAL
+
+
+def test_restore_lists_at_most_20_rejection_reasons(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    reasons = tuple(f"理由{index}" for index in range(25))
+
+    def reject(_source_path):
+        raise InvalidBackupError(reasons)
+
+    monkeypatch.setattr(backup_window.context.backup, "prepare_restore", reject)
+    record = _patch_restore_dialogs(monkeypatch, tmp_path / "x.db", QMessageBox.StandardButton.Yes)
+
+    backup_window.restore_action.trigger()
+
+    message = record["warning"][0]
+    assert "理由19" in message
+    assert "理由20" not in message
+    assert "他 5 件" in message
+
+
+def test_restore_disables_window_while_overwriting(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    original = window.context.backup.apply_restore
+    states: list[bool] = []
+
+    def observing_apply(prepared, db_path, backup_dir):
+        states.append(window.isEnabled())
+        return original(prepared, db_path, backup_dir)
+
+    monkeypatch.setattr(window.context.backup, "apply_restore", observing_apply)
+
+    window.restore_action.trigger()
+
+    assert states == [False]
+
+
+@pytest.mark.parametrize(
+    ("stage", "recovered", "enabled", "exit_request", "message_kind"),
+    [
+        ("pre_backup", True, True, ExitRequest.NORMAL, "warning"),
+        ("overwrite", True, True, ExitRequest.NORMAL, "warning"),
+        ("recovery", False, False, ExitRequest.ABNORMAL, "critical"),
+    ],
+)
+def test_restore_failure_stages(
+    backup_window,
+    monkeypatch,
+    tmp_path: Path,
+    stage: str,
+    recovered: bool,
+    enabled: bool,
+    exit_request: ExitRequest,
+    message_kind: str,
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    auto_backup = tmp_path / "backups" / "pre-restore_test.db"
+
+    def failing_apply(_prepared, _db_path, _backup_dir):
+        raise RestoreError(
+            "injected restore failure",
+            stage=stage,  # type: ignore[arg-type]
+            recovered=recovered,
+            backup_path=auto_backup,
+        )
+
+    monkeypatch.setattr(window.context.backup, "apply_restore", failing_apply)
+    refresh_calls: list[bool] = []
+    monkeypatch.setattr(window, "refresh", lambda: refresh_calls.append(True))
+
+    window.restore_action.trigger()
+
+    assert window.isEnabled() is enabled
+    assert window.exit_request is exit_request
+    assert record["information"] == []
+    message = record[message_kind][0]
+    assert "injected restore failure" in message
+    if stage == "pre_backup":
+        assert str(window.context.paths.backup_dir) in message
+    else:
+        assert str(auto_backup) in message
+    if stage == "recovery":
+        assert str(window.context.paths.log_path) in message
+    assert refresh_calls == ([True] if stage == "overwrite" else [])
+
+
+def test_restore_logs_each_stage(backup_window, monkeypatch, tmp_path: Path, caplog) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    logger_name = "inventory_manager_mini.ui.main_window"
+    caplog.set_level(logging.INFO, logger=logger_name)
+
+    window.restore_action.trigger()
+
+    records = [r for r in caplog.records if r.name == logger_name]
+    assert [r.levelno for r in records] == [logging.INFO] * 4
+    messages = [r.getMessage() for r in records]
+    assert "検査・準備を開始" in messages[0]
+    assert "検査・準備が完了" in messages[1]
+    assert "上書きを開始" in messages[2]
+    assert "復元が完了" in messages[3]

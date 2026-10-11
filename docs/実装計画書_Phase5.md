@@ -164,18 +164,18 @@
 
 #### H. 復元 `ui/main_window.py`
 
-- [ ] 「ファイル」メニューに「復元」を追加する(`QFileDialog.getOpenFileName`、`*.db`)
-- [ ] 検査・準備: 待機カーソルのうえで `prepare_restore` を実行する。`InvalidBackupError` は理由(最大 20 件)を表示して中止し、現行 DB・復元元を変更しない
-- [ ] 確認ダイアログ(既定ボタンは「いいえ」): 復元元のパス、元の版数(旧版なら「最新版へ移行済み」と明記)、品目数・履歴数、最終履歴日時(`format_local` でローカル時刻)、現行 DB が置き換わること、復元前に自動バックアップを作成すること、完了後に再起動することを表示する
-- [ ] キャンセル時・例外時・完了時のいずれでも `try/finally` で `prepared.close()` を呼び、一時ディレクトリを残さない
-- [ ] 復元準備・上書き・自動復旧の各段階での開始・完了・失敗を INFO / ERROR ログに記録する(DB 内容は出力しない)
-- [ ] 確定後は MainWindow を無効化(`setEnabled(False)`)して操作を停止し、待機カーソルのうえで `apply_restore(prepared, paths.db_path, paths.backup_dir)` を実行する。現行接続は開いたまま操作しない
-- [ ] `RestoreError` の扱い
-  - [ ] `stage="pre_backup"`: 保存先と原因を表示し、MainWindow を `setEnabled(True)` に戻して現行 DB は未変更のまま操作を再開する
-  - [ ] `stage="overwrite"` かつ `recovered=True`: 自動バックアップのパスと原因を表示し、MainWindow を `setEnabled(True)` に戻して `refresh()` して操作を再開する
-  - [ ] `stage="recovery"`(`recovered=False`): DB 操作を再開せず、自動バックアップの場所・ログの場所・手動復旧の案内(開発計画書 7.2)を表示して、再起動せず終了コード 1 で終了する要求を出す
-- [ ] 成功時: MainWindow の無効化を解除(または前面表示を維持)して「復元が完了しました。再起動します」と通知し、OK 押下後に終了要求フラグ(再起動)をセットして `self.close()` / `QApplication.quit()` で終了する
-- [ ] 復元中に他の操作(在庫操作・メニュー)が受け付けられないことを確認する
+- [x] 「ファイル」メニューに「復元」を追加する(`QFileDialog.getOpenFileName`、`*.db`)
+- [x] 検査・準備: 待機カーソルのうえで `prepare_restore` を実行する。`InvalidBackupError` は理由(最大 20 件)を表示して中止し、現行 DB・復元元を変更しない
+- [x] 確認ダイアログ(既定ボタンは「いいえ」): 復元元のパス、元の版数(旧版なら「最新版へ移行済み」と明記)、品目数・履歴数、最終履歴日時(`format_local` でローカル時刻)、現行 DB が置き換わること、復元前に自動バックアップを作成すること、完了後に再起動することを表示する
+- [x] キャンセル時・例外時・完了時のいずれでも `try/finally` で `prepared.close()` を呼び、一時ディレクトリを残さない
+- [x] 復元準備・上書き・自動復旧の各段階での開始・完了・失敗を INFO / ERROR ログに記録する(DB 内容は出力しない)
+- [x] 確定後は MainWindow を無効化(`setEnabled(False)`)して操作を停止し、待機カーソルのうえで `apply_restore(prepared, paths.db_path, paths.backup_dir)` を実行する。現行接続は開いたまま操作しない
+- [x] `RestoreError` の扱い
+  - [x] `stage="pre_backup"`: 保存先と原因を表示し、MainWindow を `setEnabled(True)` に戻して現行 DB は未変更のまま操作を再開する
+  - [x] `stage="overwrite"` かつ `recovered=True`: 自動バックアップのパスと原因を表示し、MainWindow を `setEnabled(True)` に戻して `refresh()` して操作を再開する
+  - [x] `stage="recovery"`(`recovered=False`): DB 操作を再開せず、自動バックアップの場所・ログの場所・手動復旧の案内(開発計画書 7.2)を表示して、再起動せず終了コード 1 で終了する要求を出す
+- [x] 成功時: MainWindow の無効化を解除(または前面表示を維持)して「復元が完了しました。再起動します」と通知し、OK 押下後に終了要求フラグ(再起動)をセットして `self.close()` / `QApplication.quit()` で終了する
+- [x] 復元中に他の操作(在庫操作・メニュー)が受け付けられないことを確認する
 
 #### I. 終了・再起動の制御 `app.py`
 
