@@ -149,11 +149,11 @@
 
 #### F. core / AppContext
 
-- [ ] UI が `sqlite3` に触れずに現行 DB をバックアップできるよう、`BackupService` に現行接続を保持する仕組み(コンストラクタの任意引数など)と、現行 DB をバックアップするメソッドを追加する。既存の `create_backup(conn, dest_dir)` の契約は変更しない
-- [ ] `create_backup` の保存先ディレクトリ作成・DB コピー時の `OSError` を、5a で追加した `FileOutputError` に変換する。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する。同名ファイルに対する既存の `ValidationError` は維持し、SQLite 例外は一括変換しない
-- [ ] `ui/context.py` に `backup: BackupService` を追加し、`build_context` で生成する。`tests/conftest.py` の共通ヘルパー(`create_test_context`)を更新して各テストへ波及させる
-- [ ] `tests/test_backup.py`: 追加メソッドが `create_backup` と同じ結果(ファイル名・内容・検査)を返すこと
-- [ ] `tests/test_backup.py`: ディレクトリ作成・DB コピーをそれぞれ差し替えて `PermissionError` を発生させ、`FileOutputError` への変換、保存先・原因のメッセージ、元例外の保持を検証する。同名ファイルは引き続き `ValidationError` になること
+- [x] UI が `sqlite3` に触れずに現行 DB をバックアップできるよう、`BackupService` に現行接続を保持する仕組み(コンストラクタの任意引数など)と、現行 DB をバックアップするメソッドを追加する。既存の `create_backup(conn, dest_dir)` の契約は変更しない
+- [x] `create_backup` の保存先ディレクトリ作成・DB コピー時の `OSError` を、5a で追加した `FileOutputError` に変換する。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する。同名ファイルに対する既存の `ValidationError` は維持し、SQLite 例外は一括変換しない
+- [x] `ui/context.py` に `backup: BackupService` を追加し、`build_context` で生成する。`tests/conftest.py` の共通ヘルパー(`create_test_context`)を更新して各テストへ波及させる
+- [x] `tests/test_backup.py`: 追加メソッドが `create_backup` と同じ結果(ファイル名・内容・検査)を返すこと
+- [x] `tests/test_backup.py`: ディレクトリ作成・DB コピーをそれぞれ差し替えて `PermissionError` を発生させ、`FileOutputError` への変換、保存先・原因のメッセージ、元例外の保持を検証する。同名ファイルは引き続き `ValidationError` になること
 
 #### G. バックアップ `ui/main_window.py`
 

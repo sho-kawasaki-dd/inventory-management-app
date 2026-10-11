@@ -11,6 +11,7 @@ import pytest
 from inventory_manager_mini.config import AppPaths
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import (
+    BackupService,
     InventoryService,
     MasterService,
     SettingsService,
@@ -66,6 +67,7 @@ def create_test_context(
     inventory: InventoryService | None = None,
     master: MasterService | None = None,
     settings: SettingsService | None = None,
+    backup: BackupService | None = None,
     db_path: Path | None = None,
     schema_version: int = SCHEMA_VERSION,
     app_version: str = "0.1.0",
@@ -85,6 +87,7 @@ def create_test_context(
         master=master or MasterService(conn),
         settings=settings or SettingsService(conn),
         reports=ReportService(conn),
+        backup=backup or BackupService(conn),
         paths=paths,
         data_bus=DataBus(),
         db_path=context_db_path,

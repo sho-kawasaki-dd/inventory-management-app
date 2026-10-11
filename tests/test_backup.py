@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from inventory_manager_mini.core import services
-from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError, ValidationError
+from inventory_manager_mini.core.errors import (
+    FileOutputError,
+    InvalidBackupError,
+    RestoreError,
+    ValidationError,
+)
 from inventory_manager_mini.core.services import BackupService
 from inventory_manager_mini.db import backup, migrations
 from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
@@ -219,6 +224,91 @@ def test_backup_service_creates_timestamped_backup_and_rejects_existing_file(
         assert backup_conn.execute("SELECT name FROM items").fetchone() == ("元の品目",)
     finally:
         backup_conn.close()
+
+
+def test_create_current_backup_matches_create_backup(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "元の品目")
+    conn = connect(source_path)
+
+    def clock() -> datetime:
+        return datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC)
+
+    try:
+        current_path = BackupService(conn, clock=clock, tz=UTC).create_current_backup(
+            tmp_path / "current"
+        )
+        explicit_path = BackupService(clock=clock, tz=UTC).create_backup(
+            conn, tmp_path / "explicit"
+        )
+    finally:
+        conn.close()
+
+    assert current_path.name == explicit_path.name == "inventory_20261003_030405.db"
+    for path in (current_path, explicit_path):
+        backup_conn = connect_readonly(path)
+        try:
+            assert backup_conn.execute("SELECT name FROM items").fetchone() == ("元の品目",)
+            assert BackupService().inspect_database(backup_conn, SCHEMA_VERSION) == []
+        finally:
+            backup_conn.close()
+
+
+def test_create_current_backup_requires_connection(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError):
+        BackupService().create_current_backup(tmp_path / "backups")
+
+
+def test_create_backup_converts_directory_creation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "品目")
+    dest_dir = tmp_path / "backups"
+
+    def reject_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError("injected mkdir failure")
+
+    conn = connect(source_path)
+    try:
+        monkeypatch.setattr(Path, "mkdir", reject_mkdir)
+        with pytest.raises(FileOutputError) as exc_info:
+            BackupService(conn).create_current_backup(dest_dir)
+    finally:
+        conn.close()
+
+    assert str(dest_dir) in exc_info.value.message
+    assert "injected mkdir failure" in exc_info.value.message
+    assert isinstance(exc_info.value.__cause__, PermissionError)
+
+
+def test_create_backup_converts_copy_failure_and_keeps_duplicate_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "品目")
+    dest_dir = tmp_path / "backups"
+    service = BackupService(clock=lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC), tz=UTC)
+    conn = connect(source_path)
+    try:
+        original_copy = services.copy_database
+
+        def reject_copy(*args: object, **kwargs: object) -> None:
+            raise PermissionError("injected copy failure")
+
+        monkeypatch.setattr(services, "copy_database", reject_copy)
+        with pytest.raises(FileOutputError) as exc_info:
+            service.create_backup(conn, dest_dir)
+        assert str(dest_dir / "inventory_20261003_030405.db") in exc_info.value.message
+        assert "injected copy failure" in exc_info.value.message
+        assert isinstance(exc_info.value.__cause__, PermissionError)
+
+        monkeypatch.setattr(services, "copy_database", original_copy)
+        service.create_backup(conn, dest_dir)
+        with pytest.raises(ValidationError):
+            service.create_backup(conn, dest_dir)
+    finally:
+        conn.close()
 
 
 def test_backup_service_inspects_schema_and_business_integrity(tmp_path: Path) -> None:

@@ -3,7 +3,12 @@ from pathlib import Path
 
 from inventory_manager_mini.config import AppPaths
 from inventory_manager_mini.core.reports import ReportService
-from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
+from inventory_manager_mini.core.services import (
+    BackupService,
+    InventoryService,
+    MasterService,
+    SettingsService,
+)
 from inventory_manager_mini.ui.signals import DataBus
 
 
@@ -13,6 +18,7 @@ class AppContext:
     master: MasterService
     settings: SettingsService
     reports: ReportService
+    backup: BackupService
     paths: AppPaths
     data_bus: DataBus
     db_path: Path
