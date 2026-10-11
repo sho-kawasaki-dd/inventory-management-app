@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from contextlib import closing
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -20,7 +21,7 @@ from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui import single_instance
 from inventory_manager_mini.ui.dialogs.low_stock_notice_dialog import LowStockNoticeDialog
-from inventory_manager_mini.ui.main_window import MainWindow
+from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
 from tests.test_single_instance import start_lock_holder, stop_lock_holder
 
 
@@ -251,3 +252,113 @@ def test_main_continues_when_low_stock_lookup_fails(
     assert notice_calls == []
     assert len(messages) >= 1
     assert messages[0][1] == "エラー"
+
+
+def test_build_restart_command_for_python_and_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    from inventory_manager_mini.app import build_restart_command
+
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert build_restart_command() == [sys.executable, "-m", "inventory_manager_mini"]
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert build_restart_command() == [sys.executable]
+
+
+class _ExitRecorder:
+    """exec を差し替えて終了要求をセットし、startDetached 呼び出し時の状態を記録する。"""
+
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        paths: AppPaths,
+        request: ExitRequest,
+        start_result: tuple[bool, int],
+    ) -> None:
+        import inventory_manager_mini.app as app_module
+
+        self.paths = paths
+        self.events: list[str] = []
+        self.calls: list[tuple[str, list[str]]] = []
+        self.lock_acquirable = False
+        self.conn_closed = False
+        self.start_result = start_result
+        self.conn: sqlite3.Connection | None = None
+        windows: list[MainWindow] = []
+        original_show = MainWindow.show
+        original_open = app_module.open_database
+
+        def open_and_capture(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            self.conn = original_open(*args, **kwargs)
+            return self.conn
+
+        def fake_exec(application: QApplication) -> int:
+            windows[0].exit_request = request
+            self.events.append("exec")
+            return 0
+
+        monkeypatch.setattr(app_module, "open_database", open_and_capture)
+        monkeypatch.setattr(
+            MainWindow, "show", lambda window: (windows.append(window), original_show(window))
+        )
+        monkeypatch.setattr(QApplication, "exec", fake_exec)
+        monkeypatch.setattr(app_module.QProcess, "startDetached", self.start_detached)
+        monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+
+    def start_detached(self, program: str, arguments: list[str]) -> tuple[bool, int]:
+        self.events.append("startDetached")
+        self.calls.append((program, arguments))
+        assert self.conn is not None
+        try:
+            self.conn.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            self.conn_closed = True
+        lock = single_instance.SingleInstanceLock(self.paths.lock_path)
+        self.lock_acquirable = lock.try_acquire()
+        if self.lock_acquirable:
+            lock.release()
+        return self.start_result
+
+
+def test_main_restarts_after_closing_connection_and_releasing_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qtbot
+) -> None:
+    paths = _paths(tmp_path)
+    recorder = _ExitRecorder(monkeypatch, paths, ExitRequest.RESTART, (True, 12345))
+
+    assert main(paths) == 0
+
+    assert recorder.events == ["exec", "startDetached"]
+    assert recorder.conn_closed
+    assert recorder.lock_acquirable
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0][0] == sys.executable
+
+
+def test_main_reports_restart_failure_even_if_result_tuple_is_truthy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qtbot
+) -> None:
+    paths = _paths(tmp_path)
+    recorder = _ExitRecorder(monkeypatch, paths, ExitRequest.RESTART, (False, 0))
+    messages: list[tuple[object, ...]] = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: messages.append(args))
+
+    assert main(paths) == 1
+
+    assert recorder.events == ["exec", "startDetached"]
+    assert len(messages) == 1
+    assert "復元済み" in str(messages[0][2])
+    assert "手動" in str(messages[0][2])
+
+
+def test_main_does_not_restart_on_abnormal_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qtbot
+) -> None:
+    paths = _paths(tmp_path)
+    recorder = _ExitRecorder(monkeypatch, paths, ExitRequest.ABNORMAL, (True, 1))
+
+    assert main(paths) == 1
+
+    assert recorder.events == ["exec"]
+    lock = single_instance.SingleInstanceLock(paths.lock_path)
+    assert lock.try_acquire()
+    lock.release()

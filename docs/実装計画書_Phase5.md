@@ -141,7 +141,7 @@
 #### E. 5a の仕上げ
 
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 5a の PR を作成し、CI 成功後にマージする
+- [x] 5a の PR を作成し、CI 成功後にマージする
 
 ### 5b. バックアップ・復元・再起動(`feature/phase5-backup-restore`)
 
@@ -149,61 +149,61 @@
 
 #### F. core / AppContext
 
-- [ ] UI が `sqlite3` に触れずに現行 DB をバックアップできるよう、`BackupService` に現行接続を保持する仕組み(コンストラクタの任意引数など)と、現行 DB をバックアップするメソッドを追加する。既存の `create_backup(conn, dest_dir)` の契約は変更しない
-- [ ] `create_backup` の保存先ディレクトリ作成・DB コピー時の `OSError` を、5a で追加した `FileOutputError` に変換する。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する。同名ファイルに対する既存の `ValidationError` は維持し、SQLite 例外は一括変換しない
-- [ ] `ui/context.py` に `backup: BackupService` を追加し、`build_context` で生成する。`tests/conftest.py` の共通ヘルパー(`create_test_context`)を更新して各テストへ波及させる
-- [ ] `tests/test_backup.py`: 追加メソッドが `create_backup` と同じ結果(ファイル名・内容・検査)を返すこと
-- [ ] `tests/test_backup.py`: ディレクトリ作成・DB コピーをそれぞれ差し替えて `PermissionError` を発生させ、`FileOutputError` への変換、保存先・原因のメッセージ、元例外の保持を検証する。同名ファイルは引き続き `ValidationError` になること
+- [x] UI が `sqlite3` に触れずに現行 DB をバックアップできるよう、`BackupService` に現行接続を保持する仕組み(コンストラクタの任意引数など)と、現行 DB をバックアップするメソッドを追加する。既存の `create_backup(conn, dest_dir)` の契約は変更しない
+- [x] `create_backup` の保存先ディレクトリ作成・DB コピー時の `OSError` を、5a で追加した `FileOutputError` に変換する。保存先・原因をメッセージに含め、`raise ... from error` で元例外を保持する。同名ファイルに対する既存の `ValidationError` は維持し、SQLite 例外は一括変換しない
+- [x] `ui/context.py` に `backup: BackupService` を追加し、`build_context` で生成する。`tests/conftest.py` の共通ヘルパー(`create_test_context`)を更新して各テストへ波及させる
+- [x] `tests/test_backup.py`: 追加メソッドが `create_backup` と同じ結果(ファイル名・内容・検査)を返すこと
+- [x] `tests/test_backup.py`: ディレクトリ作成・DB コピーをそれぞれ差し替えて `PermissionError` を発生させ、`FileOutputError` への変換、保存先・原因のメッセージ、元例外の保持を検証する。同名ファイルは引き続き `ValidationError` になること
 
 #### G. バックアップ `ui/main_window.py`
 
-- [ ] 「ファイル」メニューに「バックアップ」を追加する。`QFileDialog.getExistingDirectory` で保存先を選び(既定は `paths.backup_dir`)、待機カーソルとステータスバー表示のうえで作成する。完了時に作成したファイルのパスを表示する
-- [ ] バックアップ作成の開始・完了・失敗(保存先・例外情報など)を INFO / ERROR ログに記録する
-- [ ] 失敗(整合性検査の不合格・同名ファイルの存在・書き込み不可)は `run_guarded` で原因を表示し、アプリは継続する。書き込み不可は `FileOutputError` の業務例外表示とし、保存先・原因を表示する
-- [ ] `tests/test_main_window.py`(実ファイル DB。`QFileDialog` を差し替え): 作成成功とパスの表示、キャンセル、保存先が書き込み不可の場合の保存先・原因表示と操作継続、WAL 内の未チェックポイントの確定データがバックアップに含まれること、開始・成功・失敗時のログ出力を検証する。書き込み不可は `PermissionError` の差し替えで再現する
+- [x] 「ファイル」メニューに「バックアップ」を追加する。`QFileDialog.getExistingDirectory` で保存先を選び(既定は `paths.backup_dir`)、待機カーソルとステータスバー表示のうえで作成する。完了時に作成したファイルのパスを表示する
+- [x] バックアップ作成の開始・完了・失敗(保存先・例外情報など)を INFO / ERROR ログに記録する
+- [x] 失敗(整合性検査の不合格・同名ファイルの存在・書き込み不可)は `run_guarded` で原因を表示し、アプリは継続する。書き込み不可は `FileOutputError` の業務例外表示とし、保存先・原因を表示する
+- [x] `tests/test_main_window.py`(実ファイル DB。`QFileDialog` を差し替え): 作成成功とパスの表示、キャンセル、保存先が書き込み不可の場合の保存先・原因表示と操作継続、WAL 内の未チェックポイントの確定データがバックアップに含まれること、開始・成功・失敗時のログ出力を検証する。書き込み不可は `PermissionError` の差し替えで再現する
 
 #### H. 復元 `ui/main_window.py`
 
-- [ ] 「ファイル」メニューに「復元」を追加する(`QFileDialog.getOpenFileName`、`*.db`)
-- [ ] 検査・準備: 待機カーソルのうえで `prepare_restore` を実行する。`InvalidBackupError` は理由(最大 20 件)を表示して中止し、現行 DB・復元元を変更しない
-- [ ] 確認ダイアログ(既定ボタンは「いいえ」): 復元元のパス、元の版数(旧版なら「最新版へ移行済み」と明記)、品目数・履歴数、最終履歴日時(`format_local` でローカル時刻)、現行 DB が置き換わること、復元前に自動バックアップを作成すること、完了後に再起動することを表示する
-- [ ] キャンセル時・例外時・完了時のいずれでも `try/finally` で `prepared.close()` を呼び、一時ディレクトリを残さない
-- [ ] 復元準備・上書き・自動復旧の各段階での開始・完了・失敗を INFO / ERROR ログに記録する(DB 内容は出力しない)
-- [ ] 確定後は MainWindow を無効化(`setEnabled(False)`)して操作を停止し、待機カーソルのうえで `apply_restore(prepared, paths.db_path, paths.backup_dir)` を実行する。現行接続は開いたまま操作しない
-- [ ] `RestoreError` の扱い
-  - [ ] `stage="pre_backup"`: 保存先と原因を表示し、MainWindow を `setEnabled(True)` に戻して現行 DB は未変更のまま操作を再開する
-  - [ ] `stage="overwrite"` かつ `recovered=True`: 自動バックアップのパスと原因を表示し、MainWindow を `setEnabled(True)` に戻して `refresh()` して操作を再開する
-  - [ ] `stage="recovery"`(`recovered=False`): DB 操作を再開せず、自動バックアップの場所・ログの場所・手動復旧の案内(開発計画書 7.2)を表示して、再起動せず終了コード 1 で終了する要求を出す
-- [ ] 成功時: MainWindow の無効化を解除(または前面表示を維持)して「復元が完了しました。再起動します」と通知し、OK 押下後に終了要求フラグ(再起動)をセットして `self.close()` / `QApplication.quit()` で終了する
-- [ ] 復元中に他の操作(在庫操作・メニュー)が受け付けられないことを確認する
+- [x] 「ファイル」メニューに「復元」を追加する(`QFileDialog.getOpenFileName`、`*.db`)
+- [x] 検査・準備: 待機カーソルのうえで `prepare_restore` を実行する。`InvalidBackupError` は理由(最大 20 件)を表示して中止し、現行 DB・復元元を変更しない
+- [x] 確認ダイアログ(既定ボタンは「いいえ」): 復元元のパス、元の版数(旧版なら「最新版へ移行済み」と明記)、品目数・履歴数、最終履歴日時(`format_local` でローカル時刻)、現行 DB が置き換わること、復元前に自動バックアップを作成すること、完了後に再起動することを表示する
+- [x] キャンセル時・例外時・完了時のいずれでも `try/finally` で `prepared.close()` を呼び、一時ディレクトリを残さない
+- [x] 復元準備・上書き・自動復旧の各段階での開始・完了・失敗を INFO / ERROR ログに記録する(DB 内容は出力しない)
+- [x] 確定後は MainWindow を無効化(`setEnabled(False)`)して操作を停止し、待機カーソルのうえで `apply_restore(prepared, paths.db_path, paths.backup_dir)` を実行する。現行接続は開いたまま操作しない
+- [x] `RestoreError` の扱い
+  - [x] `stage="pre_backup"`: 保存先と原因を表示し、MainWindow を `setEnabled(True)` に戻して現行 DB は未変更のまま操作を再開する
+  - [x] `stage="overwrite"` かつ `recovered=True`: 自動バックアップのパスと原因を表示し、MainWindow を `setEnabled(True)` に戻して `refresh()` して操作を再開する
+  - [x] `stage="recovery"`(`recovered=False`): DB 操作を再開せず、自動バックアップの場所・ログの場所・手動復旧の案内(開発計画書 7.2)を表示して、再起動せず終了コード 1 で終了する要求を出す
+- [x] 成功時: MainWindow の無効化を解除(または前面表示を維持)して「復元が完了しました。再起動します」と通知し、OK 押下後に終了要求フラグ(再起動)をセットして `self.close()` / `QApplication.quit()` で終了する
+- [x] 復元中に他の操作(在庫操作・メニュー)が受け付けられないことを確認する
 
 #### I. 終了・再起動の制御 `app.py`
 
-- [ ] `MainWindow` に終了要求(通常 / 再起動 / 異常終了)を保持する属性を追加し、`QApplication.quit()` で終了する
-- [ ] `build_restart_command()` を追加する(`sys.frozen` なら `[sys.executable]`、そうでなければ `[sys.executable, "-m", "inventory_manager_mini"]`)
-- [ ] `main()`: イベントループ終了後、既存の `finally`(接続クローズ → ロック解放)を完了してから、再起動要求があれば `started, process_id = QProcess.startDetached(command[0], command[1:])` で戻り値 `(bool, int)` を分解する。先頭の成功フラグだけを判定し、タプル全体を真偽判定しない。`started` が偽なら復元済みである旨と手動再起動の案内を表示し、終了コード 1 を返す。異常終了要求は終了コード 1 を返し再起動しない
-- [ ] 再起動後の新プロセスがロックを取得できること(ロック解放が先であること)をテストで確認する
-- [ ] `tests/test_app.py`
-  - [ ] 再起動要求時に、接続クローズ・ロック解放の後に `startDetached` が呼ばれること(呼び出し順を記録)。成功時の差し替えは `(True, 12345)` を返し、成功扱いになること
-  - [ ] `startDetached` の差し替えが `(False, 0)` を返した場合、タプル自体は真でも起動失敗と判定され、復元済みである旨・手動起動の案内が表示され、終了コード 1 になること
-  - [ ] 異常終了要求では再起動しないこと
-  - [ ] `build_restart_command` が通常実行・凍結実行で正しいこと
+- [x] `MainWindow` に終了要求(通常 / 再起動 / 異常終了)を保持する属性を追加し、`QApplication.quit()` で終了する
+- [x] `build_restart_command()` を追加する(`sys.frozen` なら `[sys.executable]`、そうでなければ `[sys.executable, "-m", "inventory_manager_mini"]`)
+- [x] `main()`: イベントループ終了後、既存の `finally`(接続クローズ → ロック解放)を完了してから、再起動要求があれば `started, process_id = QProcess.startDetached(command[0], command[1:])` で戻り値 `(bool, int)` を分解する。先頭の成功フラグだけを判定し、タプル全体を真偽判定しない。`started` が偽なら復元済みである旨と手動再起動の案内を表示し、終了コード 1 を返す。異常終了要求は終了コード 1 を返し再起動しない
+- [x] 再起動後の新プロセスがロックを取得できること(ロック解放が先であること)をテストで確認する
+- [x] `tests/test_app.py`
+  - [x] 再起動要求時に、接続クローズ・ロック解放の後に `startDetached` が呼ばれること(呼び出し順を記録)。成功時の差し替えは `(True, 12345)` を返し、成功扱いになること
+  - [x] `startDetached` の差し替えが `(False, 0)` を返した場合、タプル自体は真でも起動失敗と判定され、復元済みである旨・手動起動の案内が表示され、終了コード 1 になること
+  - [x] 異常終了要求では再起動しないこと
+  - [x] `build_restart_command` が通常実行・凍結実行で正しいこと
 
 #### J. 5b のテスト(実ファイル DB・`tmp_path`)
 
-- [ ] 復元の成功: 検査・確認・自動バックアップ・上書き・再起動要求まで通ること。復元後の DB が復元元と一致し、復元元ファイルの内容が変化しないこと
-- [ ] 確認で「いいえ」: 現行 DB と復元元が変化せず、一時ディレクトリが残らないこと
-- [ ] 不正ファイル(版数 0・新版・スキーマ不一致・SQLite 破損・業務整合性違反)が拒否され、現行 DB が変化しないこと
-- [ ] 旧版(v3 など)の復元元が最新版へ移行されて復元されること
-- [ ] `pre_backup`・`overwrite`(復旧成功)・`recovery`(復旧失敗)の各失敗の表示と、操作再開の有無
-- [ ] 上書き失敗後の自動復旧に成功した場合、開いたままの現行接続から復旧後のデータを正しく読めること(WAL の別接続からの `backup()` 上書きでも一貫していること)。成立しない場合は、現行接続を閉じて開き直す方式に切り替え、本書と開発計画書 7.2 を同期する
-- [ ] 復元準備・上書き・自動復旧の各段階でのログ出力(INFO / ERROR)が記録されること
-- [ ] 復元で `ui_settings.json` が変化しないこと(5c で追加する設定ファイルがあれば同ファイルのバイト列で確認)
+- [x] 復元の成功: 検査・確認・自動バックアップ・上書き・再起動要求まで通ること。復元後の DB が復元元と一致し、復元元ファイルの内容が変化しないこと
+- [x] 確認で「いいえ」: 現行 DB と復元元が変化せず、一時ディレクトリが残らないこと
+- [x] 不正ファイル(版数 0・新版・スキーマ不一致・SQLite 破損・業務整合性違反)が拒否され、現行 DB が変化しないこと
+- [x] 旧版(v3 など)の復元元が最新版へ移行されて復元されること
+- [x] `pre_backup`・`overwrite`(復旧成功)・`recovery`(復旧失敗)の各失敗の表示と、操作再開の有無
+- [x] 上書き失敗後の自動復旧に成功した場合、開いたままの現行接続から復旧後のデータを正しく読めること(WAL の別接続からの `backup()` 上書きでも一貫していること)。成立しない場合は、現行接続を閉じて開き直す方式に切り替え、本書と開発計画書 7.2 を同期する
+- [x] 復元準備・上書き・自動復旧の各段階でのログ出力(INFO / ERROR)が記録されること
+- [x] 復元で `ui_settings.json` が変化しないこと(5c で追加する設定ファイルがあれば同ファイルのバイト列で確認)
 
 #### K. 5b の仕上げ
 
-- [ ] 開発計画書 7.2 の復元フロー・失敗時の対応表と実装を照合し、差異があれば同期する
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] 開発計画書 7.2 の復元フロー・失敗時の対応表と実装を照合し、差異があれば同期する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [ ] 5b の PR を作成し、CI 成功後にマージする
 
 ### 5c. 表示設定・設定ダイアログ・150% 検証・文書(`feature/phase5-display-settings`)

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from inventory_manager_mini import __version__
@@ -16,7 +18,12 @@ from inventory_manager_mini.core.errors import (
     UnsupportedSchemaError,
 )
 from inventory_manager_mini.core.reports import ReportService
-from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
+from inventory_manager_mini.core.services import (
+    BackupService,
+    InventoryService,
+    MasterService,
+    SettingsService,
+)
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, open_database
 from inventory_manager_mini.ui.context import AppContext
@@ -26,7 +33,7 @@ from inventory_manager_mini.ui.error_handling import (
     run_guarded,
     show_unexpected_error,
 )
-from inventory_manager_mini.ui.main_window import MainWindow
+from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
 from inventory_manager_mini.ui.signals import DataBus
 from inventory_manager_mini.ui.single_instance import SingleInstanceLock
 
@@ -62,6 +69,7 @@ def build_context(conn: sqlite3.Connection, paths: AppPaths) -> AppContext:
         master=MasterService(conn),
         settings=SettingsService(conn),
         reports=ReportService(conn),
+        backup=BackupService(conn),
         paths=paths,
         data_bus=DataBus(),
         db_path=paths.db_path,
@@ -85,6 +93,26 @@ def _show_database_error(
     QMessageBox.critical(None, "データベースを開けません", message)
 
 
+def build_restart_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, "-m", "inventory_manager_mini"]
+
+
+def _restart_application() -> int:
+    command = build_restart_command()
+    started, _process_id = QProcess.startDetached(command[0], command[1:])
+    if started:
+        return 0
+    logger.error("アプリを再起動できませんでした: command=%s", command)
+    QMessageBox.critical(
+        None,
+        APP_NAME,
+        "復元済みです。アプリを再起動できなかったため、手動で起動してください。",
+    )
+    return 1
+
+
 def main(paths: AppPaths | None = None) -> int:
     application = QApplication.instance()
     if application is None:
@@ -99,6 +127,8 @@ def main(paths: AppPaths | None = None) -> int:
         return 0
 
     conn: sqlite3.Connection | None = None
+    exit_code = 0
+    exit_request = ExitRequest.NORMAL
     try:
         setup_logging(resolved_paths.log_path)
         install_excepthook(resolved_paths.log_path)
@@ -120,7 +150,8 @@ def main(paths: AppPaths | None = None) -> int:
         window = MainWindow(context)
         window.show()
         show_startup_notifications(context, window)
-        return application.exec()
+        exit_code = application.exec()
+        exit_request = window.exit_request
     except Exception as error:
         show_unexpected_error(None, error)
         return 1
@@ -132,3 +163,10 @@ def main(paths: AppPaths | None = None) -> int:
             logger.exception("データベース接続を閉じられませんでした")
         finally:
             lock.release()
+
+    # 接続クローズとロック解放の後でなければ、新プロセスがロックを取得できない
+    if exit_request is ExitRequest.ABNORMAL:
+        return 1
+    if exit_request is ExitRequest.RESTART:
+        return _restart_application()
+    return exit_code

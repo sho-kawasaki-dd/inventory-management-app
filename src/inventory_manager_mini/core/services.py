@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from inventory_manager_mini.core.errors import (
     AlreadyReversedError,
     CategoryCycleError,
+    FileOutputError,
     InactiveItemError,
     InactiveMasterError,
     InvalidBackupError,
@@ -912,26 +913,40 @@ class PreparedRestore:
 class BackupService:
     def __init__(
         self,
+        conn: sqlite3.Connection | None = None,
         clock: Callable[[], datetime] = utc_now,
         tz: tzinfo | None = None,
     ) -> None:
+        self.conn = conn
         self.clock = clock
         self.tz = tz
 
     def _timestamp(self) -> str:
         return local_timestamp_for_filename(now=self.clock(), tz=self.tz)
 
+    def create_current_backup(self, dest_dir: Path) -> Path:
+        if self.conn is None:
+            raise RuntimeError("現行データベースの接続が設定されていません")
+        return self.create_backup(self.conn, dest_dir)
+
     def create_backup(self, conn: sqlite3.Connection, dest_dir: Path) -> Path:
         reasons = self.inspect_database(conn, SCHEMA_VERSION)
         if reasons:
             raise ValidationError("バックアップを作成できません: " + "、".join(reasons[:20]))
         dest_dir = Path(dest_dir)
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise FileOutputError(
+                f"バックアップの保存先を作成できません: {dest_dir} ({error})"
+            ) from error
         dest_path = dest_dir / f"inventory_{self._timestamp()}.db"
         try:
             copy_database(conn, dest_path)
         except FileExistsError as error:
             raise ValidationError("同名のバックアップファイルがすでに存在します") from error
+        except OSError as error:
+            raise FileOutputError(f"バックアップを書き込めません: {dest_path} ({error})") from error
         return dest_path
 
     def inspect_database(self, conn: sqlite3.Connection, version: int) -> list[str]:
