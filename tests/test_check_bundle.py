@@ -17,7 +17,7 @@ FIXED_FILES = [
     "_internal/PySide6/plugins/platforms/qwindows.dll",
     "_internal/inventory_manager_mini/db/schema.sql",
     "_internal/inventory_manager_mini/db/schema_v3.sql",
-    f"_internal/inventory-manager-mini-{VERSION}.dist-info/METADATA",
+    f"_internal/inventory_manager_mini-{VERSION}.dist-info/METADATA",
     "LICENSE",
     "DISTRIBUTION_LICENSE.txt",
     "THIRD_PARTY_NOTICES.txt",

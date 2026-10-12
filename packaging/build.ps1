@@ -322,7 +322,10 @@ print(json.dumps({
     )
     $toolchain = $toolchainOutput | ConvertFrom-Json
     $uvVersionOutput = Invoke-CheckedExternal -Executable $uvCommand.Source -Arguments @('--version')
-    $uvVersion = ($uvVersionOutput -split '\s+')[-1]
+    if ($uvVersionOutput -notmatch '^uv\s+(\d+\.\d+\.\d+\S*)') {
+        throw "uv の版を特定できません: $uvVersionOutput"
+    }
+    $uvVersion = $Matches[1]
 
     $sourceName = "inventory-manager-mini-$Version$Suffix-sources.zip"
     $sourceTree = Join-Path $stagingDirectory 'source-tree'

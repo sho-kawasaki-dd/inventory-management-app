@@ -33,7 +33,7 @@ def _required_files(version: str) -> list[Path]:
         internal / "PySide6" / "plugins" / "platforms" / "qwindows.dll",
         internal / "inventory_manager_mini" / "db" / "schema.sql",
         internal / "inventory_manager_mini" / "db" / "schema_v3.sql",
-        internal / f"inventory-manager-mini-{version}.dist-info" / "METADATA",
+        internal / f"inventory_manager_mini-{version}.dist-info" / "METADATA",
         Path("LICENSE"),
         Path("DISTRIBUTION_LICENSE.txt"),
         Path("THIRD_PARTY_NOTICES.txt"),
@@ -65,7 +65,7 @@ def check_bundle(bundle_dir: Path, *, project_file: Path | None = None) -> list[
             problems.append(f"読み取れません: {relative_path.as_posix()}")
 
     metadata_path = (
-        bundle_dir / "_internal" / f"inventory-manager-mini-{version}.dist-info" / "METADATA"
+        bundle_dir / "_internal" / f"inventory_manager_mini-{version}.dist-info" / "METADATA"
     )
     if metadata_path.is_file():
         try:

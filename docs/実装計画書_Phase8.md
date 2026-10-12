@@ -195,7 +195,7 @@
   - [x] `PySide6/QtPrintSupport.pyd`・`PySide6/Qt6PrintSupport.dll`
   - [x] `PySide6/plugins/platforms/qwindows.dll`
   - [x] `inventory_manager_mini/db/schema.sql`・`schema_v3.sql`
-  - [x] `inventory-manager-mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致)
+  - [x] `inventory_manager_mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致。実ビルドの正規化名)
   - [x] exe と同じ階層の `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/GPL-3.0.txt` と `packaging/licenses/` の各本文、および UI が参照する資源
   - [x] ライブラリ・SQL・dist-info は `_internal`、利用者向け文書は exe と同じ階層を基準に検査する
 - [ ] 実ビルドで配置を確定し、必要なら検査パスを調整する(G)
@@ -218,8 +218,9 @@
 
 #### G. ローカルでの確認
 
-- [ ] `packaging/build.ps1 -Version 0.1.0` が成功し、`check_bundle.py` が合格する
+- [x] `packaging/build.ps1 -Version 0.1.0` が成功し、`check_bundle.py` が合格する(実ビルドで dist-info 名が `inventory_manager_mini-<版数>.dist-info` と判明したため検査パスを修正、構成一覧の uv 版の抽出を修正)
 - [ ] 開発 PC ではインストーラーの起動チェックを外し、`INVENTORY_MANAGER_MINI_DATA_DIR` に一時ディレクトリを指定した同じシェルから exe を直接起動する。起動前に環境変数を確認し、起動後にバージョン情報の DB パスを照合する。インストーラーからの起動と復元後の再起動の検証は開発 PC で行わない
+  - 実施済み: 一時保存先を指定して exe を直接起動し、MainWindow の表示と一時保存先への `inventory.db`・`logs`・`backups` の作成を確認。未実施: バージョン情報の DB パス照合(手動)
 - [ ] 実データのない隔離環境で、一時保存先を指定したシェルからインストーラーを実行し、インストール後の起動・復元後の再起動に一時保存先が継承されることを DB パスで確認する。継承失敗時は原因を記録し、起動経路を修正・再検証する
 - [ ] 保存先上書きなしのインストールと初回起動は、実データのない Sandbox・VM 等でのみ確認する。起動前に検証環境と保存先を確認し、DB マイグレーションによる実データ変更を防ぐ
 - [ ] Phase 2 で未確認だった「品目登録の DB 保存」と「バージョン情報の表示内容(アプリ版・スキーマ版・DB パス)」を凍結版で確認する
@@ -285,9 +286,9 @@
 
 | 項目 | 結果 | 備考 |
 | --- | --- | --- |
-| ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 未実施 | |
-| `check_bundle.py` の合格 | 未実施 | |
-| インストーラーのサイズ | 未実施 | |
+| ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 確認済み(ローカル検証版) | PyInstaller 6.22.3、Python 3.13.12、Qt/PySide6 6.11.2、Inno Setup 6.7.3、uv 0.11.32 |
+| `check_bundle.py` の合格 | 確認済み | `build.ps1 -Version 0.1.0` の工程内で合格 |
+| インストーラーのサイズ | 確認済み | 約 34.6 MB(`inventory-manager-mini-0.1.0-setup.exe`) |
 | 凍結版での品目登録・バージョン情報 | 未実施 | |
 | 法的通知・ライセンス本文・対応ソースと依存の版対応 | 未実施 | |
 | 提供ソースからのビルド・インストール | 未実施 | |
