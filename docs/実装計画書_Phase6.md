@@ -271,8 +271,8 @@
   - [x] CSV を Excel で開き、文字化けがなく、「(すべて)」・名称・数値が画面と一致すること。同名ファイルを開いたまま上書きしたときのエラー表示
   - [x] 1366×768・文字サイズ 150% の画面で収まること
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 6b の PR を作成し、CI 成功後にマージする
-- [ ] 本書のステータスを更新し、Phase 6 完了(開発計画書 9 章)を確認する
+- [x] 6b の PR を作成し、CI 成功後にマージする
+- [x] 本書のステータスを更新し、Phase 6 完了(開発計画書 9 章)を確認する
 
 ### 6c. 品目・カテゴリの絞り込みと内訳軸の拡張(`feature/phase6-dashboard-item-category`)
 
