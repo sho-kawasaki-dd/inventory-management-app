@@ -403,7 +403,10 @@ def test_dashboard_refresh_and_render_with_large_history(
     qtbot.addWidget(dashboard)
     if kind is PeriodKind.ANNUAL:
         dashboard.kind_combo.setCurrentIndex(dashboard.kind_combo.findData(kind))
-    dashboard.group_combo.setCurrentIndex(dashboard.group_combo.findData("client_purchaser"))
+    for axis in (GroupAxis.CLIENT, GroupAxis.PURCHASER):
+        dashboard.group_checks[axis].blockSignals(True)
+        dashboard.group_checks[axis].setChecked(True)
+        dashboard.group_checks[axis].blockSignals(False)
     original_dashboard_result = context.reports.dashboard_result
     started_at: list[float] = []
 

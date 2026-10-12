@@ -7,11 +7,13 @@ from pathlib import Path
 
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
-from PySide6.QtCore import QIODevice, QSaveFile, Qt, QTimer
-from PySide6.QtGui import QCursor, QHideEvent, QPainter, QShowEvent
+from PySide6.QtCore import QEvent, QIODevice, QObject, QSaveFile, Qt, QTimer
+from PySide6.QtGui import QCursor, QFocusEvent, QHideEvent, QPainter, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QCompleter,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -27,10 +29,12 @@ from PySide6.QtWidgets import (
 
 from inventory_manager_mini.core.errors import FileOutputError
 from inventory_manager_mini.core.models import (
+    Category,
     Client,
     DashboardResult,
     DashboardRow,
     GroupAxis,
+    ItemChoice,
     PeriodKind,
     Purchaser,
 )
@@ -39,15 +43,16 @@ from inventory_manager_mini.ui.csv_export import export_csv_with_dialog, export_
 from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 
 logger = logging.getLogger(__name__)
 
-_GROUP_AXES: dict[str, frozenset[GroupAxis]] = {
-    "none": frozenset(),
-    "client": frozenset({GroupAxis.CLIENT}),
-    "purchaser": frozenset({GroupAxis.PURCHASER}),
-    "client_purchaser": frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER}),
-}
+_GROUP_AXIS_LABELS: tuple[tuple[GroupAxis, str], ...] = (
+    (GroupAxis.CLIENT, "クライアント"),
+    (GroupAxis.PURCHASER, "発注主体"),
+    (GroupAxis.CATEGORY, "カテゴリ"),
+    (GroupAxis.ITEM, "品目"),
+)
 
 
 def _axis_parameters(maximum: int) -> tuple[int, int]:
@@ -72,12 +77,16 @@ def _axis_parameters(maximum: int) -> tuple[int, int]:
 class _DashboardSnapshot:
     clients: tuple[Client, ...]
     purchasers: tuple[Purchaser, ...]
+    categories: tuple[Category, ...]
+    item_choices: tuple[ItemChoice, ...]
     years: tuple[int, ...]
     client_id: int | None
     purchaser_id: int | None
+    category_id: int | None
+    item_id: int | None
     fiscal_year: int
     kind: PeriodKind
-    group_by: str
+    group_axes: frozenset[GroupAxis]
     result: DashboardResult
 
 
@@ -92,6 +101,7 @@ class DashboardWindow(QWidget):
         self._shutdown = False
         self._positioned = False
         self._signals_blocked = False
+        self._item_id: int | None = None
 
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
@@ -101,33 +111,56 @@ class DashboardWindow(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        filters = QHBoxLayout()
         self.client_combo = QComboBox(self)
         self.purchaser_combo = QComboBox(self)
+        self.category_picker = CategoryPicker(self)
+        self.item_combo = QComboBox(self)
+        self.item_combo.setEditable(True)
+        self.item_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.item_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.item_combo.setMinimumContentsLength(16)
+        completer = QCompleter(self.item_combo.model(), self.item_combo)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.item_combo.setCompleter(completer)
+        line_edit = self.item_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.installEventFilter(self)
+            line_edit.returnPressed.connect(self._commit_item_input)
+        self.item_combo.activated.connect(self._item_activated)
         self.year_combo = QComboBox(self)
         self.kind_combo = QComboBox(self)
         self.kind_combo.addItem("月次", PeriodKind.MONTHLY)
         self.kind_combo.addItem("年次", PeriodKind.ANNUAL)
-        self.group_combo = QComboBox(self)
-        for label, key in (
-            ("なし", "none"),
-            ("クライアント別", "client"),
-            ("発注主体別", "purchaser"),
-            ("クライアント×発注主体", "client_purchaser"),
-        ):
-            self.group_combo.addItem(label, key)
+        self.group_checks: dict[GroupAxis, QCheckBox] = {
+            axis: QCheckBox(label, self) for axis, label in _GROUP_AXIS_LABELS
+        }
 
-        for label, combo in (
-            ("クライアント", self.client_combo),
-            ("発注主体", self.purchaser_combo),
-            ("年度", self.year_combo),
-            ("期間", self.kind_combo),
-            ("内訳", self.group_combo),
+        narrowing = QHBoxLayout()
+        for label, widget, stretch in (
+            ("クライアント", self.client_combo, 1),
+            ("発注主体", self.purchaser_combo, 1),
+            ("カテゴリ", self.category_picker, 2),
+            ("品目", self.item_combo, 2),
         ):
             form = QFormLayout()
+            form.addRow(label, widget)
+            narrowing.addLayout(form, stretch)
+        outer.addLayout(narrowing)
+
+        display = QHBoxLayout()
+        for label, combo in (("年度", self.year_combo), ("期間", self.kind_combo)):
+            form = QFormLayout()
             form.addRow(label, combo)
-            filters.addLayout(form, 1)
-        outer.addLayout(filters)
+            display.addLayout(form)
+        display.addWidget(QLabel("内訳", self))
+        for check in self.group_checks.values():
+            display.addWidget(check)
+        display.addStretch(1)
+        outer.addLayout(display)
 
         self.totals_label = QLabel(
             "入庫数: --　出庫数: --　支出額: --　単価未登録数量: --　廃棄数: --　廃棄額: --",
@@ -190,11 +223,51 @@ class DashboardWindow(QWidget):
             self.purchaser_combo,
             self.year_combo,
             self.kind_combo,
-            self.group_combo,
         ):
             combo.currentIndexChanged.connect(self._conditions_changed)
+        for check in self.group_checks.values():
+            check.toggled.connect(self._conditions_changed)
+        self.category_picker.category_changed.connect(self._conditions_changed)
 
-    def _conditions_changed(self, _index: int) -> None:
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            isinstance(event, QFocusEvent)
+            and event.type() == QEvent.Type.FocusOut
+            and event.reason() != Qt.FocusReason.PopupFocusReason
+            and watched is self.item_combo.lineEdit()
+        ):
+            self._commit_item_input()
+        return super().eventFilter(watched, event)
+
+    def _item_activated(self, _index: int) -> None:
+        self._commit_item_input()
+
+    def _commit_item_input(self) -> None:
+        if self._signals_blocked or self._shutdown:
+            return
+        index = self.item_combo.findText(
+            self.item_combo.currentText(),
+            Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchCaseSensitive,
+        )
+        if index < 0:
+            self._show_item_selection()
+            return
+        item_id = self.item_combo.itemData(index)
+        if item_id == self._item_id:
+            return
+        self._item_id = item_id
+        self._conditions_changed(index)
+
+    def _show_item_selection(self) -> None:
+        index = max(self.item_combo.findData(self._item_id), 0)
+        self._signals_blocked = True
+        try:
+            self.item_combo.setCurrentIndex(index)
+            self.item_combo.setEditText(self.item_combo.itemText(index))
+        finally:
+            self._signals_blocked = False
+
+    def _conditions_changed(self, _index: object) -> None:
         if self._signals_blocked or self._shutdown:
             return
         self._stale = True
@@ -211,6 +284,8 @@ class DashboardWindow(QWidget):
     def _collect_snapshot(self) -> _DashboardSnapshot:
         clients = tuple(self.context.master.list_clients(include_inactive=True))
         purchasers = tuple(self.context.master.list_purchasers(include_inactive=True))
+        categories = tuple(self.context.master.list_categories())
+        item_choices = tuple(self.context.inventory.list_item_choices())
         years = tuple(self.context.reports.available_fiscal_years())
         current_year = self.context.reports.current_fiscal_year()
 
@@ -222,29 +297,45 @@ class DashboardWindow(QWidget):
             if any(item.id == selected_purchaser for item in purchasers)
             else None
         )
+        selected_category = self.category_picker.current_category_id()
+        category_id = (
+            selected_category
+            if any(category.id == selected_category for category in categories)
+            else None
+        )
+        item_id = (
+            self._item_id if any(choice.id == self._item_id for choice in item_choices) else None
+        )
         selected_year = self.year_combo.currentData()
         fiscal_year = selected_year if selected_year in years else current_year
         if fiscal_year not in years:
             fiscal_year = years[-1] if years else current_year
         kind = PeriodKind(self.kind_combo.currentData() or PeriodKind.MONTHLY)
-        group_key = self.group_combo.currentData()
-        group_by = group_key if group_key in _GROUP_AXES else "none"
+        group_axes = frozenset(
+            axis for axis, check in self.group_checks.items() if check.isChecked()
+        )
         result = self.context.reports.dashboard_result(
             None if kind is PeriodKind.ANNUAL else fiscal_year,
             kind,
             client_id,
             purchaser_id,
-            group_by=_GROUP_AXES[group_by],
+            category_id,
+            item_id,
+            group_by=group_axes,
         )
         return _DashboardSnapshot(
             clients,
             purchasers,
+            categories,
+            item_choices,
             years,
             client_id,
             purchaser_id,
+            category_id,
+            item_id,
             fiscal_year,
             kind,
-            group_by,
+            group_axes,
             result,
         )
 
@@ -274,6 +365,12 @@ class DashboardWindow(QWidget):
             self._fill_master_combo(
                 self.purchaser_combo, snapshot.purchasers, snapshot.purchaser_id
             )
+            self.category_picker.setEnabled(True)
+            self.category_picker.set_categories(list(snapshot.categories), leading_label="すべて")
+            self.category_picker.set_current_category_id(snapshot.category_id)
+            self._item_id = snapshot.item_id
+            self.item_combo.setEnabled(True)
+            self._fill_item_combo(self.item_combo, snapshot.item_choices, snapshot.item_id)
             self.year_combo.clear()
             for year in snapshot.years:
                 self.year_combo.addItem(f"{year}年度", year)
@@ -281,7 +378,8 @@ class DashboardWindow(QWidget):
             self.year_combo.setCurrentIndex(max(index, 0))
             self.year_combo.setEnabled(snapshot.kind is PeriodKind.MONTHLY)
             self.kind_combo.setCurrentIndex(max(self.kind_combo.findData(snapshot.kind), 0))
-            self.group_combo.setCurrentIndex(max(self.group_combo.findData(snapshot.group_by), 0))
+            for axis, check in self.group_checks.items():
+                check.setChecked(axis in snapshot.group_axes)
         finally:
             self._signals_blocked = False
 
@@ -296,6 +394,11 @@ class DashboardWindow(QWidget):
         try:
             for combo in (self.client_combo, self.purchaser_combo, self.year_combo):
                 combo.clear()
+            self.item_combo.clear()
+            self.item_combo.setEnabled(False)
+            self._item_id = None
+            self.category_picker.set_categories([])
+            self.category_picker.setEnabled(False)
             self.year_combo.setEnabled(False)
         finally:
             self._signals_blocked = False
@@ -374,6 +477,19 @@ class DashboardWindow(QWidget):
             combo.addItem(label, record.id)
         index = combo.findData(selected_id)
         combo.setCurrentIndex(max(index, 0))
+
+    @staticmethod
+    def _fill_item_combo(
+        combo: QComboBox, choices: tuple[ItemChoice, ...], selected_id: int | None
+    ) -> None:
+        combo.clear()
+        combo.addItem("すべて", None)
+        for choice in choices:
+            label = f"{choice.code} {choice.name}"
+            combo.addItem(label if choice.is_active else f"{label} (無効)", choice.id)
+        index = max(combo.findData(selected_id), 0)
+        combo.setCurrentIndex(index)
+        combo.setEditText(combo.itemText(index))
 
     @staticmethod
     def _format_totals(rows: Sequence[DashboardRow]) -> str:

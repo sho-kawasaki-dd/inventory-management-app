@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import NewItem, PeriodKind
+from inventory_manager_mini.core.models import GroupAxis, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
@@ -38,12 +38,10 @@ NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 
 
 class GroupBy:
-    """画面の内訳コンボのキー(6c の P でチェックボックスへ置き換える)。"""
-
-    NONE = "none"
-    CLIENT = "client"
-    PURCHASER = "purchaser"
-    CLIENT_PURCHASER = "client_purchaser"
+    NONE: frozenset[GroupAxis] = frozenset()
+    CLIENT = frozenset({GroupAxis.CLIENT})
+    PURCHASER = frozenset({GroupAxis.PURCHASER})
+    CLIENT_PURCHASER = frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER})
 
 
 FISCAL_2025_LABELS = [f"2025年{month}月" for month in range(4, 13)] + [
@@ -172,6 +170,18 @@ def _select(combo: QComboBox, data: object) -> None:
     combo.setCurrentIndex(index)
 
 
+def _set_group(window: DashboardWindow, axes: frozenset[GroupAxis]) -> None:
+    for axis, check in window.group_checks.items():
+        check.blockSignals(True)
+        check.setChecked(axis in axes)
+        check.blockSignals(False)
+    window._conditions_changed(0)
+
+
+def _group_of(window: DashboardWindow) -> frozenset[GroupAxis]:
+    return frozenset(axis for axis, check in window.group_checks.items() if check.isChecked())
+
+
 def _totals_text(
     inbound: int,
     outbound: int,
@@ -281,6 +291,8 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
             label,
             "(すべて)",
             "(すべて)",
+            "(すべて)",
+            "(すべて)",
             f"{inbound[index]:,}",
             f"{outbound[index]:,}",
             f"{expenditure[index]:,}円",
@@ -290,7 +302,7 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
     ]
     assert _table_rows(window.breakdown_model) == expected_rows
     assert _table_rows(window.disposal_model) == [
-        ["2025年6月", "(すべて)", "(すべて)", "2", "400円"]
+        ["2025年6月", "(すべて)", "(すべて)", "(すべて)", "(すべて)", "2", "400円"]
     ]
 
     assert _bar_series(window.quantity_chart) == {"入庫数": inbound, "出庫数": outbound}
@@ -309,10 +321,12 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
 def test_disposal_table_excludes_rows_without_disposal(qtbot: QtBot, env: Env) -> None:
     window = _open(qtbot, env)
     _select(window.year_combo, 2025)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
 
     assert window.breakdown_model.rowCount() > window.disposal_model.rowCount()
-    assert _table_rows(window.disposal_model) == [["2025年6月", "経理", "(すべて)", "2", "400円"]]
+    assert _table_rows(window.disposal_model) == [
+        ["2025年6月", "経理", "(すべて)", "(すべて)", "(すべて)", "2", "400円"]
+    ]
 
 
 def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, env: Env) -> None:
@@ -321,7 +335,7 @@ def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, en
     assert _category_axis(window.quantity_chart).labelsAngle() == -45
     assert _category_axis(window.amount_chart).labelsAngle() == -45
 
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     assert all(not shiboken6.isValid(chart) for chart in old_charts)
@@ -378,7 +392,7 @@ def test_bar_tooltips_show_period_series_value_and_survive_chart_replacement(
 
     _select(window.kind_combo, PeriodKind.MONTHLY)
     old_chart = window.quantity_chart.chart()
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert not shiboken6.isValid(old_chart)
     new_series = window.quantity_chart.chart().series()[0]
@@ -396,18 +410,18 @@ def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
 
     assert window.breakdown_model.rowCount() == 12
     for group_by in (GroupBy.CLIENT, GroupBy.PURCHASER, GroupBy.CLIENT_PURCHASER):
-        _select(window.group_combo, group_by)
+        _set_group(window, group_by)
 
         assert window.totals_label.text() == label
         assert _bar_series(window.quantity_chart) == quantity
         assert _bar_series(window.amount_chart) == amount
         assert window.breakdown_model.rowCount() == 6
-        assert _column_sum(window.breakdown_model, 3) == 24
-        assert _column_sum(window.breakdown_model, 4) == 14
-        assert _column_sum(window.breakdown_model, 5) == 1300
-        assert _column_sum(window.breakdown_model, 6) == 2
+        assert _column_sum(window.breakdown_model, 5) == 24
+        assert _column_sum(window.breakdown_model, 6) == 14
+        assert _column_sum(window.breakdown_model, 7) == 1300
+        assert _column_sum(window.breakdown_model, 8) == 2
 
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     rows = _table_rows(window.breakdown_model)
     assert [(row[0], row[1], row[2]) for row in rows] == [
         ("2025年5月", "総務", "(すべて)"),
@@ -417,7 +431,7 @@ def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
         ("2025年7月", "総務", "(すべて)"),
         ("2025年8月", "経理", "(すべて)"),
     ]
-    assert [row[3:] for row in rows[:3]] == [
+    assert [row[5:] for row in rows[:3]] == [
         ["10", "4", "400円", "0"],
         ["5", "0", "0円", "0"],
         ["6", "8", "900円", "0"],
@@ -523,7 +537,7 @@ def test_dashboard_breakdown_table_scrolls_when_grouped_rows_overflow(
     qtbot: QtBot, env: Env
 ) -> None:
     window = _open(qtbot, env)
-    _select(window.group_combo, GroupBy.CLIENT_PURCHASER)
+    _set_group(window, GroupBy.CLIENT_PURCHASER)
     assert window._snapshot is not None
     window.breakdown_model.set_rows(window._snapshot.result.breakdown * 50)
     window.tabs.setCurrentIndex(1)
@@ -547,7 +561,7 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
     caplog.set_level("INFO")
     window = _open(qtbot, env)
     _select(window.client_combo, 1)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     destination = tmp_path / "dashboard.csv"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
 
@@ -714,9 +728,9 @@ def test_exports_after_aggregation_failure_use_last_successful_snapshot(
     png_before = selected_path["value"].read_bytes()
 
     probe.fail = True
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     assert len(messages) == 1
-    assert window.group_combo.currentData() == GroupBy.NONE
+    assert _group_of(window) == GroupBy.NONE
 
     selected_path["value"] = tmp_path / "after.csv"
     window.csv_button.click()
@@ -738,7 +752,7 @@ def test_export_buttons_follow_acquisition_and_active_tab(
     assert not window.png_button.isEnabled()
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     assert window.csv_button.isEnabled()
     assert window.png_button.isEnabled()
     window.tabs.setCurrentIndex(1)
@@ -753,7 +767,7 @@ def test_data_changed_updates_once_and_keeps_selection(
 ) -> None:
     window = _open(qtbot, env)
     _select(window.client_combo, 1)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     probe = ReportProbe(monkeypatch, env.context.reports)
     assert window.totals_label.text() == _totals_text(5, 0, 0, 0, 0, 0)
 
@@ -765,7 +779,7 @@ def test_data_changed_updates_once_and_keeps_selection(
     _settle(qtbot, probe, 1)
     assert window.totals_label.text() == _totals_text(12, 0, 0, 0, 0, 0)
     assert window.client_combo.currentData() == 1
-    assert window.group_combo.currentData() == GroupBy.CLIENT
+    assert _group_of(window) == GroupBy.CLIENT
 
     env.master.deactivate_purchaser(1)
     env.context.data_bus.data_changed.emit()
@@ -778,7 +792,7 @@ def test_data_changed_updates_once_and_keeps_selection(
     _settle(qtbot, probe, 3)
     assert _category_axis(window.quantity_chart).categories()[0] == "2026年1月"
     assert window.client_combo.currentData() == 1
-    assert window.group_combo.currentData() == GroupBy.CLIENT
+    assert _group_of(window) == GroupBy.CLIENT
 
 
 def test_hidden_window_defers_aggregation_until_shown(
@@ -885,11 +899,11 @@ def test_aggregation_error_restores_last_successful_state(
     probe = ReportProbe(monkeypatch, env.context.reports)
     probe.fail = True
 
-    _select(window.group_combo, GroupBy.PURCHASER)
+    _set_group(window, GroupBy.PURCHASER)
     assert len(messages) == 1
     assert "範囲を超えます" in messages[0]
     assert probe.calls == 1
-    assert window.group_combo.currentData() == GroupBy.NONE
+    assert _group_of(window) == GroupBy.NONE
     assert window.client_combo.currentData() == 1
     assert window.year_combo.currentData() == 2025
 
@@ -908,9 +922,9 @@ def test_aggregation_error_restores_last_successful_state(
     assert _bar_series(window.quantity_chart) == quantity
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.PURCHASER)
+    _set_group(window, GroupBy.PURCHASER)
     assert len(messages) == 3
-    assert window.group_combo.currentData() == GroupBy.PURCHASER
+    assert _group_of(window) == GroupBy.PURCHASER
 
 
 def test_first_aggregation_failure_keeps_not_acquired_state_until_success(
@@ -961,7 +975,7 @@ def test_condition_change_retries_after_first_failure(
     assert len(messages) == 1
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
 
     assert len(messages) == 1
     assert window._snapshot is not None
