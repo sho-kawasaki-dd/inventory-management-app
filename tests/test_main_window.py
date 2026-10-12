@@ -491,6 +491,117 @@ def test_print_inventory_sheet_without_displayed_rows_shows_message(
     assert messages == ["印刷する品目がありません", "印刷する品目がありません"]
 
 
+def _display_item_ids(window: MainWindow) -> list[int]:
+    return [
+        window.item_model.row_at(
+            window.sort_model.mapToSource(window.sort_model.index(row, 0)).row()
+        ).id
+        for row in range(window.sort_model.rowCount())
+    ]
+
+
+def _capture_inventory_sheet_prints(
+    window: MainWindow, monkeypatch
+) -> list[tuple[list[int], str, str]]:
+    calls: list[tuple[list[int], str, str]] = []
+
+    def record_render(device, rows, filter_summary, printed_at_local, spec, *, page_numbers):
+        calls.append(([row.id for row in rows], filter_summary, printed_at_local))
+
+    class FakePreviewDialog:
+        def __init__(self, printer, orientation, total_pages, render_callback, parent) -> None:
+            self.printer = printer
+            self.render_callback = render_callback
+
+        def exec(self) -> int:
+            self.render_callback(self.printer, None)
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(main_window_module, "render_inventory_sheet", record_render)
+    monkeypatch.setattr(main_window_module, "PrintPreviewDialog", FakePreviewDialog)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "order",
+    [Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder],
+)
+def test_print_inventory_sheet_rows_follow_sort_order(
+    window_with_items, monkeypatch, order: Qt.SortOrder
+) -> None:
+    window, first, second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    calls = _capture_inventory_sheet_prints(window, monkeypatch)
+
+    window.sort_model.sort(1, order)
+    window.print_inventory_sheet_action.trigger()
+
+    expected_ids = [second.id, first.id]
+    if order == Qt.SortOrder.DescendingOrder:
+        expected_ids.reverse()
+    assert _display_item_ids(window) == expected_ids
+    assert [call[0] for call in calls] == [expected_ids]
+
+
+def test_print_inventory_sheet_prints_only_filtered_rows_with_summary(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, second = window_with_items
+    calls = _capture_inventory_sheet_prints(window, monkeypatch)
+
+    window.print_inventory_sheet_action.trigger()
+    window.inactive_checkbox.setChecked(True)
+    window.search_edit.setText("備品")
+    window.search_timer.stop()
+    window.refresh_items()
+    window.print_inventory_sheet_action.trigger()
+
+    assert [call[0] for call in calls] == [[first.id], [second.id]]
+    assert [call[1] for call in calls] == ["(絞り込みなし)", "検索: 備品 / 廃止品目を含む"]
+
+
+def test_print_inventory_sheet_is_available_from_file_menu_and_toolbar(
+    window_with_items, monkeypatch
+) -> None:
+    window, first, _second = window_with_items
+    calls = _capture_inventory_sheet_prints(window, monkeypatch)
+    file_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "ファイル")
+    print_menu = next(a.menu() for a in file_menu.actions() if a.text() == "印刷")
+
+    next(a for a in print_menu.actions() if a.text() == "在庫表").trigger()
+    next(a for a in window.print_toolbar_menu.actions() if a.text() == "在庫表").trigger()
+
+    assert [call[0] for call in calls] == [[first.id], [first.id]]
+
+
+def test_print_inventory_sheet_during_pending_search_uses_last_fetched_state(
+    window_with_items, monkeypatch
+) -> None:
+    window, _first, _second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    expected_ids = _display_item_ids(window)
+    assert len(expected_ids) == 2
+    calls = _capture_inventory_sheet_prints(window, monkeypatch)
+    list_calls: list[object] = []
+    original_list_items = window.context.inventory.list_items
+
+    def count_list_items(item_filter):
+        list_calls.append(item_filter)
+        return original_list_items(item_filter)
+
+    monkeypatch.setattr(window.context.inventory, "list_items", count_list_items)
+
+    window.search_edit.setText("鉛筆")
+    assert window.search_timer.isActive()
+    window.print_inventory_sheet_action.trigger()
+
+    assert calls[0][0] == expected_ids
+    assert calls[0][1] == "廃止品目を含む"
+    assert list_calls == []
+    assert window.search_timer.isActive()
+    window.search_timer.stop()
+
+
 def test_print_labels_uses_display_order_and_fixed_settings_snapshot(
     window_with_items, monkeypatch, tmp_path: Path
 ) -> None:
