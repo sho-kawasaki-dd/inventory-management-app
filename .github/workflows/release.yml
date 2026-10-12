@@ -125,7 +125,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installerPath = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
           $installDirectory = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3'
-          $installerUrl = 'https://files.jrsoftware.org/is/6/innosetup-6.7.3.exe'
+          $installerUrl = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
           Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
           & $installerPath /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$installDirectory"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
