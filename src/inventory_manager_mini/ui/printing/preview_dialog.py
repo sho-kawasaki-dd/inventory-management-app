@@ -113,6 +113,8 @@ class PrintPreviewDialog(QPrintPreviewDialog):
             QMarginsF(0, 0, 0, 0),
             QPageLayout.Unit.Millimeter,
         )
+        # 通常モードでは最小余白未満の余白 0 を実プリンターが拒否する
+        page_layout.setMode(QPageLayout.Mode.FullPageMode)
         if not printer.setPageLayout(page_layout):
             raise RuntimeError("印刷用紙を設定できません")
         printer.setFullPage(True)

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
 from inventory_manager_mini.core.models import REASON_LABELS, ItemFilter, Reason
 from inventory_manager_mini.core.services import PreparedRestore, validate_purchase_url
-from inventory_manager_mini.core.timeutil import format_local
+from inventory_manager_mini.core.timeutil import format_local, utc_now_str
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
 from inventory_manager_mini.ui.dialogs.settings_dialog import SettingsDialog
@@ -39,9 +39,16 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
+from inventory_manager_mini.ui.printing.inventory_sheet_renderer import render_inventory_sheet
 from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
 from inventory_manager_mini.ui.printing.label_renderer import render_labels
-from inventory_manager_mini.ui.printing.layout import LABEL_72212, assign_label_slots
+from inventory_manager_mini.ui.printing.layout import (
+    INVENTORY_SHEET_SPEC,
+    LABEL_72212,
+    assign_label_slots,
+    paginate,
+    summarize_item_filter,
+)
 from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
@@ -62,6 +69,10 @@ class MainWindow(QMainWindow):
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self.context = context
+        self._displayed_item_filter: ItemFilter | None = None
+        self._displayed_filter_names: (
+            tuple[str | None, str | None, str | None, str | None] | None
+        ) = None
         self.exit_request = ExitRequest.NORMAL
         self._dashboard_window: DashboardWindow | None = None
         self.setWindowTitle("Inventory Manager mini")
@@ -177,6 +188,7 @@ class MainWindow(QMainWindow):
         self.print_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.print_toolbar_menu = QMenu(self.print_button)
         self.print_toolbar_menu.addAction(self.print_labels_action)
+        self.print_toolbar_menu.addAction(self.print_inventory_sheet_action)
         self.print_button.setMenu(self.print_toolbar_menu)
         self.toolbar.addWidget(self.print_button)
 
@@ -219,6 +231,9 @@ class MainWindow(QMainWindow):
         self.print_labels_action = QAction("棚ラベル", self)
         self.print_labels_action.triggered.connect(self._print_labels)
         self.print_menu.addAction(self.print_labels_action)
+        self.print_inventory_sheet_action = QAction("在庫表", self)
+        self.print_inventory_sheet_action.triggered.connect(self._print_inventory_sheet)
+        self.print_menu.addAction(self.print_inventory_sheet_action)
         file_menu.addSeparator()
         self.backup_action = QAction("バックアップ", self)
         self.backup_action.triggered.connect(self._create_backup)
@@ -351,15 +366,30 @@ class MainWindow(QMainWindow):
 
     def refresh_items(self, *_args, selected_item_ids: list[int] | None = None) -> None:
         item_filter = self._current_item_filter()
+        filter_names = (
+            self._combo_display_name(self.client_combo, item_filter.client_id),
+            self._combo_display_name(self.purchaser_combo, item_filter.purchaser_id),
+            self.category_picker.display.text() if item_filter.category_id is not None else None,
+            self._combo_display_name(self.location_combo, item_filter.location_id),
+        )
         if selected_item_ids is None:
             selected_item_ids = self._selected_item_ids()
         succeeded, rows = run_guarded(self, lambda: self.context.inventory.list_items(item_filter))
         if not succeeded or rows is None:
             return
         self.item_model.set_rows(rows)
+        self._displayed_item_filter = item_filter
+        self._displayed_filter_names = filter_names
         self._restore_item_selection(selected_item_ids)
         self.statusBar().showMessage(f"{len(rows):,} 件")
         self._update_selection_actions()
+
+    @staticmethod
+    def _combo_display_name(combo: QComboBox, entity_id: int | None) -> str | None:
+        if entity_id is None:
+            return None
+        index = combo.findData(entity_id)
+        return combo.itemText(index) if index >= 0 else None
 
     def _restore_item_selection(self, item_ids: list[int]) -> None:
         selection_model = self.table.selectionModel()
@@ -459,6 +489,59 @@ class MainWindow(QMainWindow):
 
     def _print_labels(self) -> None:
         run_guarded(self, self._run_print_labels)
+
+    def _print_inventory_sheet(self) -> None:
+        run_guarded(self, self._run_print_inventory_sheet)
+
+    def _run_print_inventory_sheet(self) -> None:
+        if self._displayed_item_filter is None or self._displayed_filter_names is None:
+            QMessageBox.information(self, "在庫表", "印刷する品目がありません")
+            return
+
+        rows = []
+        for proxy_row in range(self.sort_model.rowCount()):
+            source_index = self.sort_model.mapToSource(self.sort_model.index(proxy_row, 0))
+            if source_index.isValid():
+                rows.append(self.item_model.row_at(source_index.row()))
+        if not rows:
+            QMessageBox.information(self, "在庫表", "印刷する品目がありません")
+            return
+
+        filter_summary = summarize_item_filter(
+            self._displayed_item_filter,
+            client_name=self._displayed_filter_names[0],
+            purchaser_name=self._displayed_filter_names[1],
+            category_path=self._displayed_filter_names[2],
+            location_name=self._displayed_filter_names[3],
+        )
+        printed_at_local = format_local(utc_now_str())
+        total_pages = len(
+            paginate(
+                len(rows),
+                INVENTORY_SHEET_SPEC.first_page_rows,
+                INVENTORY_SHEET_SPEC.other_page_rows,
+            )
+        )
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+
+        def render(device: QPrinter, page_numbers: Sequence[int] | None) -> None:
+            render_inventory_sheet(
+                device,
+                rows,
+                filter_summary,
+                printed_at_local,
+                INVENTORY_SHEET_SPEC,
+                page_numbers=page_numbers,
+            )
+
+        preview = PrintPreviewDialog(
+            printer,
+            QPageLayout.Orientation.Landscape,
+            total_pages,
+            render,
+            parent=self,
+        )
+        preview.exec()
 
     def _run_print_labels(self) -> None:
         settings = load_display_settings(self.context.paths.ui_settings_path)
