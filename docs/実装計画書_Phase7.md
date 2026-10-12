@@ -213,7 +213,7 @@
 
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
 - [x] 本書の 7a のチェックボックスを更新する
-- [ ] 7a の PR を作成し、CI 成功後にマージする
+- [x] 7a の PR を作成し、CI 成功後にマージする
 
 ### 7b. 在庫表・手動確認・文書(`feature/phase7-inventory-sheet`)
 
