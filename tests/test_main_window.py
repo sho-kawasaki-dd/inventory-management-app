@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QToolBar
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QToolBar, QWidget
 
 from inventory_manager_mini.core import services
 from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
@@ -22,6 +22,7 @@ from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from inventory_manager_mini.ui.csv_export import _choose_export_path
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
@@ -813,6 +814,48 @@ def test_csv_export_does_not_confirm_regular_csv_path_again(
     window.export_items_action.trigger()
 
     assert _read_csv(existing)[0][0] == "管理番号"
+
+
+def test_png_export_path_completes_extension_without_extra_confirmation(
+    qtbot, monkeypatch, tmp_path: Path
+) -> None:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    _forbid_overwrite_question(monkeypatch)
+    _patch_save_dialog(monkeypatch, tmp_path / "dashboard")
+
+    path = _choose_export_path(
+        parent, "ダッシュボード", "ダッシュボード", ".png", "PNG ファイル (*.png)"
+    )
+
+    assert path == tmp_path / "dashboard.png"
+
+
+@pytest.mark.parametrize("answer", [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+def test_png_export_path_confirms_overwrite_after_extension_completion(
+    qtbot, monkeypatch, tmp_path: Path, answer
+) -> None:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    existing = tmp_path / "dashboard.png"
+    existing.write_bytes(b"old")
+    _patch_save_dialog(monkeypatch, tmp_path / "dashboard")
+    questions = []
+
+    def fake_question(_parent, _title, _text, _buttons, default):
+        questions.append(default)
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+    path = _choose_export_path(
+        parent, "ダッシュボード", "ダッシュボード", "png", "PNG ファイル (*.png)"
+    )
+
+    assert questions == [QMessageBox.StandardButton.No]
+    assert path == (existing if answer == QMessageBox.StandardButton.Yes else None)
+    if answer == QMessageBox.StandardButton.No:
+        assert existing.read_bytes() == b"old"
 
 
 def test_csv_export_failure_shows_error_and_keeps_app_running(

@@ -194,8 +194,8 @@
 
 #### G. 保存先選択の共通化 `ui/csv_export.py`
 
-- [ ] `_choose_csv_path` を、拡張子・既定名の接頭辞・フィルタ文字列を受け取る汎用の保存先選択に変える(拡張子補完と補完後の上書き確認の規則は現行どおり)。CSV の呼び出しは挙動を変えない
-- [ ] 既存の `tests/test_main_window.py`・`tests/test_history_dialog.py` の CSV 保存先テストが変更なしで成功すること。PNG 用の拡張子補完・補完後の上書き確認を追加で検証する
+- [x] `_choose_csv_path` を、拡張子・既定名の接頭辞・フィルタ文字列を受け取る汎用の保存先選択に変える(拡張子補完と補完後の上書き確認の規則は現行どおり)。CSV の呼び出しは挙動を変えない
+- [x] 既存の `tests/test_main_window.py`・`tests/test_history_dialog.py` の CSV 保存先テストが変更なしで成功すること。PNG 用の拡張子補完・補完後の上書き確認を追加で検証する
 
 #### H. CSV 出力・PNG 保存 `ui/widgets/dashboard.py`
 
