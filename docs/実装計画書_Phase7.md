@@ -150,13 +150,13 @@
 
 #### F. ラベル描画 `ui/printing/label_renderer.py`(新規)
 
-- [ ] `render_labels(device: QPagedPaintDevice, placements, items_by_id, spec, offset_left_mm, offset_top_mm, *, page_numbers=None) -> None` を実装する
+- [x] `render_labels(device: QPagedPaintDevice, placements, items_by_id, spec, offset_left_mm, offset_top_mm, *, page_numbers=None) -> None` を実装する
   - `page_numbers=None` は全ページ、それ以外は 2.3 の元ページ番号列とする。元の面付けから対象ページだけを選び、位置番号を詰め直さない。元の 2 ページ目以降には 1 ページ目の位置チェックを再適用しない。`placements` が空なら開始せず何も描かない
   - 共通クラスによる用紙設定の検証後、`QPainter.begin(device)` の戻り値を確認して開始する。`False` なら例外にして描画を続けない。`device.logicalDpiX()/Y()` で mm をデバイス座標へ変換する
   - 出力するページとページの間だけ `device.newPage()` を呼び、`False` なら例外にして後続ページを描かない。最初の出力ページの前や最後のページの後には呼ばない
   - 各ラベルは `slot_rect_mm` の矩形内側 3mm に、品名・管理番号・保管場所・備考の 4 行を 2.3 のフォント・順序で描画する。各フォント設定後に `painter.fontMetrics()` を取得し、内側幅をデバイス座標の整数幅へ切り下げて `elidedText` に渡す
   - 開始成功後は例外が起きても `try/finally` で `QPainter.end()` を呼ぶ。終了の `False` も失敗とするが、元の描画例外がある場合は終了失敗をログに残し、元の例外を上書きしない
-- [ ] 描画値(行位置・フォントサイズ・余白 3mm)をモジュール先頭の定数にまとめ、試し刷り後の調整箇所を 1 か所にする
+- [x] 描画値(行位置・フォントサイズ・余白 3mm)をモジュール先頭の定数にまとめ、試し刷り後の調整箇所を 1 か所にする
 
 #### G. 棚ラベルの印刷設定ダイアログ `ui/printing/label_print_dialog.py`(新規)
 
