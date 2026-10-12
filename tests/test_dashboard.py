@@ -25,7 +25,8 @@ from inventory_manager_mini.ui.display_settings import (
     apply_display_settings,
 )
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
-from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
+from inventory_manager_mini.ui.widgets import dashboard as dashboard_module
+from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow, _axis_parameters
 from tests.conftest import (
     FixedClock,
     assert_buttons_reachable,
@@ -205,6 +206,29 @@ def _value_axis(view: QChartView) -> QValueAxis:
     return axis
 
 
+@pytest.mark.parametrize(
+    ("maximum", "expected_upper", "expected_interval"),
+    [
+        (0, 1, 1),
+        (1, 1, 1),
+        (5, 5, 1),
+        (7, 8, 2),
+        (15, 15, 5),
+        (900, 1000, 200),
+        (1_234_567, 1_500_000, 500_000),
+    ],
+)
+def test_axis_parameters_use_nice_integer_ticks(
+    maximum: int, expected_upper: int, expected_interval: int
+) -> None:
+    upper, interval = _axis_parameters(maximum)
+
+    assert (upper, interval) == (expected_upper, expected_interval)
+    assert upper >= maximum
+    assert upper // interval + 1 <= 6
+    assert upper % interval == 0
+
+
 def _padded(values: dict[int, int], length: int = 12) -> list[int]:
     return [values.get(index, 0) for index in range(length)]
 
@@ -264,7 +288,11 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
     assert _category_axis(window.amount_chart).categories() == FISCAL_2025_LABELS
     assert _value_axis(window.quantity_chart).min() == 0
     assert _value_axis(window.quantity_chart).max() == 15
-    assert _value_axis(window.amount_chart).max() == 900
+    assert _value_axis(window.amount_chart).max() == 1000
+    assert _value_axis(window.quantity_chart).tickCount() == 4
+    assert _value_axis(window.amount_chart).tickCount() == 6
+    assert _value_axis(window.quantity_chart).minorTickCount() == 0
+    assert _value_axis(window.amount_chart).minorTickCount() == 0
 
 
 def test_disposal_table_excludes_rows_without_disposal(qtbot: QtBot, env: Env) -> None:
@@ -288,6 +316,64 @@ def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, en
     assert all(not shiboken6.isValid(chart) for chart in old_charts)
     assert window.quantity_chart.chart() not in old_charts
     assert _category_axis(window.quantity_chart).labelsAngle() == -45
+
+
+def test_bar_tooltips_show_period_series_value_and_survive_chart_replacement(
+    qtbot: QtBot,
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[tuple[str, object]] = []
+    hidden: list[bool] = []
+
+    class ToolTipProbe:
+        @staticmethod
+        def showText(_position: object, text: str, widget: object) -> None:
+            shown.append((text, widget))
+
+        @staticmethod
+        def hideText() -> None:
+            hidden.append(True)
+
+    monkeypatch.setattr(dashboard_module, "QToolTip", ToolTipProbe)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    quantity_series = window.quantity_chart.chart().series()[0]
+    assert isinstance(quantity_series, QBarSeries)
+    inbound_set, outbound_set = quantity_series.barSets()
+    quantity_series.hovered.emit(True, 1, inbound_set)
+    quantity_series.hovered.emit(True, 2, outbound_set)
+
+    amount_series = window.amount_chart.chart().series()[0]
+    assert isinstance(amount_series, QBarSeries)
+    amount_series.hovered.emit(True, 2, amount_series.barSets()[0])
+    assert [text for text, _widget in shown] == [
+        "2025年5月\n入庫数: 15",
+        "2025年6月\n出庫数: 8",
+        "2025年6月\n支出額: 900円",
+    ]
+    assert all(widget is window.quantity_chart for _text, widget in shown[:2])
+    assert shown[2][1] is window.amount_chart
+
+    quantity_series.hovered.emit(False, 1, inbound_set)
+    assert hidden == [True]
+
+    _select(window.kind_combo, PeriodKind.ANNUAL)
+    annual_amount_series = window.amount_chart.chart().series()[0]
+    assert isinstance(annual_amount_series, QBarSeries)
+    annual_amount_series.hovered.emit(True, 0, annual_amount_series.barSets()[0])
+    assert shown[-1][0] == "2025年度\n支出額: 1,300円"
+
+    _select(window.kind_combo, PeriodKind.MONTHLY)
+    old_chart = window.quantity_chart.chart()
+    _select(window.group_combo, GroupBy.CLIENT)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not shiboken6.isValid(old_chart)
+    new_series = window.quantity_chart.chart().series()[0]
+    assert isinstance(new_series, QBarSeries)
+    new_series.hovered.emit(True, 1, new_series.barSets()[0])
+    assert shown[-1][0] == "2025年5月\n入庫数: 15"
 
 
 def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
@@ -386,6 +472,8 @@ def test_empty_history_uses_zero_to_one_axis(qtbot: QtBot, empty_env: Env) -> No
     for view in (window.quantity_chart, window.amount_chart):
         axis = _value_axis(view)
         assert (axis.min(), axis.max()) == (0, 1)
+        assert axis.tickCount() == 2
+        assert axis.minorTickCount() == 0
 
 
 @pytest.mark.parametrize("scale", [100, 150])

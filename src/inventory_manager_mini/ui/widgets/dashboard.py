@@ -8,7 +8,7 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
 from PySide6.QtCore import QIODevice, QSaveFile, Qt, QTimer
-from PySide6.QtGui import QHideEvent, QPainter, QShowEvent
+from PySide6.QtGui import QCursor, QHideEvent, QPainter, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableView,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +41,24 @@ from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
 
 logger = logging.getLogger(__name__)
+
+
+def _axis_parameters(maximum: int) -> tuple[int, int]:
+    if maximum <= 0:
+        return 1, 1
+
+    scale = 1
+    while True:
+        interval = next(
+            (multiplier * scale for multiplier in (1, 2, 5) if multiplier * scale * 5 >= maximum),
+            0,
+        )
+        if interval:
+            break
+        scale *= 10
+
+    upper = ((maximum + interval - 1) // interval) * interval
+    return upper, interval
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,7 +400,10 @@ class DashboardWindow(QWidget):
             axis_x.append(categories)
             axis_x.setLabelsAngle(-45)
             axis_y = QValueAxis(chart)
-            axis_y.setRange(0, max(1, maximum))
+            upper, interval = _axis_parameters(maximum)
+            axis_y.setRange(0, upper)
+            axis_y.setTickCount(upper // interval + 1)
+            axis_y.setMinorTickCount(0)
             axis_y.setLabelFormat("%'d")
             series = QBarSeries(chart)
             for field, label in (
@@ -393,6 +415,21 @@ class DashboardWindow(QWidget):
                     bar_set = QBarSet(label, series)
                     bar_set.append([getattr(row, field) for row in rows])
                     series.append(bar_set)
+            unit = "円" if fields == ("expenditure",) else ""
+
+            def show_tooltip(status: bool, index: int, bar_set: QBarSet) -> None:
+                if not status:
+                    QToolTip.hideText()
+                    return
+                if 0 <= index < len(categories):
+                    value = int(bar_set.at(index))
+                    QToolTip.showText(
+                        QCursor.pos(),
+                        f"{categories[index]}\n{bar_set.label()}: {value:,}{unit}",
+                        view,
+                    )
+
+            series.hovered.connect(show_tooltip)
             chart.addSeries(series)
             chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
             chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
