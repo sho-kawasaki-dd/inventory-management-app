@@ -61,6 +61,104 @@ uv run python -m inventory_manager_mini
 
 通常起動では `QT_QPA_PLATFORM=offscreen` を設定しません。
 
+## Windows 配布版のインストール
+
+GitHub Release からインストーラーと同じ版の `.sha256` ファイルを取得します。インストーラーの
+起動前にハッシュを照合してください。
+
+```powershell
+$installer = '.\inventory-manager-mini-0.1.0-setup.exe'
+$expected = ((Get-Content "$installer.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+$actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA256 が一致しません。インストーラーを実行しないでください。' }
+'SHA256 が一致しました。'
+```
+
+インストーラーでは「全ユーザー」または「自分のみ」を選択できます。署名のないインストーラーの
+ため SmartScreen が警告する場合は、公式 Release から取得したことと SHA256 の一致を確認した上で、
+「詳細情報」から実行します。
+
+## アンインストールとデータ
+
+アンインストールではアプリ本体だけを削除し、データとログは保持します。既定の保存先は次のとおりです。
+
+- DB・バックアップ・表示設定・多重起動ロック: `%APPDATA%\inventory-manager-mini`
+- ログ: `%LOCALAPPDATA%\inventory-manager-mini\Logs`
+
+完全に削除する場合は、アプリを終了して必要なバックアップを取った後、エクスプローラーのアドレス欄に
+`%APPDATA%\inventory-manager-mini` と `%LOCALAPPDATA%\inventory-manager-mini` をそれぞれ入力し、
+両フォルダーを手動で削除してください(後者には `Logs` が含まれます)。環境変数
+`INVENTORY_MANAGER_MINI_DATA_DIR` で保存先を変更していた場合は、その指定先も別途確認してください。
+
+## ライセンスと対応ソース
+
+自作コードは MIT License で提供します。Qt Charts と結合したアプリ全体の配布条件は GPLv3 です。
+再配布・改変したものを配布する場合は GPLv3 に従い、無保証であることを含む条件を保持してください。
+第三者ソフトウェアにはそれぞれのライセンスと通知が適用されます。Qt・PySide6 の全モジュールを一律に
+LGPL とみなさず、同梱通知と各ライセンス本文で確認してください。
+インストール先のアプリ実行ファイルと同じフォルダーにある `DISTRIBUTION_LICENSE.txt`、
+`THIRD_PARTY_NOTICES.txt`、`licenses/` を参照してください。アプリの「バージョン情報」からも
+配布条件を確認し、ライセンス文書を開けます。
+
+Release にはインストーラーのほか、対応する `-sources.zip`、構成一覧 `-manifest.json`、各ファイルの
+`.sha256` を添付します。対応ソースにはアプリ・SQL・必要資産・ロックファイル・ビルド設定と手順を含め、
+実際に配布した依存のうち必要なソースも同じ Release に添付します。構成一覧でタグ・コミット・依存版・
+ビルドツールとソース成果物の対応を確認し、同梱 SHA256 も照合してください。対応ソースからビルドする
+場合は、ソースを展開した環境に Python 3.13、uv、Inno Setup 6.7.3 を用意し、下記のローカルビルド手順を
+実行します。依存を変更して再配布するときも、バイナリと版対応する依存ソース・ライセンス通知をそろえて
+ください。バイナリを提供している間は対応ソースも提供します。
+
+Release の対応ソースは、依存ソースの監査・版対応が完了した成果物に限ります。現行の第三者通知には
+Phase 2 試験ビルド由来の未確定事項が残るため、最終配布構成の棚卸し完了前に配布可能と判断しません。
+DB、バックアップ、ログ、個人情報などの実データはソース・Release の対象ではありません。
+
+## Windows でのローカルビルド
+
+Windows x64、Python 3.13、uv、および Inno Setup 6.7.3 が必要です。ビルドスクリプトは ISCC の実版を
+検査します。標準のインストール先以外にある場合は `-IsccPath` で実際に使う `ISCC.exe` を指定します。
+
+```powershell
+uv sync --locked
+.\packaging\build.ps1 -Version 0.1.0
+```
+
+検証用 rc ビルドでは接尾辞を別に指定します。
+
+```powershell
+.\packaging\build.ps1 -Version 0.1.0 -Suffix '-rc1'
+```
+
+成果物は毎回異なるビルド ID の `dist/releases/<ビルドID>/` に出力されます。そこにはインストーラー、
+アプリソース ZIP、構成一覧と、それぞれの SHA256 ファイルが含まれます。ビルド途中で失敗した場合は
+非ゼロ終了となり、その回の成果物は確定されません。古い `dist/releases/` の内容を今回のビルド結果と
+して使用・配布せず、コマンドが成功時に出力したパスだけを対象にしてください。ローカル検証ビルドは
+正式リリースと異なり、監査済み依存ソースを含む配布物ではありません。
+
+アプリ・インストーラーのアイコンを指定する場合は `packaging/app.ico` に配置してからビルドします。
+ファイルがない場合もビルドでき、その場合は既定のアイコンを使用します。
+
+## 凍結版の確認と保存先の保護
+
+開発 PC では、インストーラーの最後に表示されるアプリ起動チェックを外してください。起動前に一時保存先を
+設定し、同じ PowerShell からインストール先の exe を直接実行します。
+
+```powershell
+$testData = Join-Path $env:TEMP ("inventory-manager-mini-" + [guid]::NewGuid().ToString('N'))
+$env:INVENTORY_MANAGER_MINI_DATA_DIR = $testData
+Write-Output "検証用保存先: $env:INVENTORY_MANAGER_MINI_DATA_DIR"
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\Inventory Manager mini'
+& (Join-Path $installDir 'inventory-manager-mini.exe')
+```
+
+全ユーザーでインストールした場合は `$installDir` を実際のインストール先に変更してください。
+起動後、「バージョン情報」に表示される DB パスが `$testData\inventory.db` であることを確認します。
+開発 PC ではインストーラーからの起動や、復元後の再起動への環境変数継承を検証しません。
+
+インストーラー起動・復元後の再起動への保存先継承、および環境変数を設定しない既定保存先は、実データのない
+Windows Sandbox または新規 VM でのみ確認してください。継承確認では一時保存先を設定したシェルから
+インストーラーを起動し、各起動後に DB パスを確認します。既定保存先の確認は空の検証ユーザーで環境変数を
+解除して行い、`%APPDATA%` 配下に既存データがある環境では起動しないでください。
+
 ## 基本操作
 
 ### 在庫操作
