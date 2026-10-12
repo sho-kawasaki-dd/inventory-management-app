@@ -124,16 +124,16 @@
 
 #### C. 面付けの純関数 `ui/printing/layout.py`(新規・Qt を import しない)
 
-- [ ] `ui/printing/__init__.py` を作成する
-- [ ] `LabelSpec`(frozen dataclass)を定義する。フィールド: 列数 2、段数 6、ラベル幅 86.4・高さ 42.3、左余白 18.6・上余白 21.6、横ピッチ 86.4・縦ピッチ 42.3(いずれも mm)。既定インスタンス `LABEL_72212` を提供する。用紙の寸法値の根拠(推定値であること)をコメントに 1 行で残す
-- [ ] `LabelEntry`(品目 ID・枚数)と `LabelPlacement`(1 始まりのページ番号・位置番号 0〜11・品目 ID)を定義する
-- [ ] `assign_label_slots(entries, first_page_slots, spec=LABEL_72212) -> list[LabelPlacement]` を実装する
+- [x] `ui/printing/__init__.py` を作成する
+- [x] `LabelSpec`(frozen dataclass)を定義する。フィールド: 列数 2、段数 6、ラベル幅 86.4・高さ 42.3、左余白 18.6・上余白 21.6、横ピッチ 86.4・縦ピッチ 42.3(いずれも mm)。既定インスタンス `LABEL_72212` を提供する。用紙の寸法値の根拠(推定値であること)をコメントに 1 行で残す
+- [x] `LabelEntry`(品目 ID・枚数)と `LabelPlacement`(1 始まりのページ番号・位置番号 0〜11・品目 ID)を定義する
+- [x] `assign_label_slots(entries, first_page_slots, spec=LABEL_72212) -> list[LabelPlacement]` を実装する
   - 品目を並びの順に、品目ごとの枚数だけ展開する
   - 1 枚目は `first_page_slots`(昇順の位置集合)の位置だけを、左→右、上→下の順に使う。溢れた分は 2 枚目以降に、全 12 位置を順に使う
   - `first_page_slots` が空、範囲外の位置、枚数が 1〜99 の範囲外は `ValueError`
   - 品目 0 件は空のリストを返す
-- [ ] `slot_rect_mm(spec, slot, offset_left_mm=0.0, offset_top_mm=0.0) -> tuple[float, float, float, float]` を実装する(位置番号は `行 = slot // 列数`、`列 = slot % 列数`。左上と幅・高さを返す)
-- [ ] `tests/test_dependency_rules.py` に、`ui/printing/layout.py` が `PySide6` を import しないことの検査を追加する
+- [x] `slot_rect_mm(spec, slot, offset_left_mm=0.0, offset_top_mm=0.0) -> tuple[float, float, float, float]` を実装する(位置番号は `行 = slot // 列数`、`列 = slot % 列数`。左上と幅・高さを返す)
+- [x] `tests/test_dependency_rules.py` に、`ui/printing/layout.py` が `PySide6` を import しないことの検査を追加する
 
 #### D. 表示設定の補正値 `ui/display_settings.py`・`ui/dialogs/settings_dialog.py`
 
@@ -188,9 +188,9 @@
 #### I. 7a のテスト
 
 - [ ] `tests/test_print_layout.py`(新規): 次を検証する
-  - [ ] `assign_label_slots`: 全オン、一部オフ、飛び飛びのオフ、1 枚目で溢れて 2 枚目が全面になること、品目ごとの枚数による展開順、枚数 1 と 99 の境界、0 と 100 の拒否、`first_page_slots` が空・範囲外の拒否、品目 0 件
-  - [ ] `slot_rect_mm`: 全 12 位置の座標が `LabelSpec`(左余白 + 列×ピッチ、上余白 + 段×ピッチ)と一致すること。補正値 ±の加算
-  - [ ] `LabelSpec` の整合: 用紙 A4(210 × 297mm)に 12 面が収まること(右端・下端が用紙内)
+  - [x] `assign_label_slots`: 全オン、一部オフ、飛び飛びのオフ、1 枚目で溢れて 2 枚目が全面になること、品目ごとの枚数による展開順、枚数 1 と 99 の境界、0 と 100 の拒否、`first_page_slots` が空・範囲外の拒否、品目 0 件
+  - [x] `slot_rect_mm`: 全 12 位置の座標が `LabelSpec`(左余白 + 列×ピッチ、上余白 + 段×ピッチ)と一致すること。補正値 ±の加算
+  - [x] `LabelSpec` の整合: 用紙 A4(210 × 297mm)に 12 面が収まること(右端・下端が用紙内)
 - [ ] `tests/test_display_settings.py`: 補正値の保存と再読み込みの往復、キーなし・文字列・bool・NaN・範囲外・小数 2 桁以上の扱い、他の項目が有効なら維持されること
 - [ ] `tests/test_settings_dialog.py`: 補正値の初期表示・保存、「既定に戻す」でフォント・文字サイズのみ戻り補正値が維持されること、キャンセルで保存されないこと
 - [ ] `tests/test_label_print.py`(新規):

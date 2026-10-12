@@ -127,6 +127,8 @@ def _find_violations(source_root: Path) -> list[str]:
                 or target.startswith(f"{PACKAGE_NAME}.db")
             ):
                 violations.append(f"R5:{relative_path}")
+            if relative_path == Path("ui/printing/layout.py") and target.startswith("PySide6"):
+                violations.append(f"R7:{relative_path}")
 
         if _time_api_violations(tree, path, relative_path):
             violations.append(f"R6:{relative_path}")
@@ -169,6 +171,12 @@ def test_source_tree_obeys_dependency_rules() -> None:
         ),
         ("R4", "core/service.py", "from ..ui import MainWindow", "from pathlib import Path"),
         ("R5", "ui/window.py", "import sqlite3", "from ..core import models"),
+        (
+            "R7",
+            "ui/printing/layout.py",
+            "from PySide6.QtCore import Qt",
+            "from dataclasses import dataclass",
+        ),
         ("R6", "core/service.py", "from datetime import datetime\ndatetime.now()", "value = 1"),
     ],
 )
