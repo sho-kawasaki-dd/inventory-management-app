@@ -15,15 +15,19 @@ INVENTORY_SHEET_ROW_HEIGHT_MM = 7.0
 INVENTORY_SHEET_FOOTER_HEIGHT_MM = 8.0
 
 
-def _rows_per_inventory_sheet_page(title_height_mm: float) -> int:
+def _rows_per_inventory_sheet_page(
+    title_height_mm: float,
+    *,
+    paper_height_mm: float = INVENTORY_SHEET_PAPER_HEIGHT_MM,
+    margin_mm: float = INVENTORY_SHEET_MARGIN_MM,
+    header_height_mm: float = INVENTORY_SHEET_HEADER_HEIGHT_MM,
+    row_height_mm: float = INVENTORY_SHEET_ROW_HEIGHT_MM,
+    footer_height_mm: float = INVENTORY_SHEET_FOOTER_HEIGHT_MM,
+) -> int:
     available_height_mm = (
-        INVENTORY_SHEET_PAPER_HEIGHT_MM
-        - 2 * INVENTORY_SHEET_MARGIN_MM
-        - title_height_mm
-        - INVENTORY_SHEET_HEADER_HEIGHT_MM
-        - INVENTORY_SHEET_FOOTER_HEIGHT_MM
+        paper_height_mm - 2 * margin_mm - title_height_mm - header_height_mm - footer_height_mm
     )
-    return floor(available_height_mm / INVENTORY_SHEET_ROW_HEIGHT_MM)
+    return floor(available_height_mm / row_height_mm)
 
 
 INVENTORY_SHEET_FIRST_PAGE_ROWS = _rows_per_inventory_sheet_page(INVENTORY_SHEET_TITLE_HEIGHT_MM)
@@ -94,6 +98,47 @@ INVENTORY_SHEET_COLUMNS = (
     ),
     InventorySheetColumn("発注主体", 19.0, "left", lambda item: item.purchaser_name),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class InventorySheetSpec:
+    paper_width_mm: float = INVENTORY_SHEET_PAPER_WIDTH_MM
+    paper_height_mm: float = INVENTORY_SHEET_PAPER_HEIGHT_MM
+    margin_mm: float = INVENTORY_SHEET_MARGIN_MM
+    title_height_mm: float = INVENTORY_SHEET_TITLE_HEIGHT_MM
+    header_height_mm: float = INVENTORY_SHEET_HEADER_HEIGHT_MM
+    row_height_mm: float = INVENTORY_SHEET_ROW_HEIGHT_MM
+    footer_height_mm: float = INVENTORY_SHEET_FOOTER_HEIGHT_MM
+    columns: tuple[InventorySheetColumn, ...] = INVENTORY_SHEET_COLUMNS
+
+    @property
+    def printable_width_mm(self) -> float:
+        return self.paper_width_mm - 2 * self.margin_mm
+
+    @property
+    def first_page_rows(self) -> int:
+        return _rows_per_inventory_sheet_page(
+            self.title_height_mm,
+            paper_height_mm=self.paper_height_mm,
+            margin_mm=self.margin_mm,
+            header_height_mm=self.header_height_mm,
+            row_height_mm=self.row_height_mm,
+            footer_height_mm=self.footer_height_mm,
+        )
+
+    @property
+    def other_page_rows(self) -> int:
+        return _rows_per_inventory_sheet_page(
+            0.0,
+            paper_height_mm=self.paper_height_mm,
+            margin_mm=self.margin_mm,
+            header_height_mm=self.header_height_mm,
+            row_height_mm=self.row_height_mm,
+            footer_height_mm=self.footer_height_mm,
+        )
+
+
+INVENTORY_SHEET_SPEC = InventorySheetSpec()
 
 
 def summarize_item_filter(

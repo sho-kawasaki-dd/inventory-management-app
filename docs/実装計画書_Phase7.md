@@ -228,14 +228,14 @@
 
 #### L. 在庫表の描画 `ui/printing/inventory_sheet_renderer.py`(新規)
 
-- [ ] `render_inventory_sheet(device, rows, filter_summary, printed_at_local, spec, *, page_numbers=None) -> None` を実装する
+- [x] `render_inventory_sheet(device, rows, filter_summary, printed_at_local, spec, *, page_numbers=None) -> None` を実装する
   - 用紙設定は共通クラスが A4 横・プリンタ余白 0・フルページに固定し、レンダラーの描画上の余白を紙端から 10mm とする。`QPainter.begin(device)` の戻り値を確認して開始し、mm からデバイス座標に変換する。`False` なら例外にして描画を続けない
   - 全件で `paginate` した後、`page_numbers=None` は全ページ、それ以外は元ページ番号列の対象だけを描画する。範囲ごとの再分割はしない。出力ページ間だけ `device.newPage()` を呼び、`False` なら後続ページを描かず例外にする。先頭・末尾に空白ページを作らない
   - 元文書の 1 ページ目の上部(固定 25mm 領域)だけにタイトル「在庫表」・全件数・条件要約を描く。出力対象の全ページの先頭に見出し行(背景を薄い灰色、下線)を描く
   - 印刷用フォントは 7a の `print_font` を使う。各フォント設定後に `painter.fontMetrics()` を取得し、セルの内側幅をデバイス座標の整数幅へ切り下げて `elidedText` に渡す。数値列は右寄せ。低在庫は「低在庫」列の「○」のみで示す(印刷はモノクロを想定し着色しない)
   - フッタに左「印刷日時 YYYY-MM-DD HH:MM:SS」、右「ページ n / N」を描く。範囲印刷でも n は元ページ番号、N は全件から求めた総ページ数とする
   - 開始成功後は例外時も `try/finally` で `QPainter.end()` を呼ぶ。終了の `False` も失敗とするが、元の描画例外がある場合は終了失敗をログに残し、元の例外を上書きしない
-- [ ] 印刷日時は呼び出し側で `timeutil.format_local(timeutil.utc_now_str())` を求めて渡す(描画モジュールで現在時刻を取得しない)
+- [x] 印刷日時は呼び出し側で `timeutil.format_local(timeutil.utc_now_str())` を求めて渡す(描画モジュールで現在時刻を取得しない)
 
 #### M. 導線 `ui/main_window.py`
 

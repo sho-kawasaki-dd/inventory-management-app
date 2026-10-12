@@ -1,8 +1,13 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QMarginsF
+from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter
+from PySide6.QtPdf import QPdfDocument
 
 from inventory_manager_mini.core.models import ItemFilter, ItemRow, PurchaseInfo
+from inventory_manager_mini.ui.printing.inventory_sheet_renderer import render_inventory_sheet
 from inventory_manager_mini.ui.printing.layout import (
     INVENTORY_SHEET_COLUMNS,
     INVENTORY_SHEET_FIRST_PAGE_ROWS,
@@ -13,6 +18,7 @@ from inventory_manager_mini.ui.printing.layout import (
     INVENTORY_SHEET_PAPER_HEIGHT_MM,
     INVENTORY_SHEET_PRINTABLE_WIDTH_MM,
     INVENTORY_SHEET_ROW_HEIGHT_MM,
+    INVENTORY_SHEET_SPEC,
     INVENTORY_SHEET_TITLE_HEIGHT_MM,
     format_inventory_item_name,
     format_inventory_low_stock,
@@ -52,6 +58,24 @@ def make_item_row() -> ItemRow:
         is_low_stock=True,
         purchase_info=PurchaseInfo(last_purchased_at=None, lot_quantity=None),
     )
+
+
+def _inventory_sheet_pdf_writer(path: Path) -> QPdfWriter:
+    writer = QPdfWriter(str(path))
+    layout = QPageLayout(
+        QPageSize(QPageSize.PageSizeId.A4),
+        QPageLayout.Orientation.Landscape,
+        QMarginsF(0, 0, 0, 0),
+    )
+    assert writer.setPageLayout(layout)
+    writer.setResolution(300)
+    return writer
+
+
+def _pdf_page_count(path: Path) -> int:
+    document = QPdfDocument()
+    assert document.load(str(path)) == QPdfDocument.Error.None_
+    return document.pageCount()
 
 
 def test_inventory_sheet_columns_have_expected_order_and_total_width() -> None:
@@ -219,3 +243,46 @@ def test_paginate_rejects_invalid_counts(
 ) -> None:
     with pytest.raises(ValueError):
         paginate(row_count, first_page_rows, other_page_rows)
+
+
+def test_render_inventory_sheet_writes_pages_and_preserves_original_page_range(
+    qapp, tmp_path: Path
+) -> None:
+    rows = [
+        replace(make_item_row(), id=row_index, code=f"TOOL-{row_index:03}")
+        for row_index in range(1, INVENTORY_SHEET_SPEC.first_page_rows + 2)
+    ]
+    all_pages_path = tmp_path / "inventory-all-pages.pdf"
+    selected_page_path = tmp_path / "inventory-page-2.pdf"
+
+    render_inventory_sheet(
+        _inventory_sheet_pdf_writer(all_pages_path),
+        rows,
+        "(絞り込みなし)",
+        "2026-10-13 12:00:00",
+        INVENTORY_SHEET_SPEC,
+    )
+    render_inventory_sheet(
+        _inventory_sheet_pdf_writer(selected_page_path),
+        rows,
+        "(絞り込みなし)",
+        "2026-10-13 12:00:00",
+        INVENTORY_SHEET_SPEC,
+        page_numbers=[2],
+    )
+
+    assert all_pages_path.read_bytes().startswith(b"%PDF-")
+    assert _pdf_page_count(all_pages_path) == 2
+    assert _pdf_page_count(selected_page_path) == 1
+
+
+def test_render_inventory_sheet_rejects_page_outside_document() -> None:
+    with pytest.raises(ValueError, match="印刷対象"):
+        render_inventory_sheet(
+            _inventory_sheet_pdf_writer(Path("unused.pdf")),
+            [make_item_row()],
+            "(絞り込みなし)",
+            "2026-10-13 12:00:00",
+            INVENTORY_SHEET_SPEC,
+            page_numbers=[2],
+        )
