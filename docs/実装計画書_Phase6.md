@@ -138,7 +138,7 @@
 
 #### D. ダッシュボード画面 `ui/widgets/dashboard.py`(新規)
 
-- [ ] 先行確認: `QChartView.setChart(new)` が旧チャートを自動削除するかを PySide6 実機(Windows・Linux offscreen)で確認し、結果を 4.3 に記録する。実装は結果に関わらず次の形に統一する(`old = view.chart()` → `view.setChart(new)` → `old is not None and shiboken6.isValid(old)` のときだけ `old.deleteLater()`)(Windows 確認済み、Linux 確認待ち)
+- [x] 先行確認: `QChartView.setChart(new)` が旧チャートを自動削除するかを PySide6 実機(Windows・Linux offscreen)で確認し、結果を 4.3 に記録する。実装は結果に関わらず次の形に統一する(`old = view.chart()` → `view.setChart(new)` → `old is not None and shiboken6.isValid(old)` のときだけ `old.deleteLater()`)(Windows・Linux 確認済み)
 - [x] `DashboardWindow(context, parent)` を作る(`QWidget` を基底に `Qt.Window` を指定、`setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)`、`center_dialog` による配置、最小サイズは `sizeHint` に任せ、固定寸法を指定しない)
   - [x] `ui/dialog_placement.py` の `center_dialog` の引数型を `QDialog` から `QWidget` へ広げる(既存の呼び出しは変更不要)
 - [x] 絞り込み欄を配置する
@@ -263,7 +263,7 @@
 (`QChartView.setChart` が旧チャートを自動削除するかの確認結果(Windows・Linux offscreen)と、採用した解放方法を記録する。)
 
 - Windows / PySide6: `setChart(new)` 直後も旧チャートは `shiboken6.isValid(old) == True`。`deleteLater()` と `QEvent.DeferredDelete` 処理後に `False` となるため、差し替え後に有効性を確認して旧チャートを解放する。
-- Linux offscreen: 実行環境に Docker がなく未確認。Linux CI または実行環境で確認する。
+- Linux offscreen / PySide6 6.11.2 / Qt 6.11.2: `setChart(new)` 直後も旧チャートは `shiboken6.isValid(old) == True`。`deleteLater()` と `QEvent.DeferredDelete` 処理後に `False` となることを確認した。実装は `view.chart()` で旧チャートを取得し、差し替え後に有効性を確認してから `deleteLater()` する。
 
 ## 5. リスクと対策
 
