@@ -61,17 +61,47 @@ def export_csv_with_dialog(
         ".csv",
         "CSV ファイル (*.csv)",
     )
+    return _run_export(parent, label, path, ".csv", export)
+
+
+def export_file_with_dialog(
+    parent: QWidget,
+    label: str,
+    default_prefix: str,
+    extension: str,
+    file_filter: str,
+    export: Callable[[Path], None],
+) -> Path | None:
+    path = _choose_export_path(parent, label, default_prefix, extension, file_filter)
+    return _run_export(parent, label, path, extension, export)
+
+
+def _run_export(
+    parent: QWidget,
+    label: str,
+    path: Path | None,
+    extension: str,
+    export: Callable[[Path], None],
+) -> Path | None:
     if path is None:
         return None
 
+    output_type = extension.removeprefix(".").upper()
+
     def run_export() -> None:
-        logger.info("CSV出力を開始します: 種別=%s 保存先=%s", label, path)
+        logger.info("%s出力を開始します: 種別=%s 保存先=%s", output_type, label, path)
         try:
             export(path)
         except Exception:
-            logger.error("CSV出力に失敗しました: 種別=%s 保存先=%s", label, path, exc_info=True)
+            logger.error(
+                "%s出力に失敗しました: 種別=%s 保存先=%s",
+                output_type,
+                label,
+                path,
+                exc_info=True,
+            )
             raise
-        logger.info("CSV出力が完了しました: 種別=%s 保存先=%s", label, path)
+        logger.info("%s出力が完了しました: 種別=%s 保存先=%s", output_type, label, path)
 
     QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
     try:

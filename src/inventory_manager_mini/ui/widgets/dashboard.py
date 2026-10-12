@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QIODevice, QSaveFile, Qt, QTimer
 from PySide6.QtGui import QHideEvent, QPainter, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from inventory_manager_mini.core.errors import FileOutputError
 from inventory_manager_mini.core.models import (
     Client,
     DashboardResult,
@@ -31,9 +34,12 @@ from inventory_manager_mini.core.models import (
     Purchaser,
 )
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.csv_export import export_csv_with_dialog, export_file_with_dialog
 from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,11 +139,23 @@ class DashboardWindow(QWidget):
         outer.addWidget(self.tabs, 1)
 
         buttons = QHBoxLayout()
+        self.output_status = QLabel(self)
+        self.output_status.setWordWrap(True)
+        buttons.addWidget(self.output_status, 1)
         buttons.addStretch(1)
+        self.csv_button = QPushButton("CSV 出力", self)
+        self.csv_button.clicked.connect(self._export_csv)
+        buttons.addWidget(self.csv_button)
+        self.png_button = QPushButton("PNG 保存", self)
+        self.png_button.clicked.connect(self._export_png)
+        buttons.addWidget(self.png_button)
         self.close_button = QPushButton("閉じる", self)
         self.close_button.clicked.connect(self.hide)
         buttons.addWidget(self.close_button)
         outer.addLayout(buttons)
+        self.tabs.currentChanged.connect(self._update_export_buttons)
+        self.csv_button.setEnabled(False)
+        self.png_button.setEnabled(False)
 
         self._replace_charts(())
         self.year_combo.setEnabled(False)
@@ -244,6 +262,7 @@ class DashboardWindow(QWidget):
         self.disposal_model.set_rows(snapshot.result.breakdown)
         self._replace_charts(snapshot.result.totals)
         self.totals_label.setText(self._format_totals(snapshot.result.totals))
+        self._update_export_buttons()
 
     def _reset_unacquired_state(self) -> None:
         self._signals_blocked = True
@@ -259,6 +278,61 @@ class DashboardWindow(QWidget):
         self.totals_label.setText(
             "入庫数: --　出庫数: --　支出額: --　単価未登録数量: --　廃棄数: --　廃棄額: --"
         )
+        self._update_export_buttons()
+
+    def _update_export_buttons(self, _index: int = 0) -> None:
+        acquired = self._snapshot is not None
+        self.csv_button.setEnabled(acquired)
+        self.png_button.setEnabled(acquired and self.tabs.currentIndex() == 0)
+
+    def _export_csv(self) -> None:
+        snapshot = self._snapshot
+        if snapshot is None:
+            return
+        path = export_csv_with_dialog(
+            self,
+            "ダッシュボード",
+            "ダッシュボード",
+            lambda destination: self.context.reports.export_dashboard_csv(
+                destination, snapshot.result.breakdown
+            ),
+        )
+        if path is not None:
+            self.output_status.setText(f"CSV を出力しました: {path}")
+
+    def _export_png(self) -> None:
+        if self._snapshot is None or self.tabs.currentIndex() != 0:
+            return
+        path = export_file_with_dialog(
+            self,
+            "ダッシュボード",
+            "ダッシュボード",
+            ".png",
+            "PNG ファイル (*.png)",
+            self._save_chart_png,
+        )
+        if path is not None:
+            self.output_status.setText(f"PNG を保存しました: {path}")
+
+    def _save_chart_png(self, path: Path) -> None:
+        output = QSaveFile(str(path))
+        if not output.open(QIODevice.OpenModeFlag.WriteOnly):
+            raise FileOutputError(f"PNGファイルを書き込めません: {path} ({output.errorString()})")
+        try:
+            image = self.chart_content.grab()
+            if image.isNull() or not image.save(output, "PNG"):
+                output.cancelWriting()
+                raise FileOutputError(f"PNG画像を保存できません: {path}")
+            if not output.commit():
+                output.cancelWriting()
+                raise FileOutputError(
+                    f"PNGファイルを確定できません: {path} ({output.errorString()})"
+                )
+        except FileOutputError:
+            raise
+        except Exception as error:
+            output.cancelWriting()
+            raise FileOutputError(f"PNG画像を保存できません: {path} ({error})") from error
 
     @staticmethod
     def _fill_master_combo(

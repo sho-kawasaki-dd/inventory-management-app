@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import csv
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QChartView, QValueAxis
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtGui import QHideEvent, QShowEvent
-from PySide6.QtWidgets import QComboBox, QMessageBox
+from PySide6.QtGui import QHideEvent, QImage, QShowEvent
+from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from inventory_manager_mini.core.errors import ValidationError
@@ -18,6 +20,7 @@ from inventory_manager_mini.core.models import GroupBy, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.display_settings import DisplaySettings, apply_display_settings
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
 from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 from tests.conftest import FixedClock, create_test_context
@@ -375,6 +378,211 @@ def test_empty_history_uses_zero_to_one_axis(qtbot: QtBot, empty_env: Env) -> No
     for view in (window.quantity_chart, window.amount_chart):
         axis = _value_axis(view)
         assert (axis.min(), axis.max()) == (0, 1)
+
+
+def test_dashboard_csv_exports_the_displayed_breakdown(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    _select(window.client_combo, 1)
+    _select(window.group_combo, GroupBy.CLIENT)
+    destination = tmp_path / "dashboard.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+
+    assert window.csv_button.isEnabled()
+    window.csv_button.click()
+
+    with destination.open(encoding="utf-8-sig", newline="") as file:
+        output = list(csv.reader(file))
+    assert output[0] == [
+        "年度/月",
+        "クライアント",
+        "発注主体",
+        "入庫数",
+        "出庫数",
+        "支出額",
+        "単価未登録数量",
+        "廃棄数",
+        "廃棄額",
+    ]
+    assert window._snapshot is not None
+    expected = [
+        [
+            row.period_label,
+            row.client_name,
+            row.purchaser_name if row.purchaser_id is not None else "(すべて)",
+            str(row.inbound_quantity),
+            str(row.outbound_quantity),
+            str(row.expenditure),
+            str(row.unpriced_issue_quantity),
+            str(row.disposed_quantity),
+            str(row.disposal_amount),
+        ]
+        for row in window._snapshot.result.breakdown
+    ]
+    assert output[1:] == expected
+    assert len(output) == window.breakdown_model.rowCount() + 1
+    assert "CSV を出力しました" in window.output_status.text()
+    assert any("CSV出力を開始" in record.message for record in caplog.records)
+    assert any("CSV出力が完了" in record.message for record in caplog.records)
+
+
+def test_dashboard_csv_cancel_does_not_create_a_file(
+    qtbot: QtBot, env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = _open(qtbot, env)
+    destination = tmp_path / "cancelled.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: ("", ""))
+
+    window.csv_button.click()
+
+    assert not destination.exists()
+    assert not window.output_status.text()
+
+
+def test_dashboard_png_exports_full_chart_content_at_any_scroll_position(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    restore_app_font: Any,
+) -> None:
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    destination = tmp_path / "dashboard"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+
+    assert window.png_button.isEnabled()
+    window.png_button.click()
+
+    first_path = tmp_path / "dashboard.png"
+    first_bytes = first_path.read_bytes()
+    image = QImage(str(first_path))
+    assert not image.isNull()
+    ratio = window.chart_content.devicePixelRatioF()
+    assert image.width() == round(window.chart_content.width() * ratio)
+    assert image.height() == round(window.chart_content.height() * ratio)
+
+    def sampled_colors(top: int, bottom: int) -> set[int]:
+        return {
+            image.pixel(x, y)
+            for x in range(0, image.width(), max(1, image.width() // 30))
+            for y in range(top, bottom, max(1, (bottom - top) // 20))
+        }
+
+    assert len(sampled_colors(0, image.height() // 2)) > 1
+    assert len(sampled_colors(image.height() // 2, image.height())) > 1
+
+    scrollbar = window.chart_scroll.verticalScrollBar()
+    scrollbar.setValue(scrollbar.maximum())
+    bottom_path = tmp_path / "dashboard-bottom.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(bottom_path), ""))
+    window.png_button.click()
+    assert bottom_path.read_bytes() == first_bytes
+    assert "PNG を保存しました" in window.output_status.text()
+
+    apply_display_settings(DisplaySettings(font_scale_percent=150))
+    qtbot.wait(30)
+    scaled_path = tmp_path / "dashboard-150.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(scaled_path), ""))
+    window.png_button.click()
+    scaled_image = QImage(str(scaled_path))
+    assert not scaled_image.isNull()
+    scaled_ratio = window.chart_content.devicePixelRatioF()
+    assert scaled_image.width() == round(window.chart_content.width() * scaled_ratio)
+    assert scaled_image.height() == round(window.chart_content.height() * scaled_ratio)
+    assert any("PNG出力を開始" in record.message for record in caplog.records)
+    assert any("PNG出力が完了" in record.message for record in caplog.records)
+
+
+def test_dashboard_png_failure_preserves_existing_file(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from PySide6.QtGui import QPixmap
+
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    destination = tmp_path / "existing.png"
+    original = b"existing image contents"
+    destination.write_bytes(original)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+    monkeypatch.setattr(window.chart_content, "grab", lambda: QPixmap())
+
+    window.png_button.click()
+
+    assert destination.read_bytes() == original
+    assert len(messages) == 1
+    assert "PNG画像を保存できません" in messages[0]
+    assert window.isVisible()
+    assert any("PNG出力を開始" in record.message for record in caplog.records)
+    assert any("PNG出力に失敗" in record.message for record in caplog.records)
+
+
+def test_exports_after_aggregation_failure_use_last_successful_snapshot(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    messages: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _open(qtbot, env)
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    selected_path = {"value": tmp_path / "before.csv"}
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args: (str(selected_path["value"]), ""),
+    )
+    window.csv_button.click()
+    csv_before = selected_path["value"].read_bytes()
+    selected_path["value"] = tmp_path / "before.png"
+    window.png_button.click()
+    png_before = selected_path["value"].read_bytes()
+
+    probe.fail = True
+    _select(window.group_combo, GroupBy.CLIENT)
+    assert len(messages) == 1
+    assert window.group_combo.currentData() == GroupBy.NONE
+
+    selected_path["value"] = tmp_path / "after.csv"
+    window.csv_button.click()
+    assert selected_path["value"].read_bytes() == csv_before
+    selected_path["value"] = tmp_path / "after.png"
+    window.png_button.click()
+    assert selected_path["value"].read_bytes() == png_before
+
+
+def test_export_buttons_follow_acquisition_and_active_tab(
+    qtbot: QtBot, env: Env, messages: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    probe.fail = True
+    window = _open(qtbot, env)
+
+    assert len(messages) == 1
+    assert not window.csv_button.isEnabled()
+    assert not window.png_button.isEnabled()
+
+    probe.fail = False
+    _select(window.group_combo, GroupBy.CLIENT)
+    assert window.csv_button.isEnabled()
+    assert window.png_button.isEnabled()
+    window.tabs.setCurrentIndex(1)
+    assert window.csv_button.isEnabled()
+    assert not window.png_button.isEnabled()
+    window.tabs.setCurrentIndex(0)
+    assert window.png_button.isEnabled()
 
 
 def test_data_changed_updates_once_and_keeps_selection(
