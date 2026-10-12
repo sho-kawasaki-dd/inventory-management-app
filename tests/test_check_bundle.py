@@ -97,6 +97,33 @@ def test_rejects_metadata_version_mismatch(tmp_path: Path) -> None:
     assert "版数不一致" in problems[0]
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "_internal/PySide6/Qt6Pdf.dll",
+        "_internal/PySide6/Qt6Quick.dll",
+        "_internal/PySide6/QtNetwork.pyd",
+        "_internal/PySide6/translations/qt_ja.qm",
+        "_internal/PySide6/plugins/imageformats/qpdf.dll",
+        "_internal/PySide6/plugins/tls/qopensslbackend.dll",
+    ],
+)
+def test_rejects_qt_files_outside_dependency_source_scope(
+    tmp_path: Path, relative_path: str
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    _make_bundle(bundle_dir)
+    extra_path = bundle_dir / relative_path
+    extra_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_path.write_text("unexpected\n", encoding="utf-8")
+
+    problems = check_bundle(bundle_dir, project_file=_project_file(tmp_path))
+
+    assert len(problems) == 1
+    assert "対応ソース範囲外" in problems[0]
+
+
 def test_requires_every_license_document_in_packaging_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

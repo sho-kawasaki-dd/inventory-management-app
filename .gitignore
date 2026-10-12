@@ -15,3 +15,5 @@ dist/
 .idea/
 .vscode/
 *.log
+packaging/dependency-sources/*
+!packaging/dependency-sources/manifest.json

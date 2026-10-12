@@ -1,22 +1,53 @@
 Inventory Manager mini - 対応ソースの取得案内
 ==============================================
 
-各バイナリの対応ソースは、そのバイナリと同じ GitHub Release から追加費用なしで取得できる
-ように提供します。対象タグ・コミット SHA・アプリ版・依存の実版とソース成果物の対応は、
-同じ Release に添付する構成一覧 (-manifest.json) で確認してください。
+各バイナリの対応ソースは、そのバイナリと同じ GitHub Release から追加費用なしで取得できます。
+対象タグ・コミット SHA・アプリ版・依存の実版とソース成果物の対応は、同じ Release に添付する
+構成一覧(inventory-manager-mini-<版数>[-rc<N>]-manifest.json)で確認してください。各ファイルの SHA256 は
+同名に .sha256 を付けたファイルに記載しています。
 
-Release の `<アプリ版数>[-rc<N>]-sources.zip` には、対象コミットのアプリソース、SQL、必要な
-資産、LICENSE、pyproject.toml、uv.lock、PyInstaller spec、Inno Setup スクリプト、ビルド用
-スクリプト、およびソースから変更・ビルド・インストールする手順を含めます。実際のバイナリに
-含まれる GPL 等の対象依存については、同じ Release に版を対応させた必要なソースとビルド設定・
-変更内容を添付します。上流 URL、wheel、GitHub 自動生成 ZIP だけでは対応ソースの代わりになりません。
+1. Release の添付ファイル
+-------------------------
+- inventory-manager-mini-<版数>[-rc<N>]-setup.exe: インストーラー
+- inventory-manager-mini-<版数>[-rc<N>]-sources.zip: 対応ソース一式(下記 2)
+- inventory-manager-mini-<版数>[-rc<N>]-manifest.json: 構成一覧
+- 上記それぞれの .sha256
 
-System Libraries 等を対応ソースから除外する場合は、適用条件と除外理由を構成一覧に記録します。
-Release の添付ファイルと SHA256 は、インストーラー、アプリソース、依存ソース、構成一覧の対応を
-確認するために使ってください。バイナリを提供している間は、対応するソースも取得できる状態を
-維持します。
+2. -sources.zip の内容
+----------------------
+- アプリのソース(src/)、SQL、テスト(tests/)、文書(docs/)、LICENSE、README.md、pyproject.toml、uv.lock
+- ビルド用ファイル: packaging/inventory-manager-mini.spec(PyInstaller)、packaging/inventory-manager-mini.iss(Inno Setup)、
+  packaging/build.ps1、scripts/(検査・取得スクリプト)、.github/workflows/
+- ライセンス・通知: packaging/DISTRIBUTION_LICENSE.txt、packaging/THIRD_PARTY_NOTICES.txt、packaging/licenses/
+- 依存ソース: packaging/dependency-sources/(Release ビルドのみ)
+  - manifest.json(部品・版・ファイル名・SHA256・取得元 URL)
+  - qtbase・qtsvg・qtcharts(Qt 6.11.2)、pyside-setup(PySide6・shiboken6 6.11.2)、PyInstaller 6.22.3、
+    pyinstaller-hooks-contrib 2026.8 のソース
+  - バイナリに含まれる各 DLL との対応は THIRD_PARTY_NOTICES.txt の表を参照してください。
+- 含めないもの: 利用者のデータベース・バックアップ・ログ・個人情報・秘密情報
+- 含めない依存: Python 本体・OpenSSL・SQLite・libffi 等の許諾が緩やかなもの、Microsoft のランタイム(System Libraries 扱い。
+  理由と該当性は THIRD_PARTY_NOTICES.txt を参照)。これらのライセンス通知は licenses/ に収録しています。
+- ローカル検証用ビルド(構成一覧の build_type が local-verification)は検証用で、依存ソースを含まない場合があります。配布には使いません。
 
-このリポジトリには利用者のデータベース、バックアップ、ログ、個人情報は含めません。
+3. ソースからの変更・ビルド・インストール(Windows 10 以上、64 ビット)
+------------------------------------------------------------------
+前提: uv、Inno Setup 6.7.3(%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe。別の場所は -IsccPath で指定)
 
-注意: この案内ファイルは配布手順の定義です。依存ソースの収集、版対応、Release への添付が
-完了するまでは、特定ビルドの対応ソースを提供済みとみなせません。
+1) -sources.zip を展開し、展開先で次を実行します(ネットワークは依存の取得にのみ使用)。
+     uv sync --locked
+2) 依存ソースを同梱版の SHA256 と照合します(Release の -sources.zip には取得済みですが、再取得も可能です)。
+     uv run python scripts/fetch_dependency_sources.py
+3) 変更を加える場合はソースを編集し、必要ならテストを実行します。
+     uv run pytest
+4) 配布ファイルを作成します。版数は pyproject.toml の project.version と一致させます。
+     powershell -File packaging/build.ps1 -Version <版数> [-Suffix -rc<N>]
+   成功すると dist/releases/<ビルドID>/ にインストーラー・ソース・構成一覧・.sha256 が作成されます。
+5) 作成したインストーラー(-setup.exe)を実行してインストールします。
+
+GPLv3 により、変更して再配布する場合は、同じ GPLv3 で変更後のソースを利用者に提供してください。
+バイト単位で同一のバイナリが生成されることは保証しません。
+
+4. 提供の維持
+-------------
+バイナリを提供している間は、対応するソースも同じ Release から取得できる状態を維持します。
+公開・削除の際は、バイナリとソースの対応を確認します。

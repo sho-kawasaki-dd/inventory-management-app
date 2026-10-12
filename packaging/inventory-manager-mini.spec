@@ -32,6 +32,45 @@ analysis = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# 対応ソースの提供範囲を絞るため、アプリが使わない Qt モジュール・プラグインを同梱から外す
+EXCLUDED_FILE_NAMES = {
+    "qt6pdf.dll",
+    "qt6qml.dll",
+    "qt6qmlmeta.dll",
+    "qt6qmlmodels.dll",
+    "qt6qmlworkerscript.dll",
+    "qt6quick.dll",
+    "qt6virtualkeyboard.dll",
+    "qt6network.dll",
+    "qtnetwork.pyd",
+    "opengl32sw.dll",
+    "qpdf.dll",
+    "qicns.dll",
+    "qtga.dll",
+    "qtiff.dll",
+    "qwbmp.dll",
+    "qwebp.dll",
+    "qdirect2d.dll",
+    "qminimal.dll",
+    "qoffscreen.dll",
+}
+EXCLUDED_DIRECTORIES = (
+    "pyside6/translations/",
+    "pyside6/plugins/tls/",
+    "pyside6/plugins/networkinformation/",
+    "pyside6/plugins/generic/",
+    "pyside6/plugins/platforminputcontexts/",
+)
+
+
+def is_bundled(entry):
+    destination = str(entry[0]).replace("\\", "/").lower()
+    return destination.rsplit("/", 1)[-1] not in EXCLUDED_FILE_NAMES and not destination.startswith(EXCLUDED_DIRECTORIES)
+
+
+analysis.binaries = [entry for entry in analysis.binaries if is_bundled(entry)]
+analysis.datas = [entry for entry in analysis.datas if is_bundled(entry)]
 pyz_archive = PYZ(analysis.pure)
 
 executable_options = {}

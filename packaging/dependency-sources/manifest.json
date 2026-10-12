@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "audit_status": "complete",
+  "note": "onedir 同梱物(spec 除外後)の棚卸しに基づく。tar は git 管理せず scripts/fetch_dependency_sources.py で取得して SHA256 を検証する。",
+  "sources": [
+    {
+      "component": "Qt-qtbase",
+      "version": "6.11.2",
+      "path": "qtbase-everywhere-src-6.11.2.tar.xz",
+      "sha256": "5b2e00eccaf5a4d8c14134ffa0ea8dfd0a35ae1ffc7f8d87fa4305a1ed23cf22",
+      "url": "https://download.qt.io/archive/qt/6.11/6.11.2/submodules/qtbase-everywhere-src-6.11.2.tar.xz",
+      "covers": "Qt6Core・Qt6Gui・Qt6Widgets・Qt6OpenGL・Qt6OpenGLWidgets・Qt6PrintSupport、plugins の platforms/styles/imageformats(qgif・qico・qjpeg)、qtbase 内の第三者コード"
+    },
+    {
+      "component": "Qt-qtsvg",
+      "version": "6.11.2",
+      "path": "qtsvg-everywhere-src-6.11.2.tar.xz",
+      "sha256": "d594337feca84c26fb67fe87b85e6a5c12fda404b611d905f9d138210c311876",
+      "url": "https://download.qt.io/archive/qt/6.11/6.11.2/submodules/qtsvg-everywhere-src-6.11.2.tar.xz",
+      "covers": "Qt6Svg・plugins の imageformats/qsvg・iconengines/qsvgicon"
+    },
+    {
+      "component": "Qt-qtcharts",
+      "version": "6.11.2",
+      "path": "qtcharts-everywhere-src-6.11.2.tar.xz",
+      "sha256": "5069e53b81d125509e937c6379cba6d664c562d5a1e5ed28dd383690d4b6fb29",
+      "url": "https://download.qt.io/archive/qt/6.11/6.11.2/submodules/qtcharts-everywhere-src-6.11.2.tar.xz",
+      "covers": "Qt6Charts"
+    },
+    {
+      "component": "PySide6",
+      "version": "6.11.2",
+      "path": "pyside-setup-everywhere-src-6.11.2.tar.xz",
+      "sha256": "cba47efbaad1bedd529725cbc14e21f156c7a19366f07b3edfbb076ffd7afdf8",
+      "url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/pyside-setup-everywhere-src-6.11.2.tar.xz",
+      "covers": "PySide6 の各 .pyd・pyside6.abi3.dll と shiboken6"
+    },
+    {
+      "component": "pyinstaller",
+      "version": "6.22.3",
+      "path": "pyinstaller-6.22.3.tar.gz",
+      "sha256": "05eb2f5615503e72939a7224d68b4aff572c6b0438ee4a17d0a4b481f399362d",
+      "url": "https://files.pythonhosted.org/packages/63/41/f90302845945abd4ed647933ff5ee7c6ac93983187be67f897b6cb613331/pyinstaller-6.22.3.tar.gz",
+      "covers": "exe の bootloader、実行時の起動コード、run-time hooks"
+    },
+    {
+      "component": "pyinstaller-hooks-contrib",
+      "version": "2026.8",
+      "path": "pyinstaller_hooks_contrib-2026.8.tar.gz",
+      "sha256": "4d825786ad7a9b7dbcc52d612748a34562fe273461bcfd88f4d549c594bbf8f9",
+      "url": "https://files.pythonhosted.org/packages/c9/3b/fab1a12a21bf9223af012e5dd002b7d4265683d21d9fabbd0ccb347316e4/pyinstaller_hooks_contrib-2026.8.tar.gz",
+      "covers": "ビルド時に使用した hooks(同梱される run-time hook を含む)"
+    }
+  ]
+}

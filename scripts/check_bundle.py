@@ -8,6 +8,31 @@ from pathlib import Path
 
 LICENSES_DIR = Path(__file__).resolve().parents[1] / "packaging" / "licenses"
 
+# manifest.json の依存ソースで対応できる Qt の同梱物。これ以外は対応ソースの範囲外として拒否する
+ALLOWED_QT_LIBRARIES = frozenset(
+    {
+        "qt6charts.dll",
+        "qt6core.dll",
+        "qt6gui.dll",
+        "qt6opengl.dll",
+        "qt6openglwidgets.dll",
+        "qt6printsupport.dll",
+        "qt6svg.dll",
+        "qt6widgets.dll",
+    }
+)
+ALLOWED_QT_PLUGINS = frozenset(
+    {
+        "iconengines/qsvgicon.dll",
+        "imageformats/qgif.dll",
+        "imageformats/qico.dll",
+        "imageformats/qjpeg.dll",
+        "imageformats/qsvg.dll",
+        "platforms/qwindows.dll",
+        "styles/qmodernwindowsstyle.dll",
+    }
+)
+
 
 def _read_project_version(project_file: Path) -> str:
     try:
@@ -45,6 +70,30 @@ def _required_files(version: str) -> list[Path]:
     return required
 
 
+def _unexpected_qt_files(bundle_dir: Path) -> list[str]:
+    pyside_dir = bundle_dir / "_internal" / "PySide6"
+    if not pyside_dir.is_dir():
+        return []
+
+    unexpected: list[str] = []
+    for path in sorted(pyside_dir.iterdir()):
+        name = path.name.lower()
+        if path.is_file() and name.startswith("qt6") and name not in ALLOWED_QT_LIBRARIES:
+            unexpected.append(f"対応ソース範囲外: PySide6/{path.name}")
+        if (path.is_file() and name == "qtnetwork.pyd") or (
+            path.is_dir() and name == "translations"
+        ):
+            unexpected.append(f"対応ソース範囲外: PySide6/{path.name}")
+
+    plugins_dir = pyside_dir / "plugins"
+    if plugins_dir.is_dir():
+        for path in sorted(plugins_dir.rglob("*")):
+            relative = path.relative_to(plugins_dir).as_posix()
+            if path.is_file() and relative.lower() not in ALLOWED_QT_PLUGINS:
+                unexpected.append(f"対応ソース範囲外: PySide6/plugins/{relative}")
+    return unexpected
+
+
 def check_bundle(bundle_dir: Path, *, project_file: Path | None = None) -> list[str]:
     version_file = project_file or Path(__file__).resolve().parents[1] / "pyproject.toml"
     try:
@@ -63,6 +112,8 @@ def check_bundle(bundle_dir: Path, *, project_file: Path | None = None) -> list[
                 problems.append(f"空ファイル: {relative_path.as_posix()}")
         except OSError:
             problems.append(f"読み取れません: {relative_path.as_posix()}")
+
+    problems.extend(_unexpected_qt_files(bundle_dir))
 
     metadata_path = (
         bundle_dir / "_internal" / f"inventory_manager_mini-{version}.dist-info" / "METADATA"

@@ -108,9 +108,12 @@ Release にはインストーラーのほか、対応する `-sources.zip`、構
 実行します。依存を変更して再配布するときも、バイナリと版対応する依存ソース・ライセンス通知をそろえて
 ください。バイナリを提供している間は対応ソースも提供します。
 
-Release の対応ソースは、依存ソースの監査・版対応が完了した成果物に限ります。現行の第三者通知には
-Phase 2 試験ビルド由来の未確定事項が残るため、最終配布構成の棚卸し完了前に配布可能と判断しません。
-DB、バックアップ、ログ、個人情報などの実データはソース・Release の対象ではありません。
+Release の対応ソースには、バイナリに実際に含まれる Qt(qtbase・qtsvg・qtcharts)、PySide6、PyInstaller 等の
+依存ソースを `packaging/dependency-sources/` に版と SHA256 付きで収録します(部品と DLL の対応は
+`THIRD_PARTY_NOTICES.txt` の表を参照)。依存ソースは Git では管理せず、`manifest.json` の URL と SHA256 に従って
+`uv run python scripts/fetch_dependency_sources.py` で取得・検証します。アプリが使わない Qt モジュール
+(Qt6Pdf・Qml/Quick・Network 等)は spec で同梱から除外し、`scripts/check_bundle.py` が範囲外の Qt ファイルを
+検出して失敗させます。DB、バックアップ、ログ、個人情報などの実データはソース・Release の対象ではありません。
 
 ## Windows でのローカルビルド
 
@@ -119,8 +122,12 @@ Windows x64、Python 3.13、uv、および Inno Setup 6.7.3 が必要です。�
 
 ```powershell
 uv sync --locked
+uv run python scripts/fetch_dependency_sources.py
 .\packaging\build.ps1 -Version 0.1.0
 ```
+
+PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.1.0` のように
+実行するか、利用者の判断で現在のセッションだけ実行ポリシーを変更してください。
 
 検証用 rc ビルドでは接尾辞を別に指定します。
 
@@ -131,8 +138,8 @@ uv sync --locked
 成果物は毎回異なるビルド ID の `dist/releases/<ビルドID>/` に出力されます。そこにはインストーラー、
 アプリソース ZIP、構成一覧と、それぞれの SHA256 ファイルが含まれます。ビルド途中で失敗した場合は
 非ゼロ終了となり、その回の成果物は確定されません。古い `dist/releases/` の内容を今回のビルド結果と
-して使用・配布せず、コマンドが成功時に出力したパスだけを対象にしてください。ローカル検証ビルドは
-正式リリースと異なり、監査済み依存ソースを含む配布物ではありません。
+して使用・配布せず、コマンドが成功時に出力したパスだけを対象にしてください。依存ソースを取得していない
+ローカル検証ビルドの `-sources.zip` は、対応ソースの要件を満たさないため配布に使いません。
 
 アプリ・インストーラーのアイコンを指定する場合は `packaging/app.ico` に配置してからビルドします。
 ファイルがない場合もビルドでき、その場合は既定のアイコンを使用します。

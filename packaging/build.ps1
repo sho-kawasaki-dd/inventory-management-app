@@ -72,7 +72,7 @@ function Copy-SourceTree {
     )
 
     $directories = @('src', 'scripts', 'tests', 'docs', 'packaging', '.github/workflows')
-    $rootFiles = @('README.md', 'LICENSE', 'pyproject.toml', 'uv.lock')
+    $rootFiles = @('README.md', 'LICENSE', 'pyproject.toml', 'uv.lock', '.python-version')
     $excludedFilePattern = '(^|[\\/])(?:\.env(?:\.[^\\/]*)?|[^\\/]*\.(?:db|sqlite(?:3)?|log|pem|key))$'
     $excludedDirectoryPattern = '(^|[\\/])(?:\.git|\.venv|__pycache__|\.pytest_cache|\.ruff_cache|\.pyright|dist|build)([\\/]|$)'
 
@@ -203,17 +203,24 @@ function Write-Sha256File {
 Push-Location $script:ProjectRoot
 try {
     $uvCommand = Get-Command uv -ErrorAction Stop
-    $gitCommand = Get-Command git -ErrorAction Stop
+    $isReleaseBuild = $env:GITHUB_ACTIONS -eq 'true'
+    # 対応ソース(-sources.zip)を展開したディレクトリには .git がない。Release ビルドでは git を必須とする
+    $hasGitRepository = Test-Path -LiteralPath (Join-Path $script:ProjectRoot '.git')
+    if ($isReleaseBuild -and -not $hasGitRepository) {
+        throw 'Release ビルドには git リポジトリが必要です。'
+    }
+    $gitCommand = if ($hasGitRepository) { Get-Command git -ErrorAction Stop } else { $null }
     $resolvedIsccPath = (Resolve-Path -LiteralPath $IsccPath -ErrorAction Stop).Path
     $innoVersion = Get-InnoSetupVersion -CompilerPath $resolvedIsccPath
     if ($innoVersion -ne $script:ExpectedInnoSetupVersion) {
         throw "Inno Setup の版が一致しません。期待値=$($script:ExpectedInnoSetupVersion)、実際=$innoVersion、ISCC=$resolvedIsccPath"
     }
 
-    $isReleaseBuild = $env:GITHUB_ACTIONS -eq 'true'
     $expectedTag = "v$Version$Suffix"
-    $commitSha = Invoke-CheckedExternal -Executable $gitCommand.Source -Arguments @('rev-parse', 'HEAD')
-    $commitSha = $commitSha.Trim()
+    $commitSha = 'unknown (git リポジトリなし)'
+    if ($hasGitRepository) {
+        $commitSha = (Invoke-CheckedExternal -Executable $gitCommand.Source -Arguments @('rev-parse', 'HEAD')).Trim()
+    }
     $tag = $null
     if ($isReleaseBuild) {
         if ($env:GITHUB_REF_TYPE -ne 'tag' -or $env:GITHUB_REF_NAME -ne $expectedTag) {
