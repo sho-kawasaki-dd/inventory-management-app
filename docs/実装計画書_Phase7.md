@@ -146,7 +146,7 @@
 
 #### E. 印刷用フォント `ui/printing/fonts.py`(新規)
 
-- [ ] 候補フォント(`Yu Gothic UI`・`Meiryo UI`・`Noto Sans CJK JP`)から、`QFontDatabase.families()` に存在する最初のものを選び、なければ `QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)` を使う関数 `print_font(point_size, bold=False) -> QFont` を実装する。UI の文字サイズ倍率・`font_family` 設定を参照しない
+- [x] 候補フォント(`Yu Gothic UI`・`Meiryo UI`・`Noto Sans CJK JP`)から、`QFontDatabase.families()` に存在する最初のものを選び、なければ `QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)` を使う関数 `print_font(point_size, bold=False) -> QFont` を実装する。UI の文字サイズ倍率・`font_family` 設定を参照しない
 
 #### F. ラベル描画 `ui/printing/label_renderer.py`(新規)
 
