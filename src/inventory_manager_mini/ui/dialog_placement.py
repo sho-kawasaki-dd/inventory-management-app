@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QWidget
 
 
-def center_dialog(dialog: QDialog) -> None:
+def center_dialog(dialog: QWidget) -> None:
     parent = dialog.parentWidget()
     screen = parent.screen() if parent is not None else QApplication.primaryScreen()
     if screen is None:

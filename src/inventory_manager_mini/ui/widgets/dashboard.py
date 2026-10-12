@@ -1,0 +1,355 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+import shiboken6
+from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QHideEvent, QPainter, QShowEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTableView,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from inventory_manager_mini.core.models import (
+    Client,
+    DashboardResult,
+    DashboardRow,
+    GroupBy,
+    PeriodKind,
+    Purchaser,
+)
+from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialog_placement import center_dialog
+from inventory_manager_mini.ui.error_handling import run_guarded
+from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardSnapshot:
+    clients: tuple[Client, ...]
+    purchasers: tuple[Purchaser, ...]
+    years: tuple[int, ...]
+    client_id: int | None
+    purchaser_id: int | None
+    fiscal_year: int
+    kind: PeriodKind
+    group_by: GroupBy
+    result: DashboardResult
+
+
+class DashboardWindow(QWidget):
+    def __init__(self, context: AppContext, parent: QWidget | None = None) -> None:
+        super().__init__(parent, Qt.WindowType.Window)
+        self.context = context
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setWindowTitle("ダッシュボード")
+        self._snapshot: _DashboardSnapshot | None = None
+        self._stale = True
+        self._shutdown = False
+        self._positioned = False
+        self._signals_blocked = False
+
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.timeout.connect(self._refresh)
+        self._build_ui()
+        self.context.data_bus.data_changed.connect(self._data_changed)
+
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        filters = QHBoxLayout()
+        self.client_combo = QComboBox(self)
+        self.purchaser_combo = QComboBox(self)
+        self.year_combo = QComboBox(self)
+        self.kind_combo = QComboBox(self)
+        self.kind_combo.addItem("月次", PeriodKind.MONTHLY)
+        self.kind_combo.addItem("年次", PeriodKind.ANNUAL)
+        self.group_combo = QComboBox(self)
+        for label, group in (
+            ("なし", GroupBy.NONE),
+            ("クライアント別", GroupBy.CLIENT),
+            ("発注主体別", GroupBy.PURCHASER),
+            ("クライアント×発注主体", GroupBy.CLIENT_PURCHASER),
+        ):
+            self.group_combo.addItem(label, group)
+
+        for label, combo in (
+            ("クライアント", self.client_combo),
+            ("発注主体", self.purchaser_combo),
+            ("年度", self.year_combo),
+            ("期間", self.kind_combo),
+            ("内訳", self.group_combo),
+        ):
+            form = QFormLayout()
+            form.addRow(label, combo)
+            filters.addLayout(form, 1)
+        outer.addLayout(filters)
+
+        self.totals_label = QLabel(
+            "入庫数: --　出庫数: --　支出額: --　単価未登録数量: --　廃棄数: --　廃棄額: --",
+            self,
+        )
+        self.totals_label.setWordWrap(True)
+        outer.addWidget(self.totals_label)
+
+        self.tabs = QTabWidget(self)
+        self.chart_scroll = QScrollArea(self.tabs)
+        self.chart_scroll.setWidgetResizable(True)
+        self.chart_content = QWidget(self.chart_scroll)
+        chart_layout = QVBoxLayout(self.chart_content)
+        self.quantity_chart = QChartView(self.chart_content)
+        self.amount_chart = QChartView(self.chart_content)
+        for chart_view in (self.quantity_chart, self.amount_chart):
+            chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+            chart_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            chart_view.setMinimumHeight(self.fontMetrics().height() * 16)
+            chart_layout.addWidget(chart_view)
+        self.chart_scroll.setWidget(self.chart_content)
+        self.tabs.addTab(self.chart_scroll, "グラフ")
+
+        self.breakdown_model = DashboardTableModel(parent=self)
+        self.breakdown_table = QTableView(self.tabs)
+        self.breakdown_table.setModel(self.breakdown_model)
+        self.breakdown_table.setAlternatingRowColors(True)
+        self.tabs.addTab(self.breakdown_table, "内訳")
+
+        self.disposal_model = DashboardTableModel(disposal_only=True, parent=self)
+        self.disposal_table = QTableView(self.tabs)
+        self.disposal_table.setModel(self.disposal_model)
+        self.disposal_table.setAlternatingRowColors(True)
+        self.tabs.addTab(self.disposal_table, "廃棄")
+        outer.addWidget(self.tabs, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.close_button = QPushButton("閉じる", self)
+        self.close_button.clicked.connect(self.hide)
+        buttons.addWidget(self.close_button)
+        outer.addLayout(buttons)
+
+        self._replace_charts(())
+        self.year_combo.setEnabled(False)
+        for combo in (
+            self.client_combo,
+            self.purchaser_combo,
+            self.year_combo,
+            self.kind_combo,
+            self.group_combo,
+        ):
+            combo.currentIndexChanged.connect(self._conditions_changed)
+
+    def _conditions_changed(self, _index: int) -> None:
+        if self._signals_blocked or self._shutdown:
+            return
+        self._stale = True
+        self._rebuild_timer.stop()
+        self._refresh()
+
+    def _data_changed(self) -> None:
+        if self._shutdown:
+            return
+        self._stale = True
+        if self.isVisible():
+            self._rebuild_timer.start(0)
+
+    def _collect_snapshot(self) -> _DashboardSnapshot:
+        clients = tuple(self.context.master.list_clients(include_inactive=True))
+        purchasers = tuple(self.context.master.list_purchasers(include_inactive=True))
+        years = tuple(self.context.reports.available_fiscal_years())
+        current_year = self.context.reports.current_fiscal_year()
+
+        selected_client = self.client_combo.currentData()
+        client_id = selected_client if any(item.id == selected_client for item in clients) else None
+        selected_purchaser = self.purchaser_combo.currentData()
+        purchaser_id = (
+            selected_purchaser
+            if any(item.id == selected_purchaser for item in purchasers)
+            else None
+        )
+        selected_year = self.year_combo.currentData()
+        fiscal_year = selected_year if selected_year in years else current_year
+        if fiscal_year not in years:
+            fiscal_year = years[-1] if years else current_year
+        kind = self.kind_combo.currentData() or PeriodKind.MONTHLY
+        group_by = self.group_combo.currentData() or GroupBy.NONE
+        result = self.context.reports.dashboard_result(
+            None if kind is PeriodKind.ANNUAL else fiscal_year,
+            kind,
+            client_id,
+            purchaser_id,
+            group_by,
+        )
+        return _DashboardSnapshot(
+            clients,
+            purchasers,
+            years,
+            client_id,
+            purchaser_id,
+            fiscal_year,
+            kind,
+            group_by,
+            result,
+        )
+
+    def _refresh(self) -> None:
+        if self._shutdown or not self.isVisible():
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            succeeded, snapshot = run_guarded(self, self._collect_snapshot)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not succeeded or snapshot is None:
+            if self._snapshot is None:
+                self._reset_unacquired_state()
+            else:
+                self._apply_snapshot(self._snapshot)
+            self._stale = True
+            return
+        self._snapshot = snapshot
+        self._apply_snapshot(snapshot)
+        self._stale = False
+
+    def _apply_snapshot(self, snapshot: _DashboardSnapshot) -> None:
+        self._signals_blocked = True
+        try:
+            self._fill_master_combo(self.client_combo, snapshot.clients, snapshot.client_id)
+            self._fill_master_combo(
+                self.purchaser_combo, snapshot.purchasers, snapshot.purchaser_id
+            )
+            self.year_combo.clear()
+            for year in snapshot.years:
+                self.year_combo.addItem(f"{year}年度", year)
+            index = self.year_combo.findData(snapshot.fiscal_year)
+            self.year_combo.setCurrentIndex(max(index, 0))
+            self.year_combo.setEnabled(snapshot.kind is PeriodKind.MONTHLY)
+        finally:
+            self._signals_blocked = False
+
+        self.breakdown_model.set_rows(snapshot.result.breakdown)
+        self.disposal_model.set_rows(snapshot.result.breakdown)
+        self._replace_charts(snapshot.result.totals)
+        self.totals_label.setText(self._format_totals(snapshot.result.totals))
+
+    def _reset_unacquired_state(self) -> None:
+        self._signals_blocked = True
+        try:
+            for combo in (self.client_combo, self.purchaser_combo, self.year_combo):
+                combo.clear()
+            self.year_combo.setEnabled(False)
+        finally:
+            self._signals_blocked = False
+        self.breakdown_model.set_rows(())
+        self.disposal_model.set_rows(())
+        self._replace_charts(())
+        self.totals_label.setText(
+            "入庫数: --　出庫数: --　支出額: --　単価未登録数量: --　廃棄数: --　廃棄額: --"
+        )
+
+    @staticmethod
+    def _fill_master_combo(
+        combo: QComboBox,
+        records: tuple[Client, ...] | tuple[Purchaser, ...],
+        selected_id: int | None,
+    ) -> None:
+        combo.clear()
+        combo.addItem("すべて", None)
+        for record in records:
+            label = record.name if record.is_active else f"{record.name} (無効)"
+            combo.addItem(label, record.id)
+        index = combo.findData(selected_id)
+        combo.setCurrentIndex(max(index, 0))
+
+    @staticmethod
+    def _format_totals(rows: Sequence[DashboardRow]) -> str:
+        values = [0, 0, 0, 0, 0, 0]
+        for row in rows:
+            values[0] += row.inbound_quantity
+            values[1] += row.outbound_quantity
+            values[2] += row.expenditure
+            values[3] += row.unpriced_issue_quantity
+            values[4] += row.disposed_quantity
+            values[5] += row.disposal_amount
+        return (
+            f"入庫数: {values[0]:,}　出庫数: {values[1]:,}　支出額: {values[2]:,}円　"
+            f"単価未登録数量: {values[3]:,}　廃棄数: {values[4]:,}　廃棄額: {values[5]:,}円"
+        )
+
+    def _replace_charts(self, rows: Sequence[DashboardRow]) -> None:
+        self._replace_chart(self.quantity_chart, rows, ("inbound_quantity", "outbound_quantity"))
+        self._replace_chart(self.amount_chart, rows, ("expenditure",))
+
+    @staticmethod
+    def _replace_chart(
+        view: QChartView, rows: Sequence[DashboardRow], fields: tuple[str, ...]
+    ) -> None:
+        chart = QChart()
+        chart.setTitle("数量" if fields[0] == "inbound_quantity" else "支出額")
+        chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
+        if rows:
+            categories = [row.period_label for row in rows]
+            maximum = max((getattr(row, field) for row in rows for field in fields), default=0)
+            axis_x = QBarCategoryAxis(chart)
+            axis_x.append(categories)
+            axis_x.setLabelsAngle(-45)
+            axis_y = QValueAxis(chart)
+            axis_y.setRange(0, max(1, maximum))
+            axis_y.setLabelFormat("%'d")
+            series = QBarSeries(chart)
+            for field, label in (
+                ("inbound_quantity", "入庫数"),
+                ("outbound_quantity", "出庫数"),
+                ("expenditure", "支出額"),
+            ):
+                if field in fields:
+                    bar_set = QBarSet(label, series)
+                    bar_set.append([getattr(row, field) for row in rows])
+                    series.append(bar_set)
+            chart.addSeries(series)
+            chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+            chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+            series.attachAxis(axis_x)
+            series.attachAxis(axis_y)
+        chart.legend().setVisible(bool(rows))
+        old_chart = view.chart()
+        view.setChart(chart)
+        if old_chart is not None and shiboken6.isValid(old_chart):
+            old_chart.deleteLater()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._shutdown:
+            self.hide()
+            return
+        if not self._positioned:
+            center_dialog(self)
+            self._positioned = True
+        if not event.spontaneous() and self._stale:
+            self._refresh()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        if not event.spontaneous() and self._rebuild_timer.isActive():
+            self._rebuild_timer.stop()
+            self._stale = True
+
+    def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._rebuild_timer.stop()
+        self.context.data_bus.data_changed.disconnect(self._data_changed)
+        self.hide()
+        self.deleteLater()

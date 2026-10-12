@@ -138,34 +138,34 @@
 
 #### D. ダッシュボード画面 `ui/widgets/dashboard.py`(新規)
 
-- [ ] 先行確認: `QChartView.setChart(new)` が旧チャートを自動削除するかを PySide6 実機(Windows・Linux offscreen)で確認し、結果を 4.3 に記録する。実装は結果に関わらず次の形に統一する(`old = view.chart()` → `view.setChart(new)` → `old is not None and shiboken6.isValid(old)` のときだけ `old.deleteLater()`)
-- [ ] `DashboardWindow(context, parent)` を作る(`QWidget` を基底に `Qt.Window` を指定、`setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)`、`center_dialog` による配置、最小サイズは `sizeHint` に任せ、固定寸法を指定しない)
-  - [ ] `ui/dialog_placement.py` の `center_dialog` の引数型を `QDialog` から `QWidget` へ広げる(既存の呼び出しは変更不要)
-- [ ] 絞り込み欄を配置する
-  - [ ] クライアント・発注主体: 「すべて」+`list_*(include_inactive=True)`。無効化済みは「(無効)」を付ける
-  - [ ] 年度: `available_fiscal_years()`。既定は `current_fiscal_year()`。年次表示では無効化する
-  - [ ] 年次/月次の切替(既定は月次)、内訳軸(既定は「なし」)
-- [ ] 表示期間の合計ラベルを置く(入庫数・出庫数・支出額・単価未登録数量・廃棄数・廃棄額。`totals` の合計)
-- [ ] `QTabWidget` に「グラフ」「内訳」「廃棄」を置く
-  - [ ] グラフ: `QScrollArea`(`setWidgetResizable(True)`)内のコンテンツウィジェットに `QChartView` を上下に 2 つ置く(数量: 入庫数・出庫数の `QBarSeries`、金額: 支出額)。各チャートの最小高さは `fontMetrics().height() * N`(N は実装時に決定)としてフォントに追従させる。カテゴリ軸は期間ラベル(文字重なり防止のため `setLabelsAngle(-45)` を設定)、縦軸は `QValueAxis`(0 始まり、全値 0 のときは 0〜1)。金額の軸ラベルは 3 桁区切り。グラフは `totals` を表示する。チャート更新は方式B(新しい `QChart` を生成して `view.setChart(new_chart)` で差し替え、旧チャートは先行確認どおり解放)を採用し、古いチャートや系列の参照を Python 側に保持しない
-  - [ ] 内訳・廃棄: `QTableView` と C のモデル(「内訳」は `breakdown` の全行、「廃棄」は廃棄実績あり行を表示)
-- [ ] 再集計を実装する
-  - [ ] 条件変更時に待機カーソルを表示し、`run_guarded` 内で選択肢の再取得と `dashboard_result` を実行する。成功後に表・グラフ・合計・表示用スナップショットを更新する
-  - [ ] 再集計では、選択肢を読み直して選択値を確定してから `dashboard_result` を呼ぶ
-  - [ ] 最後に成功した選択条件・選択肢・集計結果を表示用スナップショットとして保持する。失敗時は条件と選択肢も最後の成功状態へ戻し、表・グラフ・合計を維持する。条件復元中はシグナルを抑止して再集計を発生させない
-  - [ ] 画面状態を「未取得」「表示中」の 2 値で持つ。初期状態は「未取得」(合計は「--」、表・グラフは空、年度コンボは空で無効)。選択肢取得または集計に失敗しても状態は変えず、「未取得」なら「未取得」のまま、「表示中」なら最後の成功状態へ戻す
-  - [ ] 失敗時のダイアログは `run_guarded` で再集計 1 回につき 1 件とし、「古い」印は残して次の `showEvent` または条件変更で再試行する
-  - [ ] 「未取得」では、合計値を表示せず、6b で追加する CSV 出力・PNG 保存を不活性とし、成功後に通常の活性制御へ移行する
-  - [ ] `data_changed` は、表示中なら単発 `QTimer` でまとめて再集計し、非表示中は「古い」印を付けて `showEvent` で再集計する
-  - [ ] `showEvent` は「古い」印があるとき(初期状態を含む)だけ再集計し、成功したら印を外す。最小化からの復帰(`event.spontaneous()` が真)では再集計しない
-  - [ ] 再集計コールバックは、非表示中または終了状態なら Service を呼ばない。予約済み通知が残っていても再集計を開始しない
-  - [ ] 再集計時にクライアント・発注主体・年度の選択肢を読み直し、選択中の値は存在する限り維持する(存在しなくなった場合は「すべて」・現在年度へ戻す)
-- [ ] 下段に「閉じる」ボタンのみを置く(「CSV 出力」「PNG 保存」は 6b で追加する)
-- [ ] 「閉じる」ボタンは `hide()` を呼ぶだけとする。非表示時の処理は `hideEvent`(`event.spontaneous()` が真の最小化では何もしない)で行い、予約済みの再集計タイマーが動いていれば停止して「古い」印を付ける。インスタンスは保持する
-- [ ] `DashboardWindow.shutdown()` を冪等にする(2 回目以降は何もしない)。`_apply_restore` の開始前と `MainWindow.closeEvent` の両方から呼んでよい。呼び出し後は終了状態となり、`show` や再集計を拒否する
-- [ ] `ui/main_window.py` を変更する
-  - [ ] 「表示」メニューに「ダッシュボード」を追加し、単一インスタンスを保持して 2 回目以降は前面に出す
-  - [ ] `closeEvent` を新設し、復元の上書き(`_apply_restore`)の開始前と同様にダッシュボードの `shutdown()` を呼ぶ(タイマー停止・`data_changed` の接続解除・ウィンドウの破棄・保持参照の解除を行い、`super().closeEvent(event)` を呼ぶ)
+- [ ] 先行確認: `QChartView.setChart(new)` が旧チャートを自動削除するかを PySide6 実機(Windows・Linux offscreen)で確認し、結果を 4.3 に記録する。実装は結果に関わらず次の形に統一する(`old = view.chart()` → `view.setChart(new)` → `old is not None and shiboken6.isValid(old)` のときだけ `old.deleteLater()`)(Windows 確認済み、Linux 確認待ち)
+- [x] `DashboardWindow(context, parent)` を作る(`QWidget` を基底に `Qt.Window` を指定、`setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)`、`center_dialog` による配置、最小サイズは `sizeHint` に任せ、固定寸法を指定しない)
+  - [x] `ui/dialog_placement.py` の `center_dialog` の引数型を `QDialog` から `QWidget` へ広げる(既存の呼び出しは変更不要)
+- [x] 絞り込み欄を配置する
+  - [x] クライアント・発注主体: 「すべて」+`list_*(include_inactive=True)`。無効化済みは「(無効)」を付ける
+  - [x] 年度: `available_fiscal_years()`。既定は `current_fiscal_year()`。年次表示では無効化する
+  - [x] 年次/月次の切替(既定は月次)、内訳軸(既定は「なし」)
+- [x] 表示期間の合計ラベルを置く(入庫数・出庫数・支出額・単価未登録数量・廃棄数・廃棄額。`totals` の合計)
+- [x] `QTabWidget` に「グラフ」「内訳」「廃棄」を置く
+  - [x] グラフ: `QScrollArea`(`setWidgetResizable(True)`)内のコンテンツウィジェットに `QChartView` を上下に 2 つ置く(数量: 入庫数・出庫数の `QBarSeries`、金額: 支出額)。各チャートの最小高さは `fontMetrics().height() * N`(N は実装時に決定)としてフォントに追従させる。カテゴリ軸は期間ラベル(文字重なり防止のため `setLabelsAngle(-45)` を設定)、縦軸は `QValueAxis`(0 始まり、全値 0 のときは 0〜1)。金額の軸ラベルは 3 桁区切り。グラフは `totals` を表示する。チャート更新は方式B(新しい `QChart` を生成して `view.setChart(new_chart)` で差し替え、旧チャートは先行確認どおり解放)を採用し、古いチャートや系列の参照を Python 側に保持しない
+  - [x] 内訳・廃棄: `QTableView` と C のモデル(「内訳」は `breakdown` の全行、「廃棄」は廃棄実績あり行を表示)
+- [x] 再集計を実装する
+  - [x] 条件変更時に待機カーソルを表示し、`run_guarded` 内で選択肢の再取得と `dashboard_result` を実行する。成功後に表・グラフ・合計・表示用スナップショットを更新する
+  - [x] 再集計では、選択肢を読み直して選択値を確定してから `dashboard_result` を呼ぶ
+  - [x] 最後に成功した選択条件・選択肢・集計結果を表示用スナップショットとして保持する。失敗時は条件と選択肢も最後の成功状態へ戻し、表・グラフ・合計を維持する。条件復元中はシグナルを抑止して再集計を発生させない
+  - [x] 画面状態を「未取得」「表示中」の 2 値で持つ。初期状態は「未取得」(合計は「--」、表・グラフは空、年度コンボは空で無効)。選択肢取得または集計に失敗しても状態は変えず、「未取得」なら「未取得」のまま、「表示中」なら最後の成功状態へ戻す
+  - [x] 失敗時のダイアログは `run_guarded` で再集計 1 回につき 1 件とし、「古い」印は残して次の `showEvent` または条件変更で再試行する
+  - [x] 「未取得」では、合計値を表示せず、6b で追加する CSV 出力・PNG 保存を不活性とし、成功後に通常の活性制御へ移行する
+  - [x] `data_changed` は、表示中なら単発 `QTimer` でまとめて再集計し、非表示中は「古い」印を付けて `showEvent` で再集計する
+  - [x] `showEvent` は「古い」印があるとき(初期状態を含む)だけ再集計し、成功したら印を外す。最小化からの復帰(`event.spontaneous()` が真)では再集計しない
+  - [x] 再集計コールバックは、非表示中または終了状態なら Service を呼ばない。予約済み通知が残っていても再集計を開始しない
+  - [x] 再集計時にクライアント・発注主体・年度の選択肢を読み直し、選択中の値は存在する限り維持する(存在しなくなった場合は「すべて」・現在年度へ戻す)
+- [x] 下段に「閉じる」ボタンのみを置く(「CSV 出力」「PNG 保存」は 6b で追加する)
+- [x] 「閉じる」ボタンは `hide()` を呼ぶだけとする。非表示時の処理は `hideEvent`(`event.spontaneous()` が真の最小化では何もしない)で行い、予約済みの再集計タイマーが動いていれば停止して「古い」印を付ける。インスタンスは保持する
+- [x] `DashboardWindow.shutdown()` を冪等にする(2 回目以降は何もしない)。`_apply_restore` の開始前と `MainWindow.closeEvent` の両方から呼んでよい。呼び出し後は終了状態となり、`show` や再集計を拒否する
+- [x] `ui/main_window.py` を変更する
+  - [x] 「表示」メニューに「ダッシュボード」を追加し、単一インスタンスを保持して 2 回目以降は前面に出す
+  - [x] `closeEvent` を新設し、復元の上書き(`_apply_restore`)の開始前と同様にダッシュボードの `shutdown()` を呼ぶ(タイマー停止・`data_changed` の接続解除・ウィンドウの破棄・保持参照の解除を行い、`super().closeEvent(event)` を呼ぶ)
 
 #### E. 6a のテスト `tests/test_dashboard.py`(新規)
 
@@ -261,6 +261,9 @@
 ### 4.3 先行確認(6a・D)
 
 (`QChartView.setChart` が旧チャートを自動削除するかの確認結果(Windows・Linux offscreen)と、採用した解放方法を記録する。)
+
+- Windows / PySide6: `setChart(new)` 直後も旧チャートは `shiboken6.isValid(old) == True`。`deleteLater()` と `QEvent.DeferredDelete` 処理後に `False` となるため、差し替え後に有効性を確認して旧チャートを解放する。
+- Linux offscreen: 実行環境に Docker がなく未確認。Linux CI または実行環境で確認する。
 
 ## 5. リスクと対策
 
