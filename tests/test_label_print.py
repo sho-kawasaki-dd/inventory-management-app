@@ -480,6 +480,33 @@ def test_print_preview_locks_page_layout_and_replaces_native_actions(
 
 
 @pytest.mark.parametrize("orientation", _ORIENTATIONS)
+def test_print_preview_configures_zero_margin_on_printer_with_minimum_margins(
+    qtbot, monkeypatch, orientation: QPageLayout.Orientation
+) -> None:
+    from PySide6.QtGui import QPageLayout
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    original = QPrinter.setPageLayout
+
+    def reject_zero_margin_outside_full_page(printer: QPrinter, layout: QPageLayout) -> bool:
+        if layout.mode() != QPageLayout.Mode.FullPageMode:
+            return False
+        return original(printer, layout)
+
+    printer = _pdf_printer(Path("preview.pdf"))
+    calls: list[object] = []
+    dialog = PrintPreviewDialog(printer, orientation, 1, lambda device, pages: calls.append(device))
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(QPrinter, "setPageLayout", reject_zero_margin_outside_full_page)
+
+    dialog.paintRequested.emit(printer)
+
+    assert calls == [printer]
+    assert printer.fullPage()
+
+
+@pytest.mark.parametrize("orientation", _ORIENTATIONS)
 def test_print_preview_fits_work_area(qtbot, orientation: QPageLayout.Orientation) -> None:
 
     from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
@@ -622,7 +649,7 @@ def test_print_preview_does_not_render_when_page_configuration_fails(
     if failure == "page_layout":
         monkeypatch.setattr(QPrinter, "setPageLayout", lambda _printer, _layout: False)
     else:
-        monkeypatch.setattr(QPrinter, "setFullPage", lambda _printer, _enabled: None)
+        monkeypatch.setattr(QPrinter, "fullPage", lambda _printer: False)
 
     dialog.paintRequested.emit(printer)
 
