@@ -115,12 +115,12 @@
 
 #### B. 一覧の複数選択化 `ui/main_window.py`
 
-- [ ] `self.table` の選択モードを `ExtendedSelection` に変更する
-- [ ] `_selected_item_ids() -> list[int]` を新設する。選択行を proxy の行番号順に並べ、`mapToSource` → `item_model.row_at` で ID を返す(一覧の表示順)
-- [ ] `_selected_item_id()` を「ちょうど 1 件選択のときだけ ID、それ以外は `None`」に変更する。呼び出し元(`_edit_item`・`_open_stock_move`・`_open_history`・`_open_purchase_page`・`_toggle_item_active`・`_update_selection_actions`)が複数選択時に誤動作しないことを確認する
-- [ ] `_update_selection_actions` を、複数選択時は編集・廃止/再有効化・履歴・販売ページ・在庫操作をすべて不活性にするよう更新する。棚ラベルの `QAction` は 1 件以上で活性にする
-- [ ] `refresh()`・`refresh_items()` の選択復元を、単一 ID から選択中 ID の集合へ変更する(存在しなくなった ID は除外)。復元中に `selectionChanged` を過剰に発火させない
-- [ ] `ItemSortProxyModel.sort()` の選択保持が複数行でも維持されることを確認する(不足があれば `item_table_model.py` を修正)
+- [x] `self.table` の選択モードを `ExtendedSelection` に変更する
+- [x] `_selected_item_ids() -> list[int]` を新設する。選択行を proxy の行番号順に並べ、`mapToSource` → `item_model.row_at` で ID を返す(一覧の表示順)
+- [x] `_selected_item_id()` を「ちょうど 1 件選択のときだけ ID、それ以外は `None`」に変更する。呼び出し元(`_edit_item`・`_open_stock_move`・`_open_history`・`_open_purchase_page`・`_toggle_item_active`・`_update_selection_actions`)が複数選択時に誤動作しないことを確認する
+- [x] `_update_selection_actions` を、複数選択時は編集・廃止/再有効化・履歴・販売ページ・在庫操作をすべて不活性にするよう更新する。棚ラベルの `QAction` は 1 件以上で活性にする
+- [x] `refresh()`・`refresh_items()` の選択復元を、単一 ID から選択中 ID の集合へ変更する(存在しなくなった ID は除外)。復元中に `selectionChanged` を過剰に発火させない
+- [x] `ItemSortProxyModel.sort()` の選択保持が複数行でも維持されることを確認する(不足があれば `item_table_model.py` を修正)
 
 #### C. 面付けの純関数 `ui/printing/layout.py`(新規・Qt を import しない)
 

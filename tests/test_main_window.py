@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QItemSelectionModel, QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QToolBar, QWidget
 
@@ -38,7 +38,25 @@ def _select_item(window: MainWindow, item_id: int) -> None:
     source_row = window.item_model.row_of(item_id)
     assert source_row is not None
     proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
-    window.table.selectRow(proxy_index.row())
+    selection_model = window.table.selectionModel()
+    selection_model.select(
+        proxy_index,
+        QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    selection_model.setCurrentIndex(proxy_index, QItemSelectionModel.SelectionFlag.NoUpdate)
+
+
+def _select_items(window: MainWindow, item_ids: list[int]) -> None:
+    selection_model = window.table.selectionModel()
+    selection_model.clearSelection()
+    for item_id in item_ids:
+        source_row = window.item_model.row_of(item_id)
+        assert source_row is not None
+        proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
+        selection_model.select(
+            proxy_index,
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
 
 
 def _set_model_purchase_url(window: MainWindow, item_id: int, url: str | None) -> None:
@@ -106,7 +124,7 @@ def test_main_window_starts_with_active_items_and_disabled_item_actions(window_w
     assert not window.edit_action.isEnabled()
     assert not window.toggle_active_action.isEnabled()
     assert window.table.selectionBehavior() == window.table.SelectionBehavior.SelectRows
-    assert window.table.selectionMode() == window.table.SelectionMode.SingleSelection
+    assert window.table.selectionMode() == window.table.SelectionMode.ExtendedSelection
 
 
 def test_search_debounces_name_code_and_manufacturer_number(qtbot, window_with_items) -> None:
@@ -222,6 +240,37 @@ def test_selection_actions_and_deactivate_reactivate(window_with_items, monkeypa
     assert not window.context.inventory.get_item(first.id).is_active
     assert window._selected_item_id() == first.id
     assert window.item_model.row_at(window.item_model.row_of(first.id)).is_active is False
+
+
+def test_multiple_selection_disables_single_item_actions_and_survives_refresh(
+    window_with_items,
+) -> None:
+    window, first, second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    _select_items(window, [second.id, first.id])
+
+    expected_ids = sorted(
+        [first.id, second.id],
+        key=lambda item_id: window.sort_model.mapFromSource(
+            window.item_model.index(window.item_model.row_of(item_id), 0)
+        ).row(),
+    )
+    assert window._selected_item_ids() == expected_ids
+    assert window._selected_item_id() is None
+    assert not window.edit_action.isEnabled()
+    assert not window.toggle_active_action.isEnabled()
+    assert not window.history_action.isEnabled()
+    assert not window.purchase_page_action.isEnabled()
+    assert all(not action.isEnabled() for action in window.stock_actions.values())
+
+    window.refresh_items()
+    assert window._selected_item_ids() == expected_ids
+
+    window.refresh()
+    assert window._selected_item_ids() == expected_ids
+
+    window.location_combo.setCurrentIndex(window.location_combo.findData(1))
+    assert window._selected_item_ids() == [first.id]
 
 
 def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_items) -> None:

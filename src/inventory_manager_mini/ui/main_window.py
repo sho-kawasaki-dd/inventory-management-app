@@ -3,7 +3,7 @@ from enum import Enum, auto
 from importlib import import_module
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -113,7 +113,7 @@ class MainWindow(QMainWindow):
         self.table = QTableView(self)
         self.table.setModel(self.sort_model)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self.table.setSortingEnabled(True)
         self.sort_model.set_item_selection_model(self.table.selectionModel())
         self.table.selectionModel().selectionChanged.connect(self._update_selection_actions)
@@ -269,15 +269,10 @@ class MainWindow(QMainWindow):
         self._update_selection_actions()
 
     def refresh(self) -> None:
-        selected_id = self._selected_item_id()
+        selected_item_ids = self._selected_item_ids()
         self._refresh_master_choices()
-        self.refresh_items()
+        self.refresh_items(selected_item_ids=selected_item_ids)
         self.alert_panel.refresh()
-        if selected_id is not None:
-            source_row = self.item_model.row_of(selected_id)
-            if source_row is not None:
-                proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-                self.table.selectRow(proxy_index.row())
         self._update_selection_actions()
 
     def _refresh_master_choices(self) -> None:
@@ -331,30 +326,61 @@ class MainWindow(QMainWindow):
             include_inactive=self.inactive_checkbox.isChecked(),
         )
 
-    def refresh_items(self, *_args) -> None:
+    def refresh_items(self, *_args, selected_item_ids: list[int] | None = None) -> None:
         item_filter = self._current_item_filter()
-        selected_id = self._selected_item_id()
+        if selected_item_ids is None:
+            selected_item_ids = self._selected_item_ids()
         succeeded, rows = run_guarded(self, lambda: self.context.inventory.list_items(item_filter))
         if not succeeded or rows is None:
             return
         self.item_model.set_rows(rows)
-        if selected_id is not None:
-            source_row = self.item_model.row_of(selected_id)
-            if source_row is not None:
-                proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-                self.table.selectRow(proxy_index.row())
+        self._restore_item_selection(selected_item_ids)
         self.statusBar().showMessage(f"{len(rows):,} 件")
         self._update_selection_actions()
 
+    def _restore_item_selection(self, item_ids: list[int]) -> None:
+        selection_model = self.table.selectionModel()
+        proxy_indexes = []
+        for item_id in item_ids:
+            source_row = self.item_model.row_of(item_id)
+            if source_row is None:
+                continue
+            proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
+            if proxy_index.isValid():
+                proxy_indexes.append(proxy_index)
+        if not proxy_indexes:
+            selection_model.clearSelection()
+            return
+        selection = QItemSelection()
+        for proxy_index in proxy_indexes:
+            selection.select(proxy_index, proxy_index)
+        selection_model.select(
+            selection,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(
+            proxy_indexes[-1], QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+
+    def _selected_item_ids(self) -> list[int]:
+        selected = sorted(self.table.selectionModel().selectedRows(), key=lambda index: index.row())
+        item_ids = []
+        for proxy_index in selected:
+            source_index = self.sort_model.mapToSource(proxy_index)
+            if source_index.isValid():
+                item_ids.append(self.item_model.row_at(source_index.row()).id)
+        return item_ids
+
     def _selected_item_id(self) -> int | None:
-        selected = self.table.selectionModel().selectedRows()
-        if not selected:
+        selected_item_ids = self._selected_item_ids()
+        if len(selected_item_ids) != 1:
             return None
-        source_index = self.sort_model.mapToSource(selected[0])
-        return self.item_model.row_at(source_index.row()).id
+        return selected_item_ids[0]
 
     def _update_selection_actions(self, *_args) -> None:
-        selected_id = self._selected_item_id() if hasattr(self, "table") else None
+        selected_item_ids = self._selected_item_ids() if hasattr(self, "table") else []
+        selected_id = selected_item_ids[0] if len(selected_item_ids) == 1 else None
         row = None if selected_id is None else self.item_model.row_of(selected_id)
         item = None if row is None else self.item_model.row_at(row)
         has_selection = item is not None
@@ -367,6 +393,9 @@ class MainWindow(QMainWindow):
         can_move_stock = item is not None and item.is_active
         for action in self.stock_actions.values():
             action.setEnabled(can_move_stock)
+        print_labels_action = getattr(self, "print_labels_action", None)
+        if print_labels_action is not None:
+            print_labels_action.setEnabled(bool(selected_item_ids))
         if item is not None:
             self.toggle_active_action.setText("廃止" if item.is_active else "再有効化")
 
@@ -648,7 +677,13 @@ class MainWindow(QMainWindow):
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():
             return
-        self.table.selectRow(index.row())
+        selection_model = self.table.selectionModel()
+        selection_model.select(
+            index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
         source_index = self.sort_model.mapToSource(index)
         self._show_history(self.item_model.row_at(source_index.row()).id)
 
@@ -692,7 +727,13 @@ class MainWindow(QMainWindow):
         if source_row is None:
             return
         proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-        self.table.selectRow(proxy_index.row())
+        selection_model = self.table.selectionModel()
+        selection_model.select(
+            proxy_index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(proxy_index, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.table.scrollTo(proxy_index)
 
     def _open_master_dialog(self, tab_name: str) -> None:
