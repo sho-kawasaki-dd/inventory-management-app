@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
-from PySide6.QtWidgets import QDialog, QDialogButtonBox
+from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
 from inventory_manager_mini.core.models import GroupBy, ItemFilter, PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
@@ -31,6 +31,7 @@ from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
+from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 from scripts.generate_dummy_data import generate_database
 from tests.conftest import create_test_context
 
@@ -358,14 +359,17 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
     conn = connect(performance_db)
     try:
         reports = ReportService(conn)
-        fiscal_year = reports.current_fiscal_year()
         results: list[tuple[str, float]] = []
         for label, kind in (
-            ("年次", PeriodKind.ANNUAL),
+            ("年次推移", PeriodKind.ANNUAL),
             ("月次", PeriodKind.MONTHLY),
         ):
             started_at = time.perf_counter()
-            reports.dashboard_result(fiscal_year, kind, group_by=GroupBy.CLIENT_PURCHASER)
+            reports.dashboard_result(
+                None if kind is PeriodKind.ANNUAL else reports.current_fiscal_year(),
+                kind,
+                group_by=GroupBy.CLIENT_PURCHASER,
+            )
             elapsed = time.perf_counter() - started_at
             results.append((label, elapsed))
             assert elapsed <= 2.0, f"{label}集計に {elapsed:.3f} 秒かかりました"
@@ -374,6 +378,56 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
             + "、".join(f"{label} {elapsed:.3f} 秒" for label, elapsed in results)
         )
     finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    (PeriodKind.MONTHLY, PeriodKind.ANNUAL),
+    ids=("月次", "年次推移"),
+)
+def test_dashboard_refresh_and_render_with_large_history(
+    qtbot, monkeypatch, performance_db: Path, kind: PeriodKind
+) -> None:
+    conn = open_database(
+        performance_db,
+        performance_db.parent,
+        backup_timestamp=local_timestamp_for_filename,
+    )
+    context = create_test_context(
+        conn,
+        db_path=performance_db,
+        schema_version=SCHEMA_VERSION,
+    )
+    dashboard = DashboardWindow(context)
+    qtbot.addWidget(dashboard)
+    if kind is PeriodKind.ANNUAL:
+        dashboard.kind_combo.setCurrentIndex(dashboard.kind_combo.findData(kind))
+    dashboard.group_combo.setCurrentIndex(dashboard.group_combo.findData(GroupBy.CLIENT_PURCHASER))
+    original_dashboard_result = context.reports.dashboard_result
+    started_at: list[float] = []
+
+    def track_dashboard_result(*args, **kwargs):
+        started_at.append(time.perf_counter())
+        return original_dashboard_result(*args, **kwargs)
+
+    monkeypatch.setattr(context.reports, "dashboard_result", track_dashboard_result)
+    try:
+        dashboard.show()
+        QApplication.processEvents()
+        image = dashboard.chart_content.grab()
+        completed_at = time.perf_counter()
+        assert len(started_at) == 1
+        assert dashboard.breakdown_model.rowCount() > 0
+        assert not image.isNull()
+        assert dashboard.quantity_chart.chart().series()
+        assert dashboard.amount_chart.chart().series()
+        elapsed = completed_at - started_at[0]
+        label = "年次推移" if kind is PeriodKind.ANNUAL else "月次"
+        print(f"ダッシュボード再集計+両グラフ描画({label}): {elapsed:.3f} 秒")
+        assert elapsed <= 2.0, f"{label}の再集計+描画に {elapsed:.3f} 秒かかりました"
+    finally:
+        dashboard.shutdown()
         conn.close()
 
 
