@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from inventory_manager_mini.core import reports
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import GroupBy, ItemUpdate, NewItem, PeriodKind
+from inventory_manager_mini.core.models import (
+    DashboardRow,
+    GroupBy,
+    ItemUpdate,
+    NewItem,
+    PeriodKind,
+)
 from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
 from inventory_manager_mini.core.services import InventoryService, SettingsService
 from inventory_manager_mini.db.integrity import compute_aggregates
@@ -669,3 +677,292 @@ def test_dashboard_result_keeps_filtered_axis_names_and_validates_arguments(
         report.dashboard_result(2025, PeriodKind.ANNUAL, purchaser_id=999)
     with pytest.raises(ValueError, match="年度を省略できるのは年次"):
         report.dashboard_result(None, PeriodKind.MONTHLY)
+
+
+_METRIC_FIELDS = (
+    "inbound_quantity",
+    "outbound_quantity",
+    "expenditure",
+    "unpriced_issue_quantity",
+    "disposed_quantity",
+    "disposal_amount",
+)
+
+
+def _metrics(row: DashboardRow) -> tuple[int, ...]:
+    return tuple(getattr(row, field) for field in _METRIC_FIELDS)
+
+
+@pytest.mark.parametrize(
+    ("local_day", "start_month", "expected"),
+    [
+        (date(2025, 12, 31), 1, 2025),
+        (date(2026, 1, 1), 1, 2026),
+        (date(2026, 11, 30), 12, 2025),
+        (date(2026, 12, 1), 12, 2026),
+        (date(2026, 3, 31), 4, 2025),
+        (date(2026, 4, 1), 4, 2026),
+    ],
+)
+def test_fiscal_year_of_uses_start_year_at_boundaries(
+    local_day: date, start_month: int, expected: int
+) -> None:
+    assert fiscal_year_of(local_day, start_month) == expected
+
+
+@pytest.mark.parametrize("start_month", [0, 13, True, "4"])
+def test_fiscal_year_of_rejects_invalid_start_month(start_month: object) -> None:
+    with pytest.raises(ValueError, match="年度開始月"):
+        fiscal_year_of(date(2026, 4, 1), start_month)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("start_month", "first_label", "last_label"),
+    [
+        (1, "2026年1月", "2026年12月"),
+        (4, "2026年4月", "2027年3月"),
+        (12, "2026年12月", "2027年11月"),
+    ],
+)
+def test_dashboard_periods_span_from_fiscal_year_start_month(
+    seeded_conn: sqlite3.Connection,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+    start_month: int,
+    first_label: str,
+    last_label: str,
+) -> None:
+    settings.set_fiscal_year_start_month(start_month)
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+
+    totals = report.dashboard_result(2026, PeriodKind.MONTHLY).totals
+    annual = report.dashboard_result(2026, PeriodKind.ANNUAL).totals
+
+    assert len(totals) == 12
+    assert (totals[0].period_label, totals[-1].period_label) == (first_label, last_label)
+    assert totals[0].period_start == date(2026, start_month, 1)
+    for row in totals:
+        assert row.period_label == f"{row.period_start.year}年{row.period_start.month}月"
+    for previous, current in zip(totals, totals[1:], strict=False):
+        assert (current.period_start.year * 12 + current.period_start.month) == (
+            previous.period_start.year * 12 + previous.period_start.month + 1
+        )
+    assert [(row.period_label, row.period_start) for row in annual] == [
+        ("2026年度", date(2026, start_month, 1))
+    ]
+
+
+def test_dashboard_splits_mixed_priced_and_unpriced_lots_in_one_operation(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _new_report_item(inventory, "混在ロット")
+    inventory.receive(item_id, 1, 2)
+    inventory.receive(item_id, 1, 3, unit_price=10)
+    inventory.issue(item_id, 1, 4, "単価不明ロットを含む出庫")
+    inventory.receive(item_id, 1, 2)
+    inventory.dispose(item_id, 1, 3)
+
+    result = report.dashboard_result(2025, PeriodKind.ANNUAL)
+
+    # 出庫は FIFO で不明ロット 2 + 10 円ロット 2、廃棄は 10 円ロット 1 + 不明ロット 2
+    assert _metrics(result.totals[0]) == (7, 4, 20, 2, 3, 10)
+    for group_by in GroupBy:
+        grouped = report.dashboard_result(2025, PeriodKind.ANNUAL, group_by=group_by)
+        assert grouped.totals == result.totals
+        assert [sum(_metrics(row)[index] for row in grouped.breakdown) for index in range(6)] == (
+            list(_metrics(result.totals[0]))
+        )
+
+
+def test_dashboard_reversals_of_receipts_and_disposals_net_out_in_original_period(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(1)
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    fixed_clock.current = datetime(2025, 12, 31, 12, 0, tzinfo=UTC)
+    receipt_item = _new_report_item(inventory, "入庫取消")
+    cancelled_receipt = inventory.receive(receipt_item, 1, 5, unit_price=10)
+    dispose_item = _new_report_item(inventory, "廃棄取消")
+    inventory.receive(dispose_item, 1, 3, unit_price=10)
+    cancelled_disposal = inventory.dispose(dispose_item, 1, 2)
+    fixed_clock.current = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
+    inventory.reverse(cancelled_receipt.id, 1)
+    inventory.reverse(cancelled_disposal.id, 1)
+
+    december = report.dashboard_result(2025, PeriodKind.MONTHLY).totals[-1]
+    january = report.dashboard_result(2026, PeriodKind.MONTHLY).totals[0]
+
+    assert (december.period_label, _metrics(december)) == ("2025年12月", (3, 0, 0, 0, 0, 0))
+    assert (january.period_label, _metrics(january)) == ("2026年1月", (0, 0, 0, 0, 0, 0))
+    assert _metrics(report.dashboard_result(2026, PeriodKind.ANNUAL).totals[0]) == (0,) * 6
+
+
+def test_dashboard_result_multi_row_breakdown_matches_totals_in_order(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(4)
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    items = {
+        "A": _create_item(inventory, name="A", client_id=1, purchaser_id=1, quantity=0),
+        "B": _create_item(inventory, name="B", client_id=1, purchaser_id=2, quantity=0),
+        "C": _create_item(inventory, name="C", client_id=2, purchaser_id=1, quantity=0),
+    }
+    fixed_clock.current = datetime(2025, 12, 15, 12, 0, tzinfo=UTC)
+    inventory.receive(items["A"], 1, 5, unit_price=10)
+    inventory.issue(items["A"], 1, 2, "用途")
+    inventory.receive(items["B"], 1, 4, unit_price=20)
+    inventory.dispose(items["B"], 1, 1)
+    inventory.receive(items["C"], 1, 3, unit_price=30)
+    inventory.issue(items["C"], 1, 1, "用途")
+    fixed_clock.current = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+    inventory.receive(items["A"], 1, 2, unit_price=10)
+    inventory.issue(items["A"], 1, 3, "用途")
+    inventory.issue(items["B"], 1, 2, "用途")
+    inventory.dispose(items["C"], 1, 1)
+
+    expected_rows = {
+        GroupBy.NONE: 12,
+        GroupBy.CLIENT: 4,
+        GroupBy.PURCHASER: 4,
+        GroupBy.CLIENT_PURCHASER: 6,
+    }
+    for kind in (PeriodKind.MONTHLY, PeriodKind.ANNUAL):
+        baseline = report.dashboard_result(2025, kind)
+        for group_by, monthly_row_count in expected_rows.items():
+            result = report.dashboard_result(2025, kind, group_by=group_by)
+            assert result.totals == baseline.totals
+            for total in result.totals:
+                members = [
+                    row for row in result.breakdown if row.period_label == total.period_label
+                ]
+                assert [sum(_metrics(row)[index] for row in members) for index in range(6)] == (
+                    list(_metrics(total))
+                )
+            keys = [
+                (row.period_start, row.client_id or 0, row.purchaser_id or 0)
+                for row in result.breakdown
+            ]
+            assert keys == sorted(keys)
+            assert report.dashboard(2025, kind, group_by=group_by) == list(result.breakdown)
+            if kind is PeriodKind.MONTHLY:
+                # 内訳なしは全期間を 0 で埋め、内訳軸ありは実績のある行だけを返す
+                assert len(result.breakdown) == monthly_row_count
+
+    monthly = report.dashboard_result(2025, PeriodKind.MONTHLY).totals
+    december = next(row for row in monthly if row.period_label == "2025年12月")
+    january = next(row for row in monthly if row.period_label == "2026年1月")
+    assert _metrics(december) == (12, 3, 50, 0, 1, 20)
+    assert _metrics(january) == (2, 5, 70, 0, 1, 30)
+
+
+def test_dashboard_result_filtered_axes_appear_on_totals_and_breakdown(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    item_id = _create_item(inventory, name="片軸", client_id=1, purchaser_id=2, quantity=0)
+    inventory.receive(item_id, 1, 2)
+    annual = PeriodKind.ANNUAL
+
+    def keys(
+        rows: tuple[DashboardRow, ...],
+    ) -> set[tuple[int | None, str | None, int | None, str | None]]:
+        return {
+            (row.client_id, row.client_name, row.purchaser_id, row.purchaser_name) for row in rows
+        }
+
+    only_client = report.dashboard_result(2025, annual, client_id=1)
+    assert keys(only_client.totals) == keys(only_client.breakdown) == {(1, "総務", None, None)}
+    only_purchaser = report.dashboard_result(2025, annual, purchaser_id=2)
+    assert (
+        keys(only_purchaser.totals) == keys(only_purchaser.breakdown) == {(None, None, 2, "部門")}
+    )
+    by_purchaser = report.dashboard_result(2025, annual, client_id=1, group_by=GroupBy.PURCHASER)
+    assert keys(by_purchaser.totals) == {(1, "総務", None, None)}
+    assert keys(by_purchaser.breakdown) == {(1, "総務", 2, "部門")}
+    by_client = report.dashboard_result(2025, annual, purchaser_id=2, group_by=GroupBy.CLIENT)
+    assert keys(by_client.totals) == {(None, None, 2, "部門")}
+    assert keys(by_client.breakdown) == {(1, "総務", 2, "部門")}
+    by_pair = report.dashboard_result(
+        2025, annual, client_id=1, purchaser_id=2, group_by=GroupBy.CLIENT_PURCHASER
+    )
+    assert keys(by_pair.totals) == keys(by_pair.breakdown) == {(1, "総務", 2, "部門")}
+    inactive = report.dashboard_result(2025, annual, client_id=3, purchaser_id=3)
+    assert keys(inactive.totals) == {(3, "廃止クライアント", 3, "廃止発注主体")}
+    assert _metrics(inactive.totals[0]) == (0,) * 6
+
+
+def test_dashboard_result_without_history_has_zero_totals_and_no_grouped_rows(
+    seeded_conn: sqlite3.Connection,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(4)
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+
+    all_years = report.dashboard_result(None, PeriodKind.ANNUAL)
+    assert [row.period_label for row in all_years.totals] == ["2025年度"]
+    assert _metrics(all_years.totals[0]) == (0,) * 6
+    assert [row.period_label for row in all_years.breakdown] == ["2025年度"]
+    monthly = report.dashboard_result(2025, PeriodKind.MONTHLY, group_by=GroupBy.CLIENT_PURCHASER)
+    assert len(monthly.totals) == 12
+    assert all(_metrics(row) == (0,) * 6 for row in monthly.totals)
+    assert monthly.breakdown == ()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"fiscal_year": True},
+        {"fiscal_year": "2025"},
+        {"fiscal_year": 2025.0},
+        {"client_id": 0},
+        {"client_id": -1},
+        {"client_id": True},
+        {"client_id": "1"},
+        {"purchaser_id": 0},
+        {"purchaser_id": True},
+    ],
+)
+def test_dashboard_result_rejects_invalid_argument_types(
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+    arguments: dict[str, object],
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    call: dict[str, object] = {"fiscal_year": 2025, "kind": PeriodKind.ANNUAL, **arguments}
+
+    with pytest.raises(ValueError, match="整数|正の整数"):
+        report.dashboard_result(**call)  # type: ignore[arg-type]
+
+
+def test_dashboard_result_lists_years_and_aggregates_in_one_read_transaction(
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    original = reports.read_transaction
+    entered: list[int] = []
+
+    @contextmanager
+    def spy(conn: sqlite3.Connection) -> Iterator[None]:
+        entered.append(1)
+        with original(conn):
+            yield
+
+    monkeypatch.setattr(reports, "read_transaction", spy)
+
+    report.dashboard_result(None, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
+
+    assert entered == [1]

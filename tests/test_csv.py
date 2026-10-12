@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -10,7 +10,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from inventory_manager_mini.core.errors import FileOutputError
-from inventory_manager_mini.core.models import GroupBy, ItemFilter, NewItem, PeriodKind
+from inventory_manager_mini.core.models import (
+    DashboardRow,
+    GroupBy,
+    ItemFilter,
+    NewItem,
+    PeriodKind,
+)
 from inventory_manager_mini.core.reports import ReportService, escape_csv_cell
 from inventory_manager_mini.core.services import InventoryService
 from tests.conftest import FixedClock
@@ -287,3 +293,147 @@ def test_csv_replace_failure_preserves_existing_file_and_removes_temporary_file(
 
     assert output.read_bytes() == b"existing content"
     assert list(tmp_path.glob(".existing.csv.*.tmp")) == []
+
+
+def _dashboard_row(
+    label: str,
+    client: tuple[int, str] | None,
+    purchaser: tuple[int, str] | None,
+    base: int,
+) -> DashboardRow:
+    return DashboardRow(
+        period_label=label,
+        period_start=date(2025, 4, 1),
+        client_id=None if client is None else client[0],
+        client_name=None if client is None else client[1],
+        purchaser_id=None if purchaser is None else purchaser[0],
+        purchaser_name=None if purchaser is None else purchaser[1],
+        inbound_quantity=base + 1,
+        outbound_quantity=base + 2,
+        expenditure=base + 3,
+        unpriced_issue_quantity=base + 4,
+        disposed_quantity=base + 5,
+        disposal_amount=base + 6,
+    )
+
+
+def test_dashboard_csv_writes_given_rows_as_is_without_reaggregating(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    rows = [
+        _dashboard_row("2025年度", None, None, 10),
+        _dashboard_row("2025年4月", (2, "経理"), None, 20),
+        _dashboard_row("2025年5月", None, (1, "本部"), 30),
+        _dashboard_row("2025年6月", (1, "総務"), (2, "部門"), 40),
+    ]
+    output = tmp_path / "as-is.csv"
+
+    report.export_dashboard_csv(output, rows)
+    content = output.read_bytes()
+    text = content.decode("utf-8-sig")
+    exported = list(csv.reader(StringIO(text, newline="")))
+
+    assert content.startswith(b"\xef\xbb\xbf")
+    assert "\n" not in text.replace("\r\n", "")
+    assert all(line.startswith('"') and line.endswith('"') for line in text.split("\r\n") if line)
+    assert exported[1:] == [
+        ["2025年度", "(すべて)", "(すべて)", "11", "12", "13", "14", "15", "16"],
+        ["2025年4月", "経理", "(すべて)", "21", "22", "23", "24", "25", "26"],
+        ["2025年5月", "(すべて)", "本部", "31", "32", "33", "34", "35", "36"],
+        ["2025年6月", "総務", "部門", "41", "42", "43", "44", "45", "46"],
+    ]
+
+
+def test_dashboard_csv_with_no_rows_contains_only_the_header(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, clock=fixed_clock)
+    output = tmp_path / "empty.csv"
+
+    report.export_dashboard_csv(output, [])
+
+    assert len(list(csv.reader(output.open(encoding="utf-8-sig", newline="")))) == 1
+
+
+@pytest.mark.parametrize(
+    ("client_id", "purchaser_id", "group_by", "expected"),
+    [
+        (None, None, GroupBy.NONE, ["(すべて)", "(すべて)"]),
+        (None, None, GroupBy.PURCHASER, ["(すべて)", "本部"]),
+        (None, None, GroupBy.CLIENT, ["総務", "(すべて)"]),
+        (1, None, GroupBy.NONE, ["総務", "(すべて)"]),
+        (None, 1, GroupBy.NONE, ["(すべて)", "本部"]),
+        (1, None, GroupBy.PURCHASER, ["総務", "本部"]),
+        (None, 1, GroupBy.CLIENT, ["総務", "本部"]),
+        (1, 1, GroupBy.CLIENT_PURCHASER, ["総務", "本部"]),
+    ],
+)
+def test_dashboard_csv_shows_names_for_filtered_axes_and_all_for_unfiltered_collapsed_axes(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    client_id: int | None,
+    purchaser_id: int | None,
+    group_by: GroupBy,
+    expected: list[str],
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    inventory.receive(
+        inventory.create_item(
+            NewItem(client_id=1, purchaser_id=1, name="絞り込み", category_id=2)
+        ).id,
+        1,
+        1,
+    )
+    output = tmp_path / "filtered.csv"
+
+    rows = report.dashboard_result(
+        2025, PeriodKind.ANNUAL, client_id, purchaser_id, group_by
+    ).breakdown
+    report.export_dashboard_csv(output, rows)
+    exported = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
+
+    assert exported[1][1:3] == expected
+
+
+def test_dashboard_csv_does_not_mark_inactive_master_names(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    rows = report.dashboard_result(2025, PeriodKind.ANNUAL, client_id=3, purchaser_id=3).breakdown
+    output = tmp_path / "inactive.csv"
+
+    report.export_dashboard_csv(output, rows)
+    exported = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
+
+    assert exported[1][1:3] == ["廃止クライアント", "廃止発注主体"]
+
+
+@pytest.mark.parametrize("destination", ["missing-directory/out.csv", "directory"])
+def test_dashboard_csv_unwritable_destination_raises_file_output_error(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+    destination: str,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    output = tmp_path / destination
+    if destination == "directory":
+        output.mkdir()
+        (output / "keep.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileOutputError) as error_info:
+        report.export_dashboard_csv(output, report.dashboard(2025, PeriodKind.ANNUAL))
+
+    assert str(output) in error_info.value.message
+    assert list(tmp_path.rglob("*.tmp")) == []
+    if destination == "directory":
+        assert (output / "keep.txt").read_text(encoding="utf-8") == "keep"
