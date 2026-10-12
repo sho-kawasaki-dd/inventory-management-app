@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -139,16 +140,18 @@ class DashboardWindow(QWidget):
             axis: QCheckBox(label, self) for axis, label in _GROUP_AXIS_LABELS
         }
 
-        narrowing = QHBoxLayout()
-        for label, widget, stretch in (
-            ("クライアント", self.client_combo, 1),
-            ("発注主体", self.purchaser_combo, 1),
-            ("カテゴリ", self.category_picker, 2),
-            ("品目", self.item_combo, 2),
+        narrowing = QGridLayout()
+        for index, (label, widget) in enumerate(
+            (
+                ("クライアント", self.client_combo),
+                ("発注主体", self.purchaser_combo),
+                ("カテゴリ", self.category_picker),
+                ("品目", self.item_combo),
+            )
         ):
             form = QFormLayout()
             form.addRow(label, widget)
-            narrowing.addLayout(form, stretch)
+            narrowing.addLayout(form, index // 2, index % 2)
         outer.addLayout(narrowing)
 
         display = QHBoxLayout()
