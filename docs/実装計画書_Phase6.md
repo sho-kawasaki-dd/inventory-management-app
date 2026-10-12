@@ -186,7 +186,7 @@
 #### F. 6a の仕上げ
 
 - [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 6a の PR を作成し、CI 成功後にマージする
+- [x] 6a の PR を作成し、CI 成功後にマージする
 
 ### 6b. 出力・検証・文書(`feature/phase6-dashboard-output`)
 
