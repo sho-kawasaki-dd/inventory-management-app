@@ -137,12 +137,12 @@
 
 #### D. 表示設定の補正値 `ui/display_settings.py`・`ui/dialogs/settings_dialog.py`
 
-- [ ] `DisplaySettings` に `label_offset_left_mm: float = 0.0`・`label_offset_top_mm: float = 0.0` を追加する。範囲・刻みの定数(±10.0、0.1)を定義する
-- [ ] `load_display_settings` で、2 つのキーを項目ごとに検証する。数値(int/float。bool は不可)・有限・範囲内のみ採用し、小数 1 桁へ丸める。それ以外は 0.0 にフォールバックしてログに警告する。キーなしは黙って 0.0 とする。既存の `font_family`・`font_scale_percent` の挙動は変えない
-- [ ] `save_display_settings` に 2 つのキーを追加する(一時ファイル経由の置換は従来どおり)
-- [ ] `SettingsDialog` に「棚ラベル印字位置の補正」として左・上の `QDoubleSpinBox`(範囲 ±10.0、刻み 0.1、小数 1 桁、単位 mm)を追加する。説明ラベルに「正の値で右・下へ移動」を表示する
-- [ ] 「既定に戻す」はフォント・文字サイズのみを戻し、補正値を変更しない。OK で補正値を含めて保存する。キャンセルでは何も保存しない
-- [ ] `SettingsService.validate_all()` が UI 表示設定のキーを要求・許容しない既存の検査が、新キー追加後も成立することを確認する
+- [x] `DisplaySettings` に `label_offset_left_mm: float = 0.0`・`label_offset_top_mm: float = 0.0` を追加する。範囲・刻みの定数(±10.0、0.1)を定義する
+- [x] `load_display_settings` で、2 つのキーを項目ごとに検証する。数値(int/float。bool は不可)・有限・範囲内のみ採用し、小数 1 桁へ丸める。それ以外は 0.0 にフォールバックしてログに警告する。キーなしは黙って 0.0 とする。既存の `font_family`・`font_scale_percent` の挙動は変えない
+- [x] `save_display_settings` に 2 つのキーを追加する(一時ファイル経由の置換は従来どおり)
+- [x] `SettingsDialog` に「棚ラベル印字位置の補正」として左・上の `QDoubleSpinBox`(範囲 ±10.0、刻み 0.1、小数 1 桁、単位 mm)を追加する。説明ラベルに「正の値で右・下へ移動」を表示する
+- [x] 「既定に戻す」はフォント・文字サイズのみを戻し、補正値を変更しない。OK で補正値を含めて保存する。キャンセルでは何も保存しない
+- [x] `SettingsService.validate_all()` が UI 表示設定のキーを要求・許容しない既存の検査が、新キー追加後も成立することを確認する
 
 #### E. 印刷用フォント `ui/printing/fonts.py`(新規)
 
@@ -191,8 +191,8 @@
   - [x] `assign_label_slots`: 全オン、一部オフ、飛び飛びのオフ、1 枚目で溢れて 2 枚目が全面になること、品目ごとの枚数による展開順、枚数 1 と 99 の境界、0 と 100 の拒否、`first_page_slots` が空・範囲外の拒否、品目 0 件
   - [x] `slot_rect_mm`: 全 12 位置の座標が `LabelSpec`(左余白 + 列×ピッチ、上余白 + 段×ピッチ)と一致すること。補正値 ±の加算
   - [x] `LabelSpec` の整合: 用紙 A4(210 × 297mm)に 12 面が収まること(右端・下端が用紙内)
-- [ ] `tests/test_display_settings.py`: 補正値の保存と再読み込みの往復、キーなし・文字列・bool・NaN・範囲外・小数 2 桁以上の扱い、他の項目が有効なら維持されること
-- [ ] `tests/test_settings_dialog.py`: 補正値の初期表示・保存、「既定に戻す」でフォント・文字サイズのみ戻り補正値が維持されること、キャンセルで保存されないこと
+- [x] `tests/test_display_settings.py`: 補正値の保存と再読み込みの往復、キーなし・文字列・bool・NaN・範囲外・小数 2 桁以上の扱い、他の項目が有効なら維持されること
+- [x] `tests/test_settings_dialog.py`: 補正値の初期表示・保存、「既定に戻す」でフォント・文字サイズのみ戻り補正値が維持されること、キャンセルで保存されないこと
 - [ ] `tests/test_label_print.py`(新規):
   - [ ] ダイアログ: 初期は全オン、「すべて解除」で OK 不活性と理由表示、「すべて選択」で復帰、合計枚数・用紙枚数の表示、開き直すと全オンへ戻ること、1366×768 かつ文字サイズ 150% で作業領域に収まり OK/キャンセルが操作可能なこと
   - [ ] 描画: `QPdfWriter` または `QPrinter(PdfFormat)` で `tmp_path` に出力し、ページ数が面付けの結果と一致すること、ファイルが `%PDF-` で始まること、補正値で描画位置が変わること(スタブ化した描画先で座標を検証するなど、PDF のバイト比較に頼らない方法)、長い品名・備考で例外が起きないこと

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from inventory_manager_mini.ui import display_settings
 from inventory_manager_mini.ui.display_settings import (
+    DEFAULT_LABEL_OFFSET_MM,
     DisplaySettings,
     apply_display_settings,
     capture_base_font,
@@ -35,12 +36,22 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_default_settings() -> None:
     settings = default_display_settings()
 
-    assert settings == DisplaySettings(font_family=None, font_scale_percent=100)
+    assert settings == DisplaySettings(
+        font_family=None,
+        font_scale_percent=100,
+        label_offset_left_mm=0.0,
+        label_offset_top_mm=0.0,
+    )
 
 
 def test_save_and_load_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "ui_settings.json"
-    settings = DisplaySettings(font_family="日本語フォント", font_scale_percent=125)
+    settings = DisplaySettings(
+        font_family="日本語フォント",
+        font_scale_percent=125,
+        label_offset_left_mm=-1.2,
+        label_offset_top_mm=3.4,
+    )
 
     save_display_settings(path, settings)
 
@@ -48,6 +59,8 @@ def test_save_and_load_round_trip(tmp_path: Path) -> None:
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "font_family": "日本語フォント",
         "font_scale_percent": 125,
+        "label_offset_left_mm": -1.2,
+        "label_offset_top_mm": 3.4,
     }
     assert [p.name for p in tmp_path.iterdir()] == ["ui_settings.json"]
 
@@ -161,6 +174,69 @@ def test_load_missing_keys_use_defaults_without_warning(
     caplog.set_level(logging.WARNING)
 
     assert load_display_settings(path) == default_display_settings()
+    assert _warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [(1, 1.0), (1.26, 1.3), (-2.34, -2.3), (10, 10.0), (-10, -10.0)],
+)
+def test_load_label_offsets_accept_numbers_and_round_to_one_decimal(
+    tmp_path: Path, raw_value: int | float, expected: float
+) -> None:
+    path = _write(
+        tmp_path / "ui_settings.json",
+        json.dumps({"label_offset_left_mm": raw_value, "label_offset_top_mm": raw_value}),
+    )
+
+    result = load_display_settings(path)
+
+    assert result.label_offset_left_mm == pytest.approx(expected)
+    assert result.label_offset_top_mm == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        '"1.2"',
+        "true",
+        "false",
+        "null",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "10.1",
+        "-10.1",
+        "[]",
+        "{}",
+    ],
+)
+def test_load_invalid_label_offset_falls_back_independently(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, raw_value: str
+) -> None:
+    path = _write(
+        tmp_path / "ui_settings.json",
+        f'{{"font_scale_percent": 125, "label_offset_left_mm": {raw_value}, '
+        '"label_offset_top_mm": 2.34}',
+    )
+    caplog.set_level(logging.WARNING)
+
+    result = load_display_settings(path)
+
+    assert result == DisplaySettings(None, 125, DEFAULT_LABEL_OFFSET_MM, 2.3)
+    assert len(_warnings(caplog)) == 1
+
+
+def test_load_missing_label_offsets_are_silent_and_other_settings_are_kept(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = _write(
+        tmp_path / "ui_settings.json",
+        '{"font_family": "Meiryo", "font_scale_percent": 150}',
+    )
+    caplog.set_level(logging.WARNING)
+
+    assert load_display_settings(path) == DisplaySettings("Meiryo", 150)
     assert _warnings(caplog) == []
 
 
