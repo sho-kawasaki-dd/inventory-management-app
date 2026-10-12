@@ -1,0 +1,38 @@
+Inventory Manager mini - 第三者ソフトウェア通知
+==================================================
+
+この一覧は 2026-10-13 時点の uv.lock、ローカル Python 3.13.12 環境、および Phase 2 の
+試験 onedir から確認できた情報です。Phase 2 の onedir は Phase 8 の spec で作り直した
+最終配布物ではないため、配布前に最終バンドルを再度棚卸ししてください。
+
+Phase 2 試験 onedir の観察結果:
+- `dist/inventory-manager-mini/` の `_internal/` に 222 ファイルがありました。
+- Qt 6.11.2 の実行環境にある QtCharts・QtPrintSupport と `Qt6Charts.dll`・`Qt6Core.dll`・
+	`Qt6PrintSupport.dll` のほか、QtGui/Network/OpenGL/Pdf/Qml/Quick/Svg/Widgets 系の DLL、
+	translations と plugins が含まれています。plugins には platforms (`qwindows.dll` など)、
+	imageformats、styles、tls 等がありました。全ファイルの版・由来・ライセンスは未照合です。
+- Python runtime の `python313.dll`、`python3.dll`、`sqlite3.dll`、`libcrypto-3-x64.dll`、
+	`libssl-3-x64.dll`、`libffi-8.dll`、Microsoft runtime DLL 等が含まれていました。
+- ファイル名に license/copying/notice を含む通知ファイルはなく、同梱要件を満たしていません。
+- 同梱されたアプリ metadata は 0.1.0 でしたが、ライセンス・著者 metadata はありませんでした。
+- 旧 spec は Qt Charts/PrintSupport と個別画面を hidden import し、UPX を有効にしています。
+	Phase 8 spec は全アプリサブモジュールを収集するため、最終バンドルの構成は一致しません。
+
+上記は旧ビルドの観察記録であり、Qt Charts のバイナリ版・各ファイルのライセンス選択・変更有無・
+対応ソース・System Library 該当性を確定する監査ではありません。
+
+| コンポーネント | 確認版 | 確認した条件・通知 |
+| --- | --- | --- |
+| Qt Charts (Qt for Python / PySide6 Addons) | 6.11.2 | Qt Charts は GPLv3 または商用ライセンスの対象です。本配布では GPLv3 を選択します。Qt Charts の著作権・Qt の通知を保持し、対応ソースを同じリリースで提供する必要があります。 |
+| PySide6 | 6.11.2 | wheel metadata は LGPL-3.0-only、GPL-2.0-only、GPL-3.0-only または商用条件を提示しています。Qt Charts と一律に LGPL と表示しません。実バンドル内の各モジュールの適用条件を別途確定します。 |
+| PySide6_Addons | 6.11.2 | 上記 PySide6 と同じ wheel metadata のライセンス選択肢。実際に含まれる Qt モジュールごとの確認が未完了です。 |
+| PySide6_Essentials | 6.11.2 | 上記 PySide6 と同じ wheel metadata のライセンス選択肢。実際に含まれる Qt モジュールごとの確認が未完了です。 |
+| shiboken6 | 6.11.2 | wheel metadata は LGPL-3.0-only、GPL-2.0-only、GPL-3.0-only または商用条件を提示しています。適用条件と対応ソースの確定が未完了です。 |
+| platformdirs | 4.12.2 | MIT。元の著作権表示・許諾文・無保証表示を `licenses/platformdirs-MIT.txt` に保持します。 |
+| PyInstaller bootloader | 6.22.3 | GPL-2.0-or-later と Bootloader Exception。例外文を含む原通知は `licenses/PyInstaller-COPYING.txt` に保持します。変更有無と実際に取り込まれたファイルをバンドル確認時に記録します。 |
+| PyInstaller run-time hooks | 6.22.3 / hooks-contrib 2026.8 | PyInstaller の通知では run-time hooks は Apache-2.0 とされています。実際に同梱された hook とその通知・対応ソースを確定する必要があります。 |
+| Python、Windows runtime、SQLite、OpenSSL、Qt DLL/plug-ins | 実バンドルから確定 | 正確な版、著作権、ライセンス、System Library 該当性、変更有無、対応ソースの要否は未監査です。 |
+
+上記の未確定項目が残る間は、対応ソース・ライセンス適合の確認済み、または配布可能とは扱いません。
+Qt のライセンス情報: https://doc.qt.io/qt-6/qtcharts-index.html#licenses
+Qt for Python のライセンス情報: https://doc.qt.io/qtforpython-6/licenses.html

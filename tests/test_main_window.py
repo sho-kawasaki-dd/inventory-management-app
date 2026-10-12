@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PySide6.QtCore import QItemSelectionModel, QRect, Qt
+from PySide6.QtCore import QItemSelectionModel, QRect, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -136,6 +136,71 @@ def test_main_window_starts_with_active_items_and_disabled_item_actions(window_w
     assert not window.toggle_active_action.isEnabled()
     assert window.table.selectionBehavior() == window.table.SelectionBehavior.SelectRows
     assert window.table.selectionMode() == window.table.SelectionMode.ExtendedSelection
+
+
+def test_about_dialog_shows_legal_notice_and_opens_license_document(
+    monkeypatch, tmp_path: Path, window_with_items
+) -> None:
+    window, _first, _second = window_with_items
+    license_path = tmp_path / "DISTRIBUTION_LICENSE.txt"
+    license_path.write_text("license text", encoding="utf-8")
+    opened_urls: list[QUrl] = []
+    monkeypatch.setattr(main_window_module, "_distribution_license_path", lambda: license_path)
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url) or True,
+    )
+
+    def click_license_button(dialog: QMessageBox) -> int:
+        notice = dialog.informativeText()
+        assert "Copyright (C) 2026 IKinoCore" in notice
+        assert "GNU General Public License version 3 (GPLv3)" in notice
+        assert "再配布・改変できます" in notice
+        assert "無保証" in notice
+        license_button = next(
+            button for button in dialog.buttons() if button.text() == "ライセンス文書を開く"
+        )
+        license_button.click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", click_license_button)
+
+    window._show_about()
+
+    assert opened_urls == [QUrl.fromLocalFile(str(license_path))]
+
+
+def test_distribution_license_path_uses_project_packaging_folder() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+
+    assert main_window_module._distribution_license_path() == (
+        project_root / "packaging" / "DISTRIBUTION_LICENSE.txt"
+    )
+
+
+def test_distribution_license_path_uses_frozen_executable_folder(
+    monkeypatch, tmp_path: Path
+) -> None:
+    executable = tmp_path / "inventory-manager-mini.exe"
+    monkeypatch.setattr(main_window_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_window_module.sys, "executable", str(executable))
+
+    assert main_window_module._distribution_license_path() == (
+        tmp_path / "DISTRIBUTION_LICENSE.txt"
+    )
+
+
+def test_distribution_license_includes_complete_gplv3_text() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    gpl_text = (project_root / "packaging" / "licenses" / "GPL-3.0.txt").read_text(encoding="utf-8")
+    distribution_text = (project_root / "packaging" / "DISTRIBUTION_LICENSE.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert distribution_text.endswith(gpl_text)
+    assert "17. Interpretation of Sections 15 and 16." in gpl_text
+    assert "How to Apply These Terms to Your New Programs" in gpl_text
 
 
 def test_search_debounces_name_code_and_manufacturer_number(qtbot, window_with_items) -> None:

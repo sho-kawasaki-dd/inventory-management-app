@@ -1,7 +1,7 @@
 # Phase 8 実装計画書(パッケージング)
 
 - 作成日: 2026-10-13
-- ステータス: 計画(未着手)
+- ステータス: 承認
 - 作業ブランチ: `feature/phase8-packaging`(8a)→ `feature/phase8-release-workflow`(8b)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(2.1・2.2・2.3・3.5・7.2・8・9・9.2・10・11 章)、[実装計画書_Phase2](実装計画書_Phase2.md)(4.2 試験ビルドの結果)、[実装計画書_Phase7](実装計画書_Phase7.md)(試し刷りの未実施項目)
 - 改訂履歴: 2026-10-13 初版。発行元・ライセンス・アイコン・インストールモード・タグ規則・成果物・凍結版の検査範囲・PR 分割(2 PR)を決定
@@ -123,15 +123,15 @@
 
 #### A. ライセンス・メタデータ
 
-- [ ] `LICENSE`(MIT、`Copyright (c) 2026 IKinoCore`)を追加する
-- [ ] `packaging/licenses/GPL-3.0.txt` に GPLv3 の英語原文を追加する。`packaging/DISTRIBUTION_LICENSE.txt` に自作コードの MIT とアプリ全体の GPLv3 配布の関係、無保証・再配布条件を日本語で説明し、GPLv3 原文を含める
-- [ ] `pyproject.toml` に `license = "MIT"`・`license-files`・`authors = [{ name = "IKinoCore" }]` を追加する。自作コードの `LICENSE` と配布条件・必要なライセンス文書を `license-files` に含め、`uv lock`・`uv sync --locked` を確認する
+- [x] `LICENSE`(MIT、`Copyright (c) 2026 IKinoCore`)を追加する
+- [x] `packaging/licenses/GPL-3.0.txt` に GPLv3 の英語原文を追加する。`packaging/DISTRIBUTION_LICENSE.txt` に自作コードの MIT とアプリ全体の GPLv3 配布の関係、無保証・再配布条件を日本語で説明し、GPLv3 原文を含める
+- [x] `pyproject.toml` に `license = "MIT"`・`license-files`・`authors = [{ name = "IKinoCore" }]` を追加する。自作コードの `LICENSE` と配布条件・必要なライセンス文書を `license-files` に含め、`uv lock`・`uv sync --locked` を確認する
 - [ ] 実配布ファイルを棚卸しする。Qt Charts、他の Qt モジュール・プラグイン、PySide6・shiboken6、Python と同梱ライブラリ、platformdirs、PyInstaller の bootloader と例外条項、アイコン等について名称・実版・著作権・ライセンス・変更有無・対応ソースの要否と入手先を記録する
 - [ ] `packaging/THIRD_PARTY_NOTICES.txt` を棚卸し結果に基づいて作成し、各ライセンス本文を `packaging/licenses/` にそろえる。元の通知と例外条項を保持し、GPLv3 との互換性と同梱条件を確認する
 - [ ] `packaging/SOURCE_CODE.txt` に版別の対応ソースの取得方法を記載する。アプリのソース・SQL・必要資産・`pyproject.toml`・`uv.lock`・spec・Inno Setup・ビルドスクリプト・ビルド/インストール手順、および必要な依存部分の対応ソースを提供対象にする。System Libraries 等の除外は理由を記録する
 - [ ] Qt・PySide6 等の実配布バイナリに対応するソースと必要なビルド設定・変更内容を確保する。上流 URL の案内だけに依存せず、自管理の Release に必要な依存ソースを添付する。ソースと wheel の版対応を確認する
 - [ ] 配布構成一覧(`-manifest.json`)にアプリ版・タグ・コミット SHA、依存の実版、各ソース成果物との対応、ビルドツールの実版を記録する。実データ・ログ・秘密情報は成果物に含めない
-- [ ] `ui/main_window.py` のバージョン情報画面に著作権、無保証、GPLv3 で再配布可能なこと、同梱ライセンスの参照方法を追加する。通常実行・凍結版でローカルの本文を参照できる配置を決め、`tests/test_main_window.py` に表示と参照の検証を追加する。業務処理や多重起動制御は変更しない
+- [x] `ui/main_window.py` のバージョン情報画面に著作権、無保証、GPLv3 で再配布可能なこと、同梱ライセンスの参照方法を追加する。通常実行・凍結版でローカルの本文を参照できる配置を決め、`tests/test_main_window.py` に表示と参照の検証を追加する。業務処理や多重起動制御は変更しない
 - [ ] 法的通知の表示とオフラインでの本文参照を確認し、ソースを取得して変更・ビルド・インストールできる手順まで検証する。バイト単位で同一のバイナリを生成することは要件にしない
 
 ライセンス判断の根拠は [Qt Charts のライセンス](https://doc.qt.io/qt-6/qtcharts-index.html#licenses)、[Qt for Python のライセンス](https://doc.qt.io/qtforpython-6/licenses.html)、[GPLv3 第 1・5・6 条](https://www.gnu.org/licenses/gpl-3.0.html)を確認する。対応完了は通知ファイルの存在だけで判断せず、実配布構成・適用条件・対応ソース提供を確認して判定する。

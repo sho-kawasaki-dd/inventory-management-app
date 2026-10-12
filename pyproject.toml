@@ -5,6 +5,15 @@ build-backend = "hatchling.build"
 [project]
 name = "inventory-manager-mini"
 version = "0.1.0"
+authors = [{ name = "IKinoCore" }]
+license = "MIT"
+license-files = [
+    "LICENSE",
+    "packaging/DISTRIBUTION_LICENSE.txt",
+    "packaging/THIRD_PARTY_NOTICES.txt",
+    "packaging/SOURCE_CODE.txt",
+    "packaging/licenses/*.txt",
+]
 requires-python = ">=3.13"
 dependencies = [
     "PySide6",
