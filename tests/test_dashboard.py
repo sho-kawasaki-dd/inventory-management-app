@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import csv
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QChartView, QValueAxis
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtGui import QHideEvent, QShowEvent
-from PySide6.QtWidgets import QComboBox, QMessageBox
+from PySide6.QtGui import QHideEvent, QImage, QShowEvent
+from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from inventory_manager_mini.core.errors import ValidationError
@@ -18,9 +20,19 @@ from inventory_manager_mini.core.models import GroupBy, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.display_settings import (
+    DisplaySettings,
+    apply_display_settings,
+)
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
-from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
-from tests.conftest import FixedClock, create_test_context
+from inventory_manager_mini.ui.widgets import dashboard as dashboard_module
+from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow, _axis_parameters
+from tests.conftest import (
+    FixedClock,
+    assert_buttons_reachable,
+    assert_fits_work_area,
+    create_test_context,
+)
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 FISCAL_2025_LABELS = [f"2025年{month}月" for month in range(4, 13)] + [
@@ -194,6 +206,29 @@ def _value_axis(view: QChartView) -> QValueAxis:
     return axis
 
 
+@pytest.mark.parametrize(
+    ("maximum", "expected_upper", "expected_interval"),
+    [
+        (0, 1, 1),
+        (1, 1, 1),
+        (5, 5, 1),
+        (7, 8, 2),
+        (15, 15, 5),
+        (900, 1000, 200),
+        (1_234_567, 1_500_000, 500_000),
+    ],
+)
+def test_axis_parameters_use_nice_integer_ticks(
+    maximum: int, expected_upper: int, expected_interval: int
+) -> None:
+    upper, interval = _axis_parameters(maximum)
+
+    assert (upper, interval) == (expected_upper, expected_interval)
+    assert upper >= maximum
+    assert upper // interval + 1 <= 6
+    assert upper % interval == 0
+
+
 def _padded(values: dict[int, int], length: int = 12) -> list[int]:
     return [values.get(index, 0) for index in range(length)]
 
@@ -253,7 +288,11 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
     assert _category_axis(window.amount_chart).categories() == FISCAL_2025_LABELS
     assert _value_axis(window.quantity_chart).min() == 0
     assert _value_axis(window.quantity_chart).max() == 15
-    assert _value_axis(window.amount_chart).max() == 900
+    assert _value_axis(window.amount_chart).max() == 1000
+    assert _value_axis(window.quantity_chart).tickCount() == 4
+    assert _value_axis(window.amount_chart).tickCount() == 6
+    assert _value_axis(window.quantity_chart).minorTickCount() == 0
+    assert _value_axis(window.amount_chart).minorTickCount() == 0
 
 
 def test_disposal_table_excludes_rows_without_disposal(qtbot: QtBot, env: Env) -> None:
@@ -277,6 +316,64 @@ def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, en
     assert all(not shiboken6.isValid(chart) for chart in old_charts)
     assert window.quantity_chart.chart() not in old_charts
     assert _category_axis(window.quantity_chart).labelsAngle() == -45
+
+
+def test_bar_tooltips_show_period_series_value_and_survive_chart_replacement(
+    qtbot: QtBot,
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[tuple[str, object]] = []
+    hidden: list[bool] = []
+
+    class ToolTipProbe:
+        @staticmethod
+        def showText(_position: object, text: str, widget: object) -> None:
+            shown.append((text, widget))
+
+        @staticmethod
+        def hideText() -> None:
+            hidden.append(True)
+
+    monkeypatch.setattr(dashboard_module, "QToolTip", ToolTipProbe)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    quantity_series = window.quantity_chart.chart().series()[0]
+    assert isinstance(quantity_series, QBarSeries)
+    inbound_set, outbound_set = quantity_series.barSets()
+    quantity_series.hovered.emit(True, 1, inbound_set)
+    quantity_series.hovered.emit(True, 2, outbound_set)
+
+    amount_series = window.amount_chart.chart().series()[0]
+    assert isinstance(amount_series, QBarSeries)
+    amount_series.hovered.emit(True, 2, amount_series.barSets()[0])
+    assert [text for text, _widget in shown] == [
+        "2025年5月\n入庫数: 15",
+        "2025年6月\n出庫数: 8",
+        "2025年6月\n支出額: 900円",
+    ]
+    assert all(widget is window.quantity_chart for _text, widget in shown[:2])
+    assert shown[2][1] is window.amount_chart
+
+    quantity_series.hovered.emit(False, 1, inbound_set)
+    assert hidden == [True]
+
+    _select(window.kind_combo, PeriodKind.ANNUAL)
+    annual_amount_series = window.amount_chart.chart().series()[0]
+    assert isinstance(annual_amount_series, QBarSeries)
+    annual_amount_series.hovered.emit(True, 0, annual_amount_series.barSets()[0])
+    assert shown[-1][0] == "2025年度\n支出額: 1,300円"
+
+    _select(window.kind_combo, PeriodKind.MONTHLY)
+    old_chart = window.quantity_chart.chart()
+    _select(window.group_combo, GroupBy.CLIENT)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not shiboken6.isValid(old_chart)
+    new_series = window.quantity_chart.chart().series()[0]
+    assert isinstance(new_series, QBarSeries)
+    new_series.hovered.emit(True, 1, new_series.barSets()[0])
+    assert shown[-1][0] == "2025年5月\n入庫数: 15"
 
 
 def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
@@ -375,6 +472,263 @@ def test_empty_history_uses_zero_to_one_axis(qtbot: QtBot, empty_env: Env) -> No
     for view in (window.quantity_chart, window.amount_chart):
         axis = _value_axis(view)
         assert (axis.min(), axis.max()) == (0, 1)
+        assert axis.tickCount() == 2
+        assert axis.minorTickCount() == 0
+
+
+@pytest.mark.parametrize("scale", [100, 150])
+def test_dashboard_fits_work_area_and_monthly_labels_render(
+    qtbot: QtBot,
+    env: Env,
+    restore_app_font: Any,
+    scale: int,
+) -> None:
+    apply_display_settings(DisplaySettings(font_scale_percent=scale))
+    window = _open(qtbot, env)
+    qtbot.waitExposed(window)
+    qtbot.wait(30)
+
+    assert_fits_work_area(window)
+    assert_buttons_reachable(window, window.csv_button, window.png_button, window.close_button)
+    for view in (window.quantity_chart, window.amount_chart):
+        axis = _category_axis(view)
+        assert len(axis.categories()) == 12
+        assert axis.labelsAngle() == -45
+        image = view.grab().toImage()
+        assert not image.isNull()
+        assert (
+            len(
+                {
+                    image.pixel(x, y)
+                    for x in range(0, image.width(), 20)
+                    for y in range(0, image.height(), 20)
+                }
+            )
+            > 1
+        )
+
+
+def test_dashboard_breakdown_table_scrolls_when_grouped_rows_overflow(
+    qtbot: QtBot, env: Env
+) -> None:
+    window = _open(qtbot, env)
+    _select(window.group_combo, GroupBy.CLIENT_PURCHASER)
+    assert window._snapshot is not None
+    window.breakdown_model.set_rows(window._snapshot.result.breakdown * 50)
+    window.tabs.setCurrentIndex(1)
+    qtbot.wait(30)
+
+    assert window.breakdown_model.rowCount() > 30
+    assert window.breakdown_table.verticalScrollBar().maximum() > 0
+    table_top_left = window.breakdown_table.mapTo(window, window.breakdown_table.rect().topLeft())
+    assert window.rect().contains(table_top_left)
+    assert_fits_work_area(window)
+    assert_buttons_reachable(window, window.csv_button, window.png_button, window.close_button)
+
+
+def test_dashboard_csv_exports_the_displayed_breakdown(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    _select(window.client_combo, 1)
+    _select(window.group_combo, GroupBy.CLIENT)
+    destination = tmp_path / "dashboard.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+
+    assert window.csv_button.isEnabled()
+    window.csv_button.click()
+
+    with destination.open(encoding="utf-8-sig", newline="") as file:
+        output = list(csv.reader(file))
+    assert output[0] == [
+        "年度/月",
+        "クライアント",
+        "発注主体",
+        "入庫数",
+        "出庫数",
+        "支出額",
+        "単価未登録数量",
+        "廃棄数",
+        "廃棄額",
+    ]
+    assert window._snapshot is not None
+    expected = [
+        [
+            row.period_label,
+            row.client_name,
+            row.purchaser_name if row.purchaser_id is not None else "(すべて)",
+            str(row.inbound_quantity),
+            str(row.outbound_quantity),
+            str(row.expenditure),
+            str(row.unpriced_issue_quantity),
+            str(row.disposed_quantity),
+            str(row.disposal_amount),
+        ]
+        for row in window._snapshot.result.breakdown
+    ]
+    assert output[1:] == expected
+    assert len(output) == window.breakdown_model.rowCount() + 1
+    assert "CSV を出力しました" in window.output_status.text()
+    assert any("CSV出力を開始" in record.message for record in caplog.records)
+    assert any("CSV出力が完了" in record.message for record in caplog.records)
+
+
+def test_dashboard_csv_cancel_does_not_create_a_file(
+    qtbot: QtBot, env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = _open(qtbot, env)
+    destination = tmp_path / "cancelled.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: ("", ""))
+
+    window.csv_button.click()
+
+    assert not destination.exists()
+    assert not window.output_status.text()
+
+
+def test_dashboard_png_exports_full_chart_content_at_any_scroll_position(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    restore_app_font: Any,
+) -> None:
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    destination = tmp_path / "dashboard"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+
+    assert window.png_button.isEnabled()
+    window.png_button.click()
+
+    first_path = tmp_path / "dashboard.png"
+    first_bytes = first_path.read_bytes()
+    image = QImage(str(first_path))
+    assert not image.isNull()
+    ratio = window.chart_content.devicePixelRatioF()
+    assert image.width() == round(window.chart_content.width() * ratio)
+    assert image.height() == round(window.chart_content.height() * ratio)
+
+    def sampled_colors(top: int, bottom: int) -> set[int]:
+        return {
+            image.pixel(x, y)
+            for x in range(0, image.width(), max(1, image.width() // 30))
+            for y in range(top, bottom, max(1, (bottom - top) // 20))
+        }
+
+    assert len(sampled_colors(0, image.height() // 2)) > 1
+    assert len(sampled_colors(image.height() // 2, image.height())) > 1
+
+    scrollbar = window.chart_scroll.verticalScrollBar()
+    scrollbar.setValue(scrollbar.maximum())
+    bottom_path = tmp_path / "dashboard-bottom.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(bottom_path), ""))
+    window.png_button.click()
+    assert bottom_path.read_bytes() == first_bytes
+    assert "PNG を保存しました" in window.output_status.text()
+
+    apply_display_settings(DisplaySettings(font_scale_percent=150))
+    qtbot.wait(30)
+    scaled_path = tmp_path / "dashboard-150.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(scaled_path), ""))
+    window.png_button.click()
+    scaled_image = QImage(str(scaled_path))
+    assert not scaled_image.isNull()
+    scaled_ratio = window.chart_content.devicePixelRatioF()
+    assert scaled_image.width() == round(window.chart_content.width() * scaled_ratio)
+    assert scaled_image.height() == round(window.chart_content.height() * scaled_ratio)
+    assert any("PNG出力を開始" in record.message for record in caplog.records)
+    assert any("PNG出力が完了" in record.message for record in caplog.records)
+
+
+def test_dashboard_png_failure_preserves_existing_file(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from PySide6.QtGui import QPixmap
+
+    caplog.set_level("INFO")
+    window = _open(qtbot, env)
+    destination = tmp_path / "existing.png"
+    original = b"existing image contents"
+    destination.write_bytes(original)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+    monkeypatch.setattr(window.chart_content, "grab", lambda: QPixmap())
+
+    window.png_button.click()
+
+    assert destination.read_bytes() == original
+    assert len(messages) == 1
+    assert "PNG画像を保存できません" in messages[0]
+    assert window.isVisible()
+    assert any("PNG出力を開始" in record.message for record in caplog.records)
+    assert any("PNG出力に失敗" in record.message for record in caplog.records)
+
+
+def test_exports_after_aggregation_failure_use_last_successful_snapshot(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    messages: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _open(qtbot, env)
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    selected_path = {"value": tmp_path / "before.csv"}
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args: (str(selected_path["value"]), ""),
+    )
+    window.csv_button.click()
+    csv_before = selected_path["value"].read_bytes()
+    selected_path["value"] = tmp_path / "before.png"
+    window.png_button.click()
+    png_before = selected_path["value"].read_bytes()
+
+    probe.fail = True
+    _select(window.group_combo, GroupBy.CLIENT)
+    assert len(messages) == 1
+    assert window.group_combo.currentData() == GroupBy.NONE
+
+    selected_path["value"] = tmp_path / "after.csv"
+    window.csv_button.click()
+    assert selected_path["value"].read_bytes() == csv_before
+    selected_path["value"] = tmp_path / "after.png"
+    window.png_button.click()
+    assert selected_path["value"].read_bytes() == png_before
+
+
+def test_export_buttons_follow_acquisition_and_active_tab(
+    qtbot: QtBot, env: Env, messages: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    probe.fail = True
+    window = _open(qtbot, env)
+
+    assert len(messages) == 1
+    assert not window.csv_button.isEnabled()
+    assert not window.png_button.isEnabled()
+
+    probe.fail = False
+    _select(window.group_combo, GroupBy.CLIENT)
+    assert window.csv_button.isEnabled()
+    assert window.png_button.isEnabled()
+    window.tabs.setCurrentIndex(1)
+    assert window.csv_button.isEnabled()
+    assert not window.png_button.isEnabled()
+    window.tabs.setCurrentIndex(0)
+    assert window.png_button.isEnabled()
 
 
 def test_data_changed_updates_once_and_keeps_selection(

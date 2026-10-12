@@ -13,18 +13,28 @@ from inventory_manager_mini.ui.error_handling import run_guarded
 logger = logging.getLogger(__name__)
 
 
-def _choose_csv_path(parent: QWidget, label: str, default_prefix: str) -> Path | None:
-    default_name = f"{default_prefix}_{local_timestamp_for_filename()}.csv"
+def _choose_export_path(
+    parent: QWidget,
+    label: str,
+    default_prefix: str,
+    extension: str,
+    file_filter: str,
+) -> Path | None:
+    suffix = extension if extension.startswith(".") else f".{extension}"
+    default_name = f"{default_prefix}_{local_timestamp_for_filename()}{suffix}"
     selected, _selected_filter = QFileDialog.getSaveFileName(
-        parent, f"{label}をCSV出力", default_name, "CSV ファイル (*.csv)"
+        parent,
+        f"{label}を{suffix[1:].upper()}出力",
+        default_name,
+        file_filter,
     )
     if not selected:
         return None
     path = Path(selected)
-    if path.suffix.lower() == ".csv":
+    if path.suffix.lower() == suffix.lower():
         return path
     # 保存ダイアログの上書き確認が及ばないため、補完後のパスだけ追加確認する
-    completed = path.with_name(path.name + ".csv")
+    completed = path.with_name(path.name + suffix)
     if completed.exists():
         answer = QMessageBox.question(
             parent,
@@ -44,18 +54,54 @@ def export_csv_with_dialog(
     default_prefix: str,
     export: Callable[[Path], None],
 ) -> Path | None:
-    path = _choose_csv_path(parent, label, default_prefix)
+    path = _choose_export_path(
+        parent,
+        label,
+        default_prefix,
+        ".csv",
+        "CSV ファイル (*.csv)",
+    )
+    return _run_export(parent, label, path, ".csv", export)
+
+
+def export_file_with_dialog(
+    parent: QWidget,
+    label: str,
+    default_prefix: str,
+    extension: str,
+    file_filter: str,
+    export: Callable[[Path], None],
+) -> Path | None:
+    path = _choose_export_path(parent, label, default_prefix, extension, file_filter)
+    return _run_export(parent, label, path, extension, export)
+
+
+def _run_export(
+    parent: QWidget,
+    label: str,
+    path: Path | None,
+    extension: str,
+    export: Callable[[Path], None],
+) -> Path | None:
     if path is None:
         return None
 
+    output_type = extension.removeprefix(".").upper()
+
     def run_export() -> None:
-        logger.info("CSV出力を開始します: 種別=%s 保存先=%s", label, path)
+        logger.info("%s出力を開始します: 種別=%s 保存先=%s", output_type, label, path)
         try:
             export(path)
         except Exception:
-            logger.error("CSV出力に失敗しました: 種別=%s 保存先=%s", label, path, exc_info=True)
+            logger.error(
+                "%s出力に失敗しました: 種別=%s 保存先=%s",
+                output_type,
+                label,
+                path,
+                exc_info=True,
+            )
             raise
-        logger.info("CSV出力が完了しました: 種別=%s 保存先=%s", label, path)
+        logger.info("%s出力が完了しました: 種別=%s 保存先=%s", output_type, label, path)
 
     QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
     try:
