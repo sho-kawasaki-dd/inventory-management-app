@@ -149,21 +149,23 @@
 
 #### C. Inno Setup スクリプト
 
-- [ ] `packaging/inventory-manager-mini.iss` を作成する
-  - [ ] `AppId` の GUID を新規生成して固定する(以後変更しない。本書 7 章 #2)
-  - [ ] `AppName`・`AppPublisher=IKinoCore`・`AppVersion`(`/DAppVersion` で受け取る)・`OutputBaseFilename`(`/DOutputName` で受け取る)。onedir の入力先は `/DBundleDir`、出力先は `/O` で D の今回のビルド用パスを受け取る
-  - [ ] `PrivilegesRequired=admin`・`PrivilegesRequiredOverridesAllowed=dialog`・`DefaultDirName={autopf}\Inventory Manager mini`
-  - [ ] `ArchitecturesAllowed=x64compatible`・`ArchitecturesInstallIn64BitMode=x64compatible`・`MinVersion=10.0`
-  - [ ] `[Languages]` に `Japanese.isl`、`LicenseFile` に `packaging/DISTRIBUTION_LICENSE.txt`
-  - [ ] `[Files]` に `/DBundleDir` で指定された onedir の全ファイル(`recursesubdirs`、ライセンス・ソース案内を含む)
-  - [ ] `[Icons]` にスタートメニュー(`{autoprograms}`)と、`[Tasks]` の `desktopicon`(`Flags: unchecked`)
-  - [ ] `[Run]` にインストール後の起動(`postinstall skipifsilent nowait`)
-  - [ ] 更新前の `PrepareToInstall` と `InitializeUninstall` で、対象 exe・DLL を `RmRegisterResources` に登録して `RmGetList` で使用中のプロセスを取得する。検出失敗・実行中は処理を開始せず、終了後に再確認する。セッションは必ず解放する。アプリへの名前付き mutex 追加や `AppMutex` による代用は行わない
-  - [ ] 手動終了を促し、キャンセルできるようにする。サイレント実行では実行中・検出失敗を非ゼロ終了とログで通知する。`CloseApplications=no`・`RestartApplications=no` とし、独自の検出で確認してから処理する。強制終了と自動再起動は行わない
-  - [ ] `SetupIconFile` は `#if FileExists(...)` で `app.ico` の存在を判定し、存在する場合だけ設定する。`UninstallDisplayIcon={app}\inventory-manager-mini.exe` はアイコンの有無によらず設定する
-  - [ ] `[UninstallDelete]` を記述しない(ユーザーデータとログを残す)
-- [ ] 日本語の言語ファイルが Inno Setup 6 の標準に含まれることを確認する(含まれない場合は代替を計画書へ追記)
+- [x] `packaging/inventory-manager-mini.iss` を作成する
+  - [x] `AppId` の GUID を新規生成して固定する(以後変更しない。本書 7 章 #2)
+  - [x] `AppName`・`AppPublisher=IKinoCore`・`AppVersion`(`/DAppVersion` で受け取る)・`OutputBaseFilename`(`/DOutputName` で受け取る)。onedir の入力先は `/DBundleDir`、出力先は `/O` で D の今回のビルド用パスを受け取る
+  - [x] `PrivilegesRequired=admin`・`PrivilegesRequiredOverridesAllowed=dialog`・`DefaultDirName={autopf}\Inventory Manager mini`
+  - [x] `ArchitecturesAllowed=x64compatible`・`ArchitecturesInstallIn64BitMode=x64compatible`・`MinVersion=10.0`
+  - [x] `[Languages]` に `Japanese.isl`、`LicenseFile` に `packaging/DISTRIBUTION_LICENSE.txt`(Inno Setup は BOM なしの UTF-8 を ANSI と解釈するため、`.iss` と `DISTRIBUTION_LICENSE.txt` は UTF-8 BOM 付きで保存する)
+  - [x] `[Files]` に `/DBundleDir` で指定された onedir の全ファイル(`recursesubdirs`、ライセンス・ソース案内を含む)
+  - [x] `[Icons]` にスタートメニュー(`{autoprograms}`)と、`[Tasks]` の `desktopicon`(`Flags: unchecked`)
+  - [x] `[Run]` にインストール後の起動(`postinstall skipifsilent nowait`。管理者権限のインストーラーからアプリが管理者で起動しないよう `runasoriginaluser` も付与)
+  - [x] 更新前の `PrepareToInstall` と `InitializeUninstall` で、対象 exe・DLL を `RmRegisterResources` に登録して `RmGetList` で使用中のプロセスを取得する。検出失敗・実行中は処理を開始せず、終了後に再確認する。セッションは必ず解放する。アプリへの名前付き mutex 追加や `AppMutex` による代用は行わない
+  - [x] 手動終了を促し、キャンセルできるようにする。サイレント実行では実行中・検出失敗を非ゼロ終了とログで通知する。`CloseApplications=no`・`RestartApplications=no` とし、独自の検出で確認してから処理する。強制終了と自動再起動は行わない
+  - [x] `SetupIconFile` は `#if FileExists(...)` で `app.ico` の存在を判定し、存在する場合だけ設定する。`UninstallDisplayIcon={app}\inventory-manager-mini.exe` はアイコンの有無によらず設定する
+  - [x] `[UninstallDelete]` を記述しない(ユーザーデータとログを残す)
+- [x] 日本語の言語ファイルが Inno Setup 6 の標準に含まれることを確認する(含まれない場合は代替を計画書へ追記)。6.7.3 の `Languages\Japanese.isl` を確認済み
 - [ ] アイコンあり・なしの両方でコンパイルする。全ユーザー・自分のみの各モードで、同じユーザー・別ユーザーによる起動中の更新/削除、終了後の再試行、検出失敗、サイレント実行を隔離環境で確認する。検知できない条件があれば完了扱いにせず方式を再検討する
+  - 実施済み(開発 PC・一時ディレクトリ・`ping.exe` の複製を疑似 exe に使用): アイコンあり・なし・必須定義欠落のコンパイル、自分のみ(同じユーザー)でのサイレント更新(終了コード 7)・アンインストール(終了コード 1)の拒否と、終了後の更新・削除の成功、`RmGetList` による PID・名称の取得
+  - 未実施(隔離環境で実施): 全ユーザーモード、別ユーザーの起動中プロセスの検出可否、対話時の再試行・キャンセル、検出失敗(Restart Manager のエラー)
 
 #### D. ビルドスクリプト
 
@@ -343,7 +345,7 @@
 | # | 項目 | 期限 | 回答 |
 | --- | --- | --- | --- |
 | 1 | Phase 7 の実用紙試し刷りと `LabelSpec` の確定(開発計画書 11 章 #1) | 正式タグ `v0.1.0` の作成前 | 未実施 |
-| 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | 着手時に生成して本書に記録する |
+| 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | `{8B4D1CC3-78CB-452A-8D8F-2D81019811FC}`(`packaging/inventory-manager-mini.iss`。以後変更しない) |
 | 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 着手時点の最新 6 系を確認して記録する。ローカル/CI とも実際に使用する ISCC を照合する |
 | 4 | `packaging/app.ico` の用意 | rc 検証前(未配置でもビルドは可能) | 利用者が用意する |
 | 5 | 実配布構成と必要な依存の対応ソース・ライセンス条件の確定 | 8a の A・D 完了まで | 実ビルドの棚卸しで確定し、構成一覧・通知・ソース成果物へ記録する。必要なソースを確保できない場合は配布しない |
