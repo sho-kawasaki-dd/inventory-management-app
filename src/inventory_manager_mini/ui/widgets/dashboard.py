@@ -182,8 +182,8 @@ class DashboardWindow(QWidget):
         fiscal_year = selected_year if selected_year in years else current_year
         if fiscal_year not in years:
             fiscal_year = years[-1] if years else current_year
-        kind = self.kind_combo.currentData() or PeriodKind.MONTHLY
-        group_by = self.group_combo.currentData() or GroupBy.NONE
+        kind = PeriodKind(self.kind_combo.currentData() or PeriodKind.MONTHLY)
+        group_by = GroupBy(self.group_combo.currentData() or GroupBy.NONE)
         result = self.context.reports.dashboard_result(
             None if kind is PeriodKind.ANNUAL else fiscal_year,
             kind,
@@ -235,6 +235,8 @@ class DashboardWindow(QWidget):
             index = self.year_combo.findData(snapshot.fiscal_year)
             self.year_combo.setCurrentIndex(max(index, 0))
             self.year_combo.setEnabled(snapshot.kind is PeriodKind.MONTHLY)
+            self.kind_combo.setCurrentIndex(max(self.kind_combo.findData(snapshot.kind), 0))
+            self.group_combo.setCurrentIndex(max(self.group_combo.findData(snapshot.group_by), 0))
         finally:
             self._signals_blocked = False
 
