@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -9,6 +10,7 @@ from PySide6.QtCore import QMarginsF, QPointF, Qt
 from PySide6.QtGui import QFont, QPagedPaintDevice, QPageLayout, QPageSize
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrinter
+from PySide6.QtWidgets import QDialogButtonBox
 
 from inventory_manager_mini.core.models import ItemRow, PurchaseInfo
 from inventory_manager_mini.ui.printing import fonts, label_renderer
@@ -19,6 +21,7 @@ from inventory_manager_mini.ui.printing.layout import (
     assign_label_slots,
     slot_rect_mm,
 )
+from tests.conftest import assert_buttons_reachable, assert_fits_work_area
 
 
 def _item_row(note: str | None = "備考") -> ItemRow:
@@ -334,3 +337,80 @@ def test_render_labels_rejects_page_selection_without_targets(monkeypatch) -> No
         )
 
     assert painter.begin_calls == 0
+
+
+def test_label_print_dialog_defaults_and_updates_page_count(qtbot) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    second_item = replace(_item_row(), id=2, code="ITEM-002", name="2番目の品目")
+    dialog = LabelPrintDialog([_item_row(), second_item])
+    qtbot.addWidget(dialog)
+
+    assert [spin.value() for spin in dialog.quantity_spins] == [1, 1]
+    assert dialog.entries == [LabelEntry(1, 1), LabelEntry(2, 1)]
+    assert dialog.first_page_slots == list(range(12))
+    assert dialog.count_label.text() == "合計 2 枚 / 用紙 1 枚"
+
+    dialog.quantity_spins[0].setValue(12)
+    assert dialog.count_label.text() == "合計 13 枚 / 用紙 2 枚"
+    assert dialog.entries[0] == LabelEntry(1, 12)
+
+
+def test_label_print_dialog_requires_at_least_one_slot(qtbot) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    dialog = LabelPrintDialog([_item_row()])
+    qtbot.addWidget(dialog)
+    ok_button = dialog.button_box.button(QDialogButtonBox.StandardButton.Ok)
+
+    dialog.clear_all_button.click()
+
+    assert dialog.first_page_slots == []
+    assert dialog.error_label.text() == "印字位置を 1 つ以上選択してください"
+    assert not ok_button.isEnabled()
+
+    dialog.select_all_button_widget.click()
+
+    assert dialog.first_page_slots == list(range(12))
+    assert dialog.error_label.text() == ""
+    assert ok_button.isEnabled()
+
+
+def test_label_print_dialog_fits_at_large_font_scale(qtbot) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    rows = [
+        replace(_item_row(), id=index, code=f"ITEM-{index:03d}", name=f"品目{index}")
+        for index in range(1, 41)
+    ]
+    dialog = LabelPrintDialog(rows)
+    qtbot.addWidget(dialog)
+    original_font = dialog.font()
+    large_font = QFont(original_font)
+    large_font.setPointSizeF(original_font.pointSizeF() * 1.5)
+    dialog.setFont(large_font)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    assert_fits_work_area(dialog)
+    assert_buttons_reachable(
+        dialog,
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Ok),
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
+    )
+    assert dialog.item_table.verticalScrollBar().maximum() > 0
+
+
+def test_label_print_dialog_does_not_retain_settings_between_instances(qtbot) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    first = LabelPrintDialog([_item_row()])
+    qtbot.addWidget(first)
+    first.quantity_spins[0].setValue(42)
+    first.clear_all_button.click()
+
+    second = LabelPrintDialog([_item_row()])
+    qtbot.addWidget(second)
+
+    assert second.quantity_spins[0].value() == 1
+    assert second.first_page_slots == list(range(12))
