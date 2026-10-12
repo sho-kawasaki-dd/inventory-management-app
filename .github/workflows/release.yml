@@ -1,0 +1,325 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.release-info.outputs.version }}
+      suffix: ${{ steps.release-info.outputs.suffix }}
+      is_prerelease: ${{ steps.release-info.outputs.is_prerelease }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.13"
+
+      - name: Sync dependencies
+        shell: pwsh
+        run: |
+          uv sync --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Lint
+        shell: pwsh
+        run: |
+          uv run ruff check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          uv run ruff format --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Type check
+        shell: pwsh
+        run: |
+          uv run pyright
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test
+        shell: pwsh
+        run: |
+          uv run pytest --cov
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check core and database coverage
+        shell: pwsh
+        run: |
+          uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate release tag and expose release metadata
+        id: release-info
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = uv run python scripts/check_release_version.py --tag "$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $info = $json | ConvertFrom-Json -ErrorAction Stop
+          if ($info.version -notmatch '^\d+\.\d+\.\d+$' -or $info.suffix -notmatch '^(|-rc[1-9]\d*)$') {
+            throw '版数検査スクリプトが不正な JSON 値を返しました。'
+          }
+          $isPrerelease = ([bool]$info.is_prerelease).ToString().ToLowerInvariant()
+          $output = "version=$($info.version)`nsuffix=$($info.suffix)`nis_prerelease=$isPrerelease`n"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, $output, [Text.UTF8Encoding]::new($false))
+
+  build:
+    name: build
+    needs: verify
+    runs-on: windows-latest
+    outputs:
+      artifact_name: ${{ steps.validate.outputs.artifact_name }}
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        shell: pwsh
+        run: |
+          git fetch origin main --no-tags
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git merge-base --is-ancestor "$env:GITHUB_SHA" origin/main
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            throw "タグのコミットが origin/main に含まれていません: $env:GITHUB_SHA"
+          }
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.13"
+
+      - name: Sync build dependencies
+        shell: pwsh
+        run: |
+          uv sync --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install pinned Inno Setup
+        id: inno-setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installerPath = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3'
+          $installerUrl = 'https://files.jrsoftware.org/is/6/innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+          & $installerPath /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$installDirectory"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $isccPath = Join-Path $installDirectory 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $isccPath -PathType Leaf)) {
+            throw "固定版 Inno Setup の ISCC.exe がありません: $isccPath"
+          }
+          $productVersion = (Get-Item -LiteralPath $isccPath).VersionInfo.ProductVersion
+          if ($productVersion -notmatch '(?<!\d)6\.7\.3(?!\d)') {
+            throw "Inno Setup 6.7.3 ではありません: $productVersion"
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "iscc_path=$isccPath`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Build installer and source artifacts
+        id: package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_SUFFIX: ${{ needs.verify.outputs.suffix }}
+          ISCC_PATH: ${{ steps.inno-setup.outputs.iscc_path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $global:LASTEXITCODE = 0
+          $releaseDirectory = @(& ./packaging/build.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Suffix $env:RELEASE_SUFFIX `
+            -IsccPath $env:ISCC_PATH)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($releaseDirectory.Count -ne 1 -or -not (Test-Path -LiteralPath $releaseDirectory[0] -PathType Container)) {
+            throw 'ビルドスクリプトが確定成果物の出力先を返しませんでした。'
+          }
+          $path = ([string]$releaseDirectory[0]).Trim()
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "release_directory=$path`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Validate distribution files and hashes
+        id: validate
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_SUFFIX: ${{ needs.verify.outputs.suffix }}
+          RELEASE_DIRECTORY: ${{ steps.package.outputs.release_directory }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "inventory-manager-mini-$env:RELEASE_VERSION$env:RELEASE_SUFFIX"
+          $expectedNames = @(
+            "$prefix-setup.exe",
+            "$prefix-sources.zip",
+            "$prefix-manifest.json"
+          )
+          $expectedNames += $expectedNames | ForEach-Object { "$($_).sha256" }
+          $actualNames = @(Get-ChildItem -LiteralPath $env:RELEASE_DIRECTORY -File | ForEach-Object Name | Sort-Object)
+          $sortedExpectedNames = @($expectedNames | Sort-Object)
+          if (Compare-Object $sortedExpectedNames $actualNames) {
+            throw "成果物の構成が想定と異なります。期待: $($sortedExpectedNames -join ', ') / 実際: $($actualNames -join ', ')"
+          }
+          foreach ($name in $expectedNames | Where-Object { $_ -notlike '*.sha256' }) {
+            $artifactPath = Join-Path $env:RELEASE_DIRECTORY $name
+            $checksumPath = "$artifactPath.sha256"
+            if ((Get-Item -LiteralPath $artifactPath).Length -eq 0) {
+              throw "配布ファイルが空です: $name"
+            }
+            $checksumLine = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
+            if ($checksumLine -notmatch '^([0-9a-f]{64})  (.+)$' -or $Matches[2] -cne $name) {
+              throw "SHA256 ファイルの形式または対象名が不正です: $name"
+            }
+            $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($Matches[1] -cne $actualHash) {
+              throw "SHA256 が一致しません: $name"
+            }
+          }
+          $artifactName = "inventory-manager-mini-$env:GITHUB_REF_NAME"
+          $output = "artifact_name=$artifactName`nrelease_directory=$env:RELEASE_DIRECTORY`n"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, $output, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.validate.outputs.artifact_name }}
+          path: ${{ steps.validate.outputs.release_directory }}/*
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+
+  release:
+    name: release
+    needs:
+      - verify
+      - build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: release-artifacts
+
+      - name: Verify downloaded files and hashes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_SUFFIX: ${{ needs.verify.outputs.suffix }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          $prefix = "inventory-manager-mini-$env:RELEASE_VERSION$env:RELEASE_SUFFIX"
+          $expectedNames = @(
+            "$prefix-setup.exe",
+            "$prefix-sources.zip",
+            "$prefix-manifest.json"
+          )
+          $expectedNames += $expectedNames | ForEach-Object { "$($_).sha256" }
+          $actualNames = @(Get-ChildItem -LiteralPath $directory -File | ForEach-Object Name | Sort-Object)
+          $sortedExpectedNames = @($expectedNames | Sort-Object)
+          if (Compare-Object $sortedExpectedNames $actualNames) {
+            throw "ダウンロード成果物の構成が想定と異なります。期待: $($sortedExpectedNames -join ', ') / 実際: $($actualNames -join ', ')"
+          }
+          foreach ($name in $expectedNames | Where-Object { $_ -notlike '*.sha256' }) {
+            $artifactPath = Join-Path $directory $name
+            $checksumLine = (Get-Content -LiteralPath "$artifactPath.sha256" -Raw).Trim()
+            if ($checksumLine -notmatch '^([0-9a-f]{64})  (.+)$' -or $Matches[2] -cne $name) {
+              throw "SHA256 ファイルの形式または対象名が不正です: $name"
+            }
+            $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($Matches[1] -cne $actualHash) {
+              throw "ダウンロード後の SHA256 が一致しません: $name"
+            }
+          }
+
+      - name: Create draft release and add source instructions
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_SUFFIX: ${{ needs.verify.outputs.suffix }}
+          IS_PRERELEASE: ${{ needs.verify.outputs.is_prerelease }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $releaseApiPath = "repos/$env:GH_REPO/releases/tags/$tag"
+          $existingReleaseOutput = gh api $releaseApiPath 2>&1
+          $existingReleaseExitCode = $LASTEXITCODE
+          if ($existingReleaseExitCode -eq 0) {
+            throw "このタグの Release は既に存在します。上書きしません: $tag"
+          }
+          if (($existingReleaseOutput -join "`n") -notmatch '(?i)HTTP 404') {
+            throw "Release の存在確認に失敗しました: $($existingReleaseOutput -join "`n")"
+          }
+
+          $directory = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          $prefix = "inventory-manager-mini-$env:RELEASE_VERSION$env:RELEASE_SUFFIX"
+          $assets = @(
+            (Join-Path $directory "$prefix-setup.exe"),
+            (Join-Path $directory "$prefix-setup.exe.sha256"),
+            (Join-Path $directory "$prefix-sources.zip"),
+            (Join-Path $directory "$prefix-sources.zip.sha256"),
+            (Join-Path $directory "$prefix-manifest.json"),
+            (Join-Path $directory "$prefix-manifest.json.sha256")
+          )
+          $arguments = @('release', 'create', $tag, '--verify-tag', '--draft', '--generate-notes', '--repo', $env:GH_REPO)
+          if ($env:IS_PRERELEASE -ceq 'true') { $arguments += '--prerelease' }
+          $arguments += $assets
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $generatedNotes = gh release view $tag --repo $env:GH_REPO --json body --jq .body
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sourceInstructionsTemplate = @'
+          ## ライセンスと対応ソース
+
+          Qt Charts を含む本アプリ全体は GPLv3 で配布します。添付の `*-sources.zip` には、このリリースに対応するアプリのソース、ビルド手順、依存ソースが含まれます。`*-manifest.json` でタグ・コミット・依存の版と各ソース成果物の対応を確認できます。
+
+          ビルドには Python 3.13、uv、Inno Setup 6.7.3 が必要です。ソースを展開し、依存ソースを含むことを確認したうえで、次を実行してください:
+
+          ````powershell
+          uv sync --locked
+          pwsh -File packaging/build.ps1 -Version {VERSION} -Suffix '{SUFFIX}' -IsccPath '<Inno Setup 6.7.3 の ISCC.exe>'
+          ````
+
+          LICENSE、同梱ライセンス本文、再配布条件はソースアーカイブとインストーラーに含まれます。
+          '@
+          $sourceInstructions = $sourceInstructionsTemplate.Replace('{VERSION}', $env:RELEASE_VERSION).Replace('{SUFFIX}', $env:RELEASE_SUFFIX)
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $completeNotes = "$sourceInstructions`n`n$generatedNotes"
+          [IO.File]::WriteAllText($notesPath, $completeNotes, [Text.UTF8Encoding]::new($false))
+          gh release edit $tag --repo $env:GH_REPO --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $releaseStateJson = gh release view $tag --repo $env:GH_REPO --json isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $releaseState = $releaseStateJson | ConvertFrom-Json -ErrorAction Stop
+          if (-not $releaseState.isDraft -or ([bool]$releaseState.isPrerelease) -ne ($env:IS_PRERELEASE -ceq 'true')) {
+            throw '作成した Release の draft または pre-release 状態が期待値と異なります。'
+          }

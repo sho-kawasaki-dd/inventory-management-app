@@ -237,27 +237,27 @@
 
 #### H. `.github/workflows/release.yml`
 
-- [ ] トリガー: `push: tags: ['v*']`。ワークフロー全体の `permissions` は `contents: read`、`concurrency` はタグごと
-- [ ] Windows の `run` は `shell: pwsh` に統一する。外部コマンドの `$LASTEXITCODE` を直後に検査し、版数・main 包含・ビルド・成果物取得・Release 操作の失敗で後続処理を止める
-- [ ] `verify` ジョブ(`windows-latest`。ジョブ名は `verify`)
-  - [ ] `actions/checkout`、`astral-sh/setup-uv`(`ci.yml` と同じ版・Python 3.13)
-  - [ ] `uv sync --locked`、`ruff check`、`ruff format --check`、`pyright`、`pytest --cov`、カバレッジ検査(`ci.yml` と同じコマンド)
-  - [ ] `uv run python scripts/check_release_version.py --tag "$env:GITHUB_REF_NAME"` でタグと版数を検査する。JSON を解析して `version`・`suffix`・`is_prerelease` を `$env:GITHUB_OUTPUT` に書き、step outputs から同名の job outputs を公開する
-- [ ] `build` ジョブ(`needs: verify`、`windows-latest`)
-  - [ ] `actions/checkout` を `fetch-depth: 0` で実行し、`git merge-base --is-ancestor "$env:GITHUB_SHA" origin/main` でタグのコミットが `main` に含まれることを検査する(含まれなければ失敗)
-  - [ ] `astral-sh/setup-uv` で uv・Python 3.13 を設定し、`uv sync --locked` を実行する。`verify` の環境は引き継がれない前提とする
-  - [ ] 固定版 Inno Setup 6 を専用の導入先へ取得し、その ISCC のパスと実版を照合する(固定版は本書 7 章 #3)。プリインストール済みの別版を暗黙に使わず、不一致なら失敗させる。導入先・取得方法・実版を記録する
-  - [ ] `needs.verify.outputs.version`・`suffix` を環境変数経由で `packaging/build.ps1 -Version <版数> -Suffix <接尾辞> -IsccPath <固定版のパス>` に渡す。空接尾辞も欠落させない
-  - [ ] ビルド成功時だけ今回の確定出力先を step output に記録し、`actions/upload-artifact` にその配布対象ファイルだけを渡す。インストーラー・アプリ/依存の対応ソース・構成一覧・各 SHA256 の欠落時は失敗させる(`if-no-files-found: error`、通常の成功条件で実行)
-  - [ ] artifact 名を job output として公開する。artifact は工程間の受け渡し用とし、保持期限のある artifact だけを継続的なソース提供先にしない
-- [ ] `release` ジョブ(`needs: [verify, build]`、`permissions: contents: write`)
-  - [ ] `needs.build.outputs` の artifact 名で `actions/download-artifact` を実行し、必要な全成果物と各 SHA256 の一致を確認する
-  - [ ] `GH_TOKEN: ${{ github.token }}`・`GH_REPO: ${{ github.repository }}` を設定し、checkout の有無に依存せず対象リポジトリを確定する
-  - [ ] `gh release create "$env:GITHUB_REF_NAME" --verify-tag --draft [--prerelease] --generate-notes` で下書きを作成し、全成果物を添付する。`needs.verify.outputs.is_prerelease == 'true'` の場合だけ `--prerelease` を付け、タグの自動作成を許可しない
-  - [ ] Release 本文にアプリ全体の GPLv3 配布と、版別の対応ソース・依存ソース・構成一覧・ビルド手順の取得方法を明記する
-  - [ ] 同名の Release が既にある場合は失敗させる(上書きしない)
-- [ ] ワークフロー内で使うアクションの版は `ci.yml` に合わせ、シークレットを追加しない
-- [ ] `release.yml` の構文を `actionlint` 等で確認できる場合は確認する
+- [x] トリガー: `push: tags: ['v*']`。ワークフロー全体の `permissions` は `contents: read`、`concurrency` はタグごと
+- [x] Windows の `run` は `shell: pwsh` に統一する。外部コマンドの `$LASTEXITCODE` を直後に検査し、版数・main 包含・ビルド・成果物取得・Release 操作の失敗で後続処理を止める
+- [x] `verify` ジョブ(`windows-latest`。ジョブ名は `verify`)
+  - [x] `actions/checkout`、`astral-sh/setup-uv`(`ci.yml` と同じ版・Python 3.13)
+  - [x] `uv sync --locked`、`ruff check`、`ruff format --check`、`pyright`、`pytest --cov`、カバレッジ検査(`ci.yml` と同じコマンド)
+  - [x] `uv run python scripts/check_release_version.py --tag "$env:GITHUB_REF_NAME"` でタグと版数を検査する。JSON を解析して `version`・`suffix`・`is_prerelease` を `$env:GITHUB_OUTPUT` に書き、step outputs から同名の job outputs を公開する
+- [x] `build` ジョブ(`needs: verify`、`windows-latest`)
+  - [x] `actions/checkout` を `fetch-depth: 0` で実行し、`git merge-base --is-ancestor "$env:GITHUB_SHA" origin/main` でタグのコミットが `main` に含まれることを検査する(含まれなければ失敗)
+  - [x] `astral-sh/setup-uv` で uv・Python 3.13 を設定し、`uv sync --locked` を実行する。`verify` の環境は引き継がれない前提とする
+  - [x] 固定版 Inno Setup 6 を専用の導入先へ取得し、その ISCC のパスと実版を照合する(固定版は本書 7 章 #3)。プリインストール済みの別版を暗黙に使わず、不一致なら失敗させる。導入先・取得方法・実版を記録する
+  - [x] `needs.verify.outputs.version`・`suffix` を環境変数経由で `packaging/build.ps1 -Version <版数> -Suffix <接尾辞> -IsccPath <固定版のパス>` に渡す。空接尾辞も欠落させない
+  - [x] ビルド成功時だけ今回の確定出力先を step output に記録し、`actions/upload-artifact` にその配布対象ファイルだけを渡す。インストーラー・アプリ/依存の対応ソース・構成一覧・各 SHA256 の欠落時は失敗させる(`if-no-files-found: error`、通常の成功条件で実行)
+  - [x] artifact 名を job output として公開する。artifact は工程間の受け渡し用とし、保持期限のある artifact だけを継続的なソース提供先にしない
+- [x] `release` ジョブ(`needs: [verify, build]`、`permissions: contents: write`)
+  - [x] `needs.build.outputs` の artifact 名で `actions/download-artifact` を実行し、必要な全成果物と各 SHA256 の一致を確認する
+  - [x] `GH_TOKEN: ${{ github.token }}`・`GH_REPO: ${{ github.repository }}` を設定し、checkout の有無に依存せず対象リポジトリを確定する
+  - [x] `gh release create "$env:GITHUB_REF_NAME" --verify-tag --draft [--prerelease] --generate-notes` で下書きを作成し、全成果物を添付する。`needs.verify.outputs.is_prerelease == 'true'` の場合だけ `--prerelease` を付け、タグの自動作成を許可しない
+  - [x] Release 本文にアプリ全体の GPLv3 配布と、版別の対応ソース・依存ソース・構成一覧・ビルド手順の取得方法を明記する
+  - [x] 同名の Release が既にある場合は失敗させる(上書きしない)
+- [x] ワークフロー内で使うアクションの版は `ci.yml` に合わせ、シークレットを追加しない
+- [x] `release.yml` の構文を VS Code の YAML 診断で確認する(`actionlint` は未導入)
 
 #### I. 文書更新
 
