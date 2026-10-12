@@ -12,6 +12,12 @@ datas += copy_metadata("inventory-manager-mini")
 
 hiddenimports = ["PySide6.QtCharts", "PySide6.QtPrintSupport"]
 hiddenimports += collect_submodules("inventory_manager_mini")
+# ui/dialogs 等は __init__.py のない名前空間パッケージで collect_submodules に拾われないため、ソースを走査して補う
+package_root = project_root / "src"
+for module_file in (package_root / "inventory_manager_mini").rglob("*.py"):
+    parts = module_file.relative_to(package_root).with_suffix("").parts
+    hiddenimports.append(".".join(parts[:-1] if parts[-1] == "__init__" else parts))
+hiddenimports = sorted(set(hiddenimports))
 
 analysis = Analysis(
     [str(project_root / "src" / "inventory_manager_mini" / "__main__.py")],

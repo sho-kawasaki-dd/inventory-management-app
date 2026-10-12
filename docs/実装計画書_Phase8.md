@@ -289,7 +289,7 @@
 | ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 確認済み(ローカル検証版) | PyInstaller 6.22.3、Python 3.13.12、Qt/PySide6 6.11.2、Inno Setup 6.7.3、uv 0.11.32 |
 | `check_bundle.py` の合格 | 確認済み | `build.ps1 -Version 0.1.0` の工程内で合格 |
 | インストーラーのサイズ | 確認済み | 約 34.6 MB(`inventory-manager-mini-0.1.0-setup.exe`) |
-| 凍結版での品目登録・バージョン情報 | 未実施 | |
+| 凍結版での品目登録・バージョン情報 | 要再確認 | 初回は `ModuleNotFoundError: inventory_manager_mini.ui.dialogs.item_dialog`。`ui/dialogs` 等が `__init__.py` のない名前空間パッケージで `collect_submodules` に拾われないため。spec でソースを走査して全モジュールを hiddenimports に追加して修正。修正版での品目登録・バージョン情報は手動で確認する |
 | 法的通知・ライセンス本文・対応ソースと依存の版対応 | 未実施 | |
 | 提供ソースからのビルド・インストール | 未実施 | |
 | 検証環境と一時保存先の継承・実データの非変更 | 未実施 | |
