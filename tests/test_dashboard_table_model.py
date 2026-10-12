@@ -32,31 +32,49 @@ def _row(**changes: object) -> DashboardRow:
 
 def test_breakdown_columns_values_and_alignment() -> None:
     model = DashboardTableModel()
-    model.set_rows([_row(client_id=1, client_name="総務", purchaser_id=2, purchaser_name="本部")])
-    headers = [model.headerData(column, Qt.Orientation.Horizontal) for column in range(7)]
+    model.set_rows(
+        [
+            _row(
+                client_id=1,
+                client_name="総務",
+                purchaser_id=2,
+                purchaser_name="本部",
+                category_id=3,
+                category_name="電気 > ケーブル",
+                item_id=4,
+                item_code="A-001",
+                item_name="LANケーブル",
+            )
+        ]
+    )
+    headers = [model.headerData(column, Qt.Orientation.Horizontal) for column in range(9)]
     right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
-    assert model.columnCount() == 7
+    assert model.columnCount() == 9
     assert headers == [
         "年度/月",
         "クライアント",
         "発注主体",
+        "カテゴリ",
+        "品目",
         "入庫数",
         "出庫数",
         "支出額",
         "単価未登録数量",
     ]
-    assert [model.data(model.index(0, column)) for column in range(7)] == [
+    assert [model.data(model.index(0, column)) for column in range(9)] == [
         "2026-04",
         "総務",
         "本部",
+        "電気 > ケーブル",
+        "A-001 LANケーブル",
         "1,234",
         "5,678",
         "901,234円",
         "12",
     ]
-    assert model.data(model.index(0, 3), Qt.ItemDataRole.TextAlignmentRole) == right
     assert model.data(model.index(0, 5), Qt.ItemDataRole.TextAlignmentRole) == right
+    assert model.data(model.index(0, 7), Qt.ItemDataRole.TextAlignmentRole) == right
     assert model.data(model.index(0, 2), Qt.ItemDataRole.TextAlignmentRole) is None
 
 
@@ -64,12 +82,17 @@ def test_unfiltered_axes_and_empty_data() -> None:
     model = DashboardTableModel()
     model.set_rows([_row()])
 
-    assert model.data(model.index(0, 1)) == "(すべて)"
-    assert model.data(model.index(0, 2)) == "(すべて)"
+    assert [model.data(model.index(0, column)) for column in range(5)] == [
+        "2026-04",
+        "(すべて)",
+        "(すべて)",
+        "(すべて)",
+        "(すべて)",
+    ]
 
     model.set_rows([])
     assert model.rowCount() == 0
-    assert model.columnCount() == 7
+    assert model.columnCount() == 9
 
 
 def test_disposal_model_shows_only_rows_with_disposal_activity() -> None:
@@ -82,11 +105,13 @@ def test_disposal_model_shows_only_rows_with_disposal_activity() -> None:
         ]
     )
 
-    assert model.columnCount() == 5
-    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(5)] == [
+    assert model.columnCount() == 7
+    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(7)] == [
         "年度/月",
         "クライアント",
         "発注主体",
+        "カテゴリ",
+        "品目",
         "廃棄数",
         "廃棄額",
     ]
@@ -95,8 +120,11 @@ def test_disposal_model_shows_only_rows_with_disposal_activity() -> None:
         "2026-05",
         "2026-06",
     ]
-    assert model.data(model.index(0, 3)) == "12"
-    assert model.data(model.index(1, 4)) == "3,456円"
+    assert model.data(model.index(0, 5)) == "12"
+    assert model.data(model.index(1, 6)) == "3,456円"
+    right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+    assert model.data(model.index(0, 5), Qt.ItemDataRole.TextAlignmentRole) == right
+    assert model.data(model.index(1, 6), Qt.ItemDataRole.TextAlignmentRole) == right
 
     model.set_rows([_row()])
     assert model.rowCount() == 0
