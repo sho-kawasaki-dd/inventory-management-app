@@ -676,6 +676,78 @@ def test_print_preview_rejects_invalid_page_range(qtbot) -> None:
         dialog._selected_page_numbers(cast(QPrintDialog, InvalidRangeDialog()))
 
 
+def test_print_preview_reads_multiple_page_ranges_from_printer(qtbot) -> None:
+    from PySide6.QtGui import QPageLayout, QPageRanges
+    from PySide6.QtPrintSupport import QAbstractPrintDialog, QPrintDialog
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    printer = _pdf_printer(Path("preview-multiple-ranges.pdf"))
+    page_ranges = QPageRanges()
+    page_ranges.addRange(2, 3)
+    page_ranges.addPage(5)
+    printer.setPageRanges(page_ranges)
+
+    class MultipleRangeDialog:
+        def printer(self):
+            return printer
+
+        def printRange(self):
+            return QAbstractPrintDialog.PrintRange.PageRange
+
+        def fromPage(self) -> int:
+            return 2
+
+        def toPage(self) -> int:
+            return 5
+
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        5,
+        lambda _device, _pages: None,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._selected_page_numbers(cast(QPrintDialog, MultipleRangeDialog())) == [2, 3, 5]
+
+
+def test_print_preview_rejects_page_range_beyond_document(qtbot) -> None:
+    from PySide6.QtGui import QPageLayout, QPageRanges
+    from PySide6.QtPrintSupport import QAbstractPrintDialog, QPrintDialog
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    printer = _pdf_printer(Path("preview-out-of-range.pdf"))
+    page_ranges = QPageRanges()
+    page_ranges.addRange(2, 4)
+    printer.setPageRanges(page_ranges)
+
+    class OutOfRangeDialog:
+        def printer(self):
+            return printer
+
+        def printRange(self):
+            return QAbstractPrintDialog.PrintRange.PageRange
+
+        def fromPage(self) -> int:
+            return 2
+
+        def toPage(self) -> int:
+            return 4
+
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        3,
+        lambda _device, _pages: None,
+    )
+    qtbot.addWidget(dialog)
+
+    with pytest.raises(ValueError, match="範囲が不正"):
+        dialog._selected_page_numbers(cast(QPrintDialog, OutOfRangeDialog()))
+
+
 def test_print_preview_paint_signal_reports_failure_once_and_closes_later(
     monkeypatch, qtbot, caplog
 ) -> None:

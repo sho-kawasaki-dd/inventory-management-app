@@ -179,11 +179,11 @@
 
 #### H. MainWindow の導線 `ui/main_window.py`
 
-- [ ] 「ファイル」メニューに「印刷」サブメニューを追加し、「棚ラベル」`QAction`(`print_labels_action`)を置く(在庫表は 7b)。位置は「CSV 出力」サブメニューの直後
-- [ ] ツールバーの出力グループに「印刷」ドロップダウン(`QToolButton`、`InstantPopup`)を追加し、同じ `QAction` を共有する
-- [ ] 一覧の右クリックメニューの参照グループの後に区切り線を置き、棚ラベルを追加する
-- [ ] `_print_labels()` を実装する: 選択行(`_selected_item_ids`)の `ItemRow` を取得 → `LabelPrintDialog` → OK なら `assign_label_slots` で面付け → `QPrinter(HighResolution)` と H0 の `PrintPreviewDialog`(A4 縦)を生成する。共通クラスの描画コールバックから、指定された `page_numbers` とともに `render_labels` を呼ぶ。全体を `run_guarded` で包み、描画コールバック内の例外処理は H0 に委ねる
-- [ ] 補正値は印刷操作の開始ごとに表示設定ファイルから読み直す(`context.paths` の UI 表示設定パスを使い、読み込み失敗時は 0.0)。行・面付け・補正値はプレビューを開く前に固定し、そのプレビューの再描画・実印刷中には読み直さない。設定ダイアログで変更した値は次の印刷操作から反映する
+- [x] 「ファイル」メニューに「印刷」サブメニューを追加し、「棚ラベル」`QAction`(`print_labels_action`)を置く(在庫表は 7b)。位置は「CSV 出力」サブメニューの直後
+- [x] ツールバーの出力グループに「印刷」ドロップダウン(`QToolButton`、`InstantPopup`)を追加し、同じ `QAction` を共有する
+- [x] 一覧の右クリックメニューの参照グループの後に区切り線を置き、棚ラベルを追加する
+- [x] `_print_labels()` を実装する: 選択行(`_selected_item_ids`)の `ItemRow` を取得 → `LabelPrintDialog` → OK なら `assign_label_slots` で面付け → `QPrinter(HighResolution)` と H0 の `PrintPreviewDialog`(A4 縦)を生成する。共通クラスの描画コールバックから、指定された `page_numbers` とともに `render_labels` を呼ぶ。全体を `run_guarded` で包み、描画コールバック内の例外処理は H0 に委ねる
+- [x] 補正値は印刷操作の開始ごとに表示設定ファイルから読み直す(`context.paths` の UI 表示設定パスを使い、読み込み失敗時は 0.0)。行・面付け・補正値はプレビューを開く前に固定し、そのプレビューの再描画・実印刷中には読み直さない。設定ダイアログで変更した値は次の印刷操作から反映する
 
 #### I. 7a のテスト
 

@@ -193,6 +193,17 @@ class PrintPreviewDialog(QPrintPreviewDialog):
         if print_range != QAbstractPrintDialog.PrintRange.PageRange:
             raise ValueError("印刷範囲は全ページまたはページ範囲を指定してください")
 
+        selected_ranges = self._printer.pageRanges().toRangeList()
+        if selected_ranges:
+            page_numbers: set[int] = set()
+            for selected in selected_ranges:
+                first_page = selected.from_
+                last_page = selected.to
+                if not 1 <= first_page <= last_page <= self._total_pages:
+                    raise ValueError("印刷ページの範囲が不正です")
+                page_numbers.update(range(first_page, last_page + 1))
+            return sorted(page_numbers)
+
         first_page = dialog.fromPage()
         last_page = dialog.toPage()
         if not 1 <= first_page <= last_page <= self._total_pages:

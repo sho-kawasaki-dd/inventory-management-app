@@ -1,14 +1,17 @@
 import logging
+from collections.abc import Sequence
 from enum import Enum, auto
 from importlib import import_module
 from pathlib import Path
 
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QPageLayout
+from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QLabel,
@@ -36,6 +39,10 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
+from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+from inventory_manager_mini.ui.printing.label_renderer import render_labels
+from inventory_manager_mini.ui.printing.layout import LABEL_72212, assign_label_slots
+from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
@@ -164,6 +171,14 @@ class MainWindow(QMainWindow):
         self.csv_export_menu.addAction(self.export_history_action)
         self.csv_export_button.setMenu(self.csv_export_menu)
         self.toolbar.addWidget(self.csv_export_button)
+        self.print_button = QToolButton(self.toolbar)
+        self.print_button.setText("印刷")
+        self.print_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.print_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.print_toolbar_menu = QMenu(self.print_button)
+        self.print_toolbar_menu.addAction(self.print_labels_action)
+        self.print_button.setMenu(self.print_toolbar_menu)
+        self.toolbar.addWidget(self.print_button)
 
     def _build_table_context_menu(self) -> None:
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -180,6 +195,10 @@ class MainWindow(QMainWindow):
         self.table.addAction(separator)
         self.table.addAction(self.history_action)
         self.table.addAction(self.purchase_page_action)
+        separator = QAction(self.table)
+        separator.setSeparator(True)
+        self.table.addAction(separator)
+        self.table.addAction(self.print_labels_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -196,6 +215,10 @@ class MainWindow(QMainWindow):
         self.csv_menu = file_menu.addMenu("CSV 出力")
         self.csv_menu.addAction(self.export_items_action)
         self.csv_menu.addAction(self.export_history_action)
+        self.print_menu = file_menu.addMenu("印刷")
+        self.print_labels_action = QAction("棚ラベル", self)
+        self.print_labels_action.triggered.connect(self._print_labels)
+        self.print_menu.addAction(self.print_labels_action)
         file_menu.addSeparator()
         self.backup_action = QAction("バックアップ", self)
         self.backup_action.triggered.connect(self._create_backup)
@@ -433,6 +456,48 @@ class MainWindow(QMainWindow):
         succeeded, url = run_guarded(self, lambda: validate_purchase_url(item.purchase_url))
         if succeeded and url is not None:
             QDesktopServices.openUrl(QUrl(url))
+
+    def _print_labels(self) -> None:
+        run_guarded(self, self._run_print_labels)
+
+    def _run_print_labels(self) -> None:
+        settings = load_display_settings(self.context.paths.ui_settings_path)
+        items = []
+        for item_id in self._selected_item_ids():
+            source_row = self.item_model.row_of(item_id)
+            if source_row is not None:
+                items.append(self.item_model.row_at(source_row))
+        if not items:
+            return
+
+        dialog = LabelPrintDialog(items, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        placements = assign_label_slots(dialog.entries, dialog.first_page_slots)
+        items_by_id = {item.id: item for item in items}
+        total_pages = max(placement.page_number for placement in placements)
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+
+        def render(device: QPrinter, page_numbers: Sequence[int] | None) -> None:
+            render_labels(
+                device,
+                placements,
+                items_by_id,
+                LABEL_72212,
+                settings.label_offset_left_mm,
+                settings.label_offset_top_mm,
+                page_numbers=page_numbers,
+            )
+
+        preview = PrintPreviewDialog(
+            printer,
+            QPageLayout.Orientation.Portrait,
+            total_pages,
+            render,
+            parent=self,
+        )
+        preview.exec()
 
     def _export_items_csv(self) -> None:
         item_filter = self._current_item_filter()
