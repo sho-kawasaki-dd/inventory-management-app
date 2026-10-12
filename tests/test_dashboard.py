@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import GroupBy, NewItem, PeriodKind
+from inventory_manager_mini.core.models import NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
@@ -35,6 +35,17 @@ from tests.conftest import (
 )
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
+
+
+class GroupBy:
+    """画面の内訳コンボのキー(6c の P でチェックボックスへ置き換える)。"""
+
+    NONE = "none"
+    CLIENT = "client"
+    PURCHASER = "purchaser"
+    CLIENT_PURCHASER = "client_purchaser"
+
+
 FISCAL_2025_LABELS = [f"2025年{month}月" for month in range(4, 13)] + [
     f"2026年{month}月" for month in range(1, 4)
 ]
@@ -549,6 +560,9 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
         "年度/月",
         "クライアント",
         "発注主体",
+        "カテゴリ",
+        "管理番号",
+        "品名",
         "入庫数",
         "出庫数",
         "支出額",
@@ -562,6 +576,9 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
             row.period_label,
             row.client_name,
             row.purchaser_name if row.purchaser_id is not None else "(すべて)",
+            "(すべて)",
+            "(すべて)",
+            "(すべて)",
             str(row.inbound_quantity),
             str(row.outbound_quantity),
             str(row.expenditure),

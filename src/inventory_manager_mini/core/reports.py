@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import date, datetime, tzinfo
 from pathlib import Path
 
@@ -13,9 +14,10 @@ from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     REASON_LABELS,
+    Category,
     DashboardResult,
     DashboardRow,
-    GroupBy,
+    GroupAxis,
     ItemFilter,
     PeriodKind,
     Reason,
@@ -31,7 +33,40 @@ from inventory_manager_mini.core.timeutil import (
 from inventory_manager_mini.db.connection import read_transaction
 
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-_AggregateKey = tuple[int, int | None, int | None]
+_AggregateKey = tuple[int, int | None, int | None, int | None, int | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _RowIdentity:
+    client_id: int | None
+    client_name: str | None
+    purchaser_id: int | None
+    purchaser_name: str | None
+    category_id: int | None
+    category_name: str | None
+    item_id: int | None
+    item_code: str | None
+    item_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Selection:
+    base: _RowIdentity
+    group_by: frozenset[GroupAxis]
+    category_paths: dict[int, str]
+
+
+def _category_paths(categories: Sequence[Category]) -> dict[int, str]:
+    by_id = {category.id: category for category in categories}
+    paths: dict[int, str] = {}
+    for category in categories:
+        names: list[str] = []
+        current: Category | None = category
+        while current is not None:
+            names.append(current.name)
+            current = None if current.parent_id is None else by_id.get(current.parent_id)
+        paths[category.id] = " > ".join(reversed(names))
+    return paths
 
 
 def fiscal_year_of(local_day: date, start_month: int) -> int:
@@ -113,10 +148,14 @@ class ReportService:
         kind: PeriodKind,
         client_id: int | None = None,
         purchaser_id: int | None = None,
-        group_by: GroupBy = GroupBy.NONE,
+        category_id: int | None = None,
+        item_id: int | None = None,
+        group_by: frozenset[GroupAxis] = frozenset(),
     ) -> list[DashboardRow]:
         return list(
-            self.dashboard_result(fiscal_year, kind, client_id, purchaser_id, group_by).breakdown
+            self.dashboard_result(
+                fiscal_year, kind, client_id, purchaser_id, category_id, item_id, group_by
+            ).breakdown
         )
 
     def dashboard_result(
@@ -125,7 +164,9 @@ class ReportService:
         kind: PeriodKind,
         client_id: int | None = None,
         purchaser_id: int | None = None,
-        group_by: GroupBy = GroupBy.NONE,
+        category_id: int | None = None,
+        item_id: int | None = None,
+        group_by: frozenset[GroupAxis] = frozenset(),
     ) -> DashboardResult:
         if fiscal_year is not None and type(fiscal_year) is not int:
             raise ValueError("年度は整数で指定してください")
@@ -135,6 +176,12 @@ class ReportService:
             raise ValueError("クライアント ID は正の整数で指定してください")
         if purchaser_id is not None and (type(purchaser_id) is not int or purchaser_id < 1):
             raise ValueError("発注主体 ID は正の整数で指定してください")
+        if category_id is not None and (type(category_id) is not int or category_id < 1):
+            raise ValueError("カテゴリ ID は正の整数で指定してください")
+        if item_id is not None and (type(item_id) is not int or item_id < 1):
+            raise ValueError("品目 ID は正の整数で指定してください")
+        if type(group_by) is not frozenset or any(type(axis) is not GroupAxis for axis in group_by):
+            raise ValueError("内訳軸は GroupAxis の frozenset で指定してください")
 
         with read_transaction(self.conn):
             start_month = self.settings.get_fiscal_year_start_month()
@@ -147,16 +194,34 @@ class ReportService:
                 ]
             else:
                 periods = self._periods(fiscal_year, kind, start_month)
-            client_name = self._filtered_master_name("clients", client_id)
-            purchaser_name = self._filtered_master_name("purchasers", purchaser_id)
-            return self._aggregate(
-                periods,
-                client_id,
-                client_name,
-                purchaser_id,
-                purchaser_name,
+            category_paths = _category_paths(self.inventory.masters.list_categories())
+            if category_id is not None and category_id not in category_paths:
+                raise ValidationError("カテゴリが見つかりません")
+            item_code: str | None = None
+            item_name: str | None = None
+            if item_id is not None:
+                item_row = self.conn.execute(
+                    "SELECT code, name FROM items WHERE id = ?", (item_id,)
+                ).fetchone()
+                if item_row is None:
+                    raise ValidationError("品目が見つかりません")
+                item_code, item_name = str(item_row[0]), str(item_row[1])
+            selection = _Selection(
+                _RowIdentity(
+                    client_id,
+                    self._filtered_master_name("clients", client_id),
+                    purchaser_id,
+                    self._filtered_master_name("purchasers", purchaser_id),
+                    category_id,
+                    None if category_id is None else category_paths[category_id],
+                    item_id,
+                    item_code,
+                    item_name,
+                ),
                 group_by,
+                category_paths,
             )
+            return self._aggregate(periods, selection)
 
     def _available_fiscal_years(self, start_month: int) -> list[int]:
         row = self.conn.execute(
@@ -206,24 +271,31 @@ class ReportService:
     def _aggregate(
         self,
         periods: list[tuple[str, date, date, date]],
-        client_id: int | None,
-        client_name: str | None,
-        purchaser_id: int | None,
-        purchaser_name: str | None,
-        group_by: GroupBy,
+        selection: _Selection,
     ) -> DashboardResult:
         ranges = [local_range_to_utc(start, end, self.tz) for _, _, start, end in periods]
+        base = selection.base
+        group_by = selection.group_by
         parameters: dict[str, object] = {
             "range_start": ranges[0][0],
             "range_end": ranges[-1][1],
-            "client_id": client_id,
-            "purchaser_id": purchaser_id,
+            "client_id": base.client_id,
+            "purchaser_id": base.purchaser_id,
+            "category_id": base.category_id,
+            "item_id": base.item_id,
         }
         rows = self.conn.execute(
-            """SELECT COALESCE(o.moved_at, m.moved_at) AS event_at,
+            """WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM categories WHERE id = :category_id
+                UNION ALL
+                SELECT c.id FROM categories c JOIN descendants d ON c.parent_id = d.id
+            )
+            SELECT COALESCE(o.moved_at, m.moved_at) AS event_at,
                 m.client_id, c.name, COALESCE(lot.purchaser_id, m.purchaser_id), p.name,
+                i.category_id, i.id, i.code, i.name,
                 m.reason, m.delta, a.quantity, lot.unit_price
             FROM stock_movements m
+            JOIN items i ON i.id = m.item_id
             LEFT JOIN stock_movements o ON o.id = m.reversal_of
             LEFT JOIN stock_allocations a ON a.movement_id = m.id
             LEFT JOIN stock_movements lot ON lot.id = a.lot_id
@@ -236,48 +308,51 @@ class ReportService:
                     :purchaser_id IS NULL
                     OR COALESCE(lot.purchaser_id, m.purchaser_id) = :purchaser_id
                 )
+                AND (:item_id IS NULL OR m.item_id = :item_id)
+                AND (:category_id IS NULL OR i.category_id IN (SELECT id FROM descendants))
             ORDER BY event_at, m.id""",
             parameters,
         ).fetchall()
 
+        by_client = GroupAxis.CLIENT in group_by
+        by_purchaser = GroupAxis.PURCHASER in group_by
+        by_category = GroupAxis.CATEGORY in group_by
+        by_item = GroupAxis.ITEM in group_by
+        category_paths = selection.category_paths
         totals: dict[int, list[int]] = {}
         aggregates: dict[_AggregateKey, list[int]] = {}
-        names: dict[_AggregateKey, tuple[str | None, str | None]] = {}
+        identities: dict[_AggregateKey, _RowIdentity] = {}
         for row in rows:
             event_at = str(row[0])
             period_index = next(
                 index for index, (start, end) in enumerate(ranges) if start <= event_at < end
             )
-            row_client_id = int(row[1])
-            row_client_name = str(row[2])
-            row_purchaser_id = int(row[3])
-            row_purchaser_name = str(row[4])
-            totals.setdefault(period_index, [0, 0, 0, 0, 0, 0])
-            total_values = totals[period_index]
-            key_client_id = (
-                row_client_id
-                if group_by in (GroupBy.CLIENT, GroupBy.CLIENT_PURCHASER)
-                else client_id
+            total_values = totals.setdefault(period_index, [0, 0, 0, 0, 0, 0])
+            key: _AggregateKey = (
+                period_index,
+                int(row[1]) if by_client else base.client_id,
+                int(row[3]) if by_purchaser else base.purchaser_id,
+                int(row[5]) if by_category else base.category_id,
+                int(row[6]) if by_item else base.item_id,
             )
-            key_purchaser_id = (
-                row_purchaser_id
-                if group_by in (GroupBy.PURCHASER, GroupBy.CLIENT_PURCHASER)
-                else purchaser_id
-            )
-            key = (period_index, key_client_id, key_purchaser_id)
-            aggregates.setdefault(key, [0, 0, 0, 0, 0, 0])
-            names.setdefault(
-                key,
-                (
-                    row_client_name if key_client_id == row_client_id else client_name,
-                    row_purchaser_name if key_purchaser_id == row_purchaser_id else purchaser_name,
-                ),
-            )
-            values = aggregates[key]
-            reason = Reason(str(row[5]))
-            delta = int(row[6])
-            allocation_quantity = None if row[7] is None else int(row[7])
-            unit_price = None if row[8] is None else int(row[8])
+            values = aggregates.get(key)
+            if values is None:
+                values = aggregates[key] = [0, 0, 0, 0, 0, 0]
+                identities[key] = _RowIdentity(
+                    key[1],
+                    str(row[2]) if by_client else base.client_name,
+                    key[2],
+                    str(row[4]) if by_purchaser else base.purchaser_name,
+                    key[3],
+                    category_paths[int(row[5])] if by_category else base.category_name,
+                    key[4],
+                    str(row[7]) if by_item else base.item_code,
+                    str(row[8]) if by_item else base.item_name,
+                )
+            reason = Reason(str(row[9]))
+            delta = int(row[10])
+            allocation_quantity = None if row[11] is None else int(row[11])
+            unit_price = None if row[12] is None else int(row[12])
             if reason is Reason.IN:
                 total_values[0] += delta
                 values[0] += delta
@@ -300,29 +375,33 @@ class ReportService:
 
         for period_index in range(len(periods)):
             totals.setdefault(period_index, [0, 0, 0, 0, 0, 0])
-            if group_by is GroupBy.NONE:
-                key = (period_index, client_id, purchaser_id)
+            if not group_by:
+                key = (
+                    period_index,
+                    base.client_id,
+                    base.purchaser_id,
+                    base.category_id,
+                    base.item_id,
+                )
                 aggregates.setdefault(key, [0, 0, 0, 0, 0, 0])
-                names.setdefault(key, (client_name, purchaser_name))
+                identities.setdefault(key, base)
 
-        def make_row(
-            period_index: int,
-            row_client_id: int | None,
-            row_client_name: str | None,
-            row_purchaser_id: int | None,
-            row_purchaser_name: str | None,
-            metrics: list[int],
-        ) -> DashboardRow:
+        def make_row(period_index: int, identity: _RowIdentity, metrics: list[int]) -> DashboardRow:
             if any(value < 0 or value > MAX_AGGREGATE_VALUE for value in metrics[:3] + metrics[4:]):
                 raise ValidationError("集計値が 0〜1,000,000,000,000 の範囲を超えます")
             label, period_start, _, _ = periods[period_index]
             return DashboardRow(
                 period_label=label,
                 period_start=period_start,
-                client_id=row_client_id,
-                client_name=row_client_name,
-                purchaser_id=row_purchaser_id,
-                purchaser_name=row_purchaser_name,
+                client_id=identity.client_id,
+                client_name=identity.client_name,
+                purchaser_id=identity.purchaser_id,
+                purchaser_name=identity.purchaser_name,
+                category_id=identity.category_id,
+                category_name=identity.category_name,
+                item_id=identity.item_id,
+                item_code=identity.item_code,
+                item_name=identity.item_name,
                 inbound_quantity=metrics[0],
                 outbound_quantity=metrics[1],
                 expenditure=metrics[2],
@@ -332,27 +411,27 @@ class ReportService:
             )
 
         total_rows = tuple(
-            make_row(period_index, client_id, client_name, purchaser_id, purchaser_name, metrics)
+            make_row(period_index, base, metrics)
             for period_index, metrics in sorted(totals.items())
         )
-        breakdown_rows: list[DashboardRow] = []
-        for (period_index, row_client_id, row_purchaser_id), metrics in sorted(
-            aggregates.items(), key=lambda entry: (entry[0][0], entry[0][1] or 0, entry[0][2] or 0)
-        ):
-            row_client_name, row_purchaser_name = names[
-                (period_index, row_client_id, row_purchaser_id)
-            ]
-            breakdown_rows.append(
-                make_row(
-                    period_index,
-                    row_client_id,
-                    row_client_name,
-                    row_purchaser_id,
-                    row_purchaser_name,
-                    metrics,
-                )
+
+        def sort_key(key: _AggregateKey) -> tuple[int, int, int, str, int, str, int]:
+            identity = identities[key]
+            return (
+                key[0],
+                key[1] or 0,
+                key[2] or 0,
+                identity.category_name or "",
+                key[3] or 0,
+                identity.item_code or "",
+                key[4] or 0,
             )
-        return DashboardResult(total_rows, tuple(breakdown_rows))
+
+        breakdown_rows = tuple(
+            make_row(key[0], identities[key], aggregates[key])
+            for key in sorted(aggregates, key=sort_key)
+        )
+        return DashboardResult(total_rows, breakdown_rows)
 
     def export_items_csv(self, path: Path, filter: ItemFilter) -> None:
         items = self.inventory.list_items(filter)
@@ -459,6 +538,9 @@ class ReportService:
             "年度/月",
             "クライアント",
             "発注主体",
+            "カテゴリ",
+            "管理番号",
+            "品名",
             "入庫数",
             "出庫数",
             "支出額",
@@ -471,6 +553,9 @@ class ReportService:
                 row.period_label,
                 row.client_name if row.client_id is not None else "(すべて)",
                 row.purchaser_name if row.purchaser_id is not None else "(すべて)",
+                row.category_name if row.category_id is not None else "(すべて)",
+                row.item_code if row.item_id is not None else "(すべて)",
+                row.item_name if row.item_id is not None else "(すべて)",
                 row.inbound_quantity,
                 row.outbound_quantity,
                 row.expenditure,

@@ -20,6 +20,7 @@ from inventory_manager_mini.core.models import (
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
     Allocation,
+    ItemChoice,
     ItemFilter,
     ItemUpdate,
     Reason,
@@ -162,6 +163,23 @@ def _insert_repository_item(repo: ItemRepository, *, code: str, name: str = "新
         note=None,
     )
     return item.id
+
+
+def test_item_repository_list_choices_orders_by_code_and_includes_inactive(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1, code="ST-0002", name="後", active=1)
+    _insert_item(repository_conn, item_id=2, code="ST-0001", name="先", active=0)
+    _insert_item(repository_conn, item_id=3, code="TL-0001", name="工具品", category_id=3)
+
+    choices = ItemRepository(repository_conn).list_choices()
+
+    assert [(c.id, c.code, c.name, c.is_active) for c in choices] == [
+        (2, "ST-0001", "先", False),
+        (1, "ST-0002", "後", True),
+        (3, "TL-0001", "工具品", True),
+    ]
+    assert set(ItemChoice.__dataclass_fields__) == {"id", "code", "name", "is_active"}
 
 
 def test_item_repository_allocates_sequences_without_reusing_codes(

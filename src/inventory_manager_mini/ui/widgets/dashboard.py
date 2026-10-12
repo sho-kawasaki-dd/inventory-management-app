@@ -30,7 +30,7 @@ from inventory_manager_mini.core.models import (
     Client,
     DashboardResult,
     DashboardRow,
-    GroupBy,
+    GroupAxis,
     PeriodKind,
     Purchaser,
 )
@@ -41,6 +41,13 @@ from inventory_manager_mini.ui.error_handling import run_guarded
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
 
 logger = logging.getLogger(__name__)
+
+_GROUP_AXES: dict[str, frozenset[GroupAxis]] = {
+    "none": frozenset(),
+    "client": frozenset({GroupAxis.CLIENT}),
+    "purchaser": frozenset({GroupAxis.PURCHASER}),
+    "client_purchaser": frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER}),
+}
 
 
 def _axis_parameters(maximum: int) -> tuple[int, int]:
@@ -70,7 +77,7 @@ class _DashboardSnapshot:
     purchaser_id: int | None
     fiscal_year: int
     kind: PeriodKind
-    group_by: GroupBy
+    group_by: str
     result: DashboardResult
 
 
@@ -102,13 +109,13 @@ class DashboardWindow(QWidget):
         self.kind_combo.addItem("月次", PeriodKind.MONTHLY)
         self.kind_combo.addItem("年次", PeriodKind.ANNUAL)
         self.group_combo = QComboBox(self)
-        for label, group in (
-            ("なし", GroupBy.NONE),
-            ("クライアント別", GroupBy.CLIENT),
-            ("発注主体別", GroupBy.PURCHASER),
-            ("クライアント×発注主体", GroupBy.CLIENT_PURCHASER),
+        for label, key in (
+            ("なし", "none"),
+            ("クライアント別", "client"),
+            ("発注主体別", "purchaser"),
+            ("クライアント×発注主体", "client_purchaser"),
         ):
-            self.group_combo.addItem(label, group)
+            self.group_combo.addItem(label, key)
 
         for label, combo in (
             ("クライアント", self.client_combo),
@@ -220,13 +227,14 @@ class DashboardWindow(QWidget):
         if fiscal_year not in years:
             fiscal_year = years[-1] if years else current_year
         kind = PeriodKind(self.kind_combo.currentData() or PeriodKind.MONTHLY)
-        group_by = GroupBy(self.group_combo.currentData() or GroupBy.NONE)
+        group_key = self.group_combo.currentData()
+        group_by = group_key if group_key in _GROUP_AXES else "none"
         result = self.context.reports.dashboard_result(
             None if kind is PeriodKind.ANNUAL else fiscal_year,
             kind,
             client_id,
             purchaser_id,
-            group_by,
+            group_by=_GROUP_AXES[group_by],
         )
         return _DashboardSnapshot(
             clients,

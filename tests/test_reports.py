@@ -3,7 +3,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from itertools import combinations
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -12,7 +14,7 @@ from inventory_manager_mini.core import reports
 from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import (
     DashboardRow,
-    GroupBy,
+    GroupAxis,
     ItemUpdate,
     NewItem,
     PeriodKind,
@@ -21,6 +23,23 @@ from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
 from inventory_manager_mini.core.services import InventoryService, SettingsService
 from inventory_manager_mini.db.integrity import compute_aggregates
 from tests.conftest import FixedClock, unchecked_constraints
+
+
+class GroupBy:
+    """旧 `GroupBy` の 4 値に相当する内訳軸の集合。"""
+
+    NONE = frozenset[GroupAxis]()
+    CLIENT = frozenset({GroupAxis.CLIENT})
+    PURCHASER = frozenset({GroupAxis.PURCHASER})
+    CLIENT_PURCHASER = frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER})
+
+
+OLD_GROUP_BY = (GroupBy.NONE, GroupBy.CLIENT, GroupBy.PURCHASER, GroupBy.CLIENT_PURCHASER)
+ALL_AXIS_SETS = [
+    frozenset(combination)
+    for size in range(len(GroupAxis) + 1)
+    for combination in combinations(GroupAxis, size)
+]
 
 
 def _create_item(
@@ -612,7 +631,7 @@ def test_dashboard_result_all_fiscal_years_and_totals_match_breakdown(
         expected = (
             result if kind is PeriodKind.ANNUAL else report.dashboard_result(fiscal_year, kind)
         )
-        for group_by in GroupBy:
+        for group_by in OLD_GROUP_BY:
             grouped = report.dashboard_result(fiscal_year, kind, group_by=group_by)
             assert grouped.totals == expected.totals
             for field in metric_fields:
@@ -769,7 +788,7 @@ def test_dashboard_splits_mixed_priced_and_unpriced_lots_in_one_operation(
 
     # 出庫は FIFO で不明ロット 2 + 10 円ロット 2、廃棄は 10 円ロット 1 + 不明ロット 2
     assert _metrics(result.totals[0]) == (7, 4, 20, 2, 3, 10)
-    for group_by in GroupBy:
+    for group_by in OLD_GROUP_BY:
         grouped = report.dashboard_result(2025, PeriodKind.ANNUAL, group_by=group_by)
         assert grouped.totals == result.totals
         assert [sum(_metrics(row)[index] for row in grouped.breakdown) for index in range(6)] == (
@@ -966,3 +985,295 @@ def test_dashboard_result_lists_years_and_aggregates_in_one_read_transaction(
     report.dashboard_result(None, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
 
     assert entered == [1]
+
+
+@dataclass(frozen=True)
+class _AxisEnv:
+    report: ReportService
+    inventory: InventoryService
+    items: dict[str, int]
+
+
+@pytest.fixture
+def axis_env(
+    seeded_conn: sqlite3.Connection, inventory: InventoryService, fixed_clock: FixedClock
+) -> _AxisEnv:
+    # 備品(1) > 文具(2) > ペン(3) > ボールペン(5)、備品(1) > 工具(4)
+    seeded_conn.executemany(
+        "INSERT INTO categories (id, parent_id, name, code_prefix, next_seq) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(3, 2, "ペン", "PN", 1), (4, 1, "工具", "TL", 1), (5, 3, "ボールペン", "BP", 1)],
+    )
+    items: dict[str, int] = {}
+    for name, category_id, client_id, purchaser_id, price, received, issued in (
+        ("A", 2, 1, 1, 10, 10, 2),
+        ("B", 3, 1, 2, 20, 8, 3),
+        ("C", 5, 2, 1, 30, 6, 1),
+        ("D", 4, 1, 1, 40, 5, 4),
+    ):
+        item_id = inventory.create_item(
+            NewItem(
+                client_id=client_id,
+                purchaser_id=purchaser_id,
+                name=name,
+                category_id=category_id,
+                reference_price=price,
+            )
+        ).id
+        inventory.receive(item_id, 1, received, unit_price=price)
+        inventory.issue(item_id, 1, issued, "用途")
+        items[name] = item_id
+    inventory.dispose(items["B"], 1, 1)
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    return _AxisEnv(report, inventory, items)
+
+
+def _annual_total(env: _AxisEnv, **filters: int) -> tuple[int, ...]:
+    return _metrics(env.report.dashboard_result(2025, PeriodKind.ANNUAL, **filters).totals[0])  # type: ignore[arg-type]
+
+
+def test_dashboard_result_filters_by_item(axis_env: _AxisEnv) -> None:
+    result = axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL, item_id=axis_env.items["B"])
+
+    assert _metrics(result.totals[0]) == (8, 3, 60, 0, 1, 20)
+    row = result.breakdown[0]
+    assert (row.item_id, row.item_code, row.item_name) == (axis_env.items["B"], "PN-0001", "B")
+    assert (row.client_id, row.purchaser_id, row.category_id) == (None, None, None)
+    assert result.totals[0].item_id == axis_env.items["B"]
+
+
+def test_dashboard_result_category_filter_includes_descendants_only(axis_env: _AxisEnv) -> None:
+    assert _annual_total(axis_env, category_id=1) == (29, 10, 270, 0, 1, 20)
+    assert _annual_total(axis_env, category_id=2) == (24, 6, 110, 0, 1, 20)
+    assert _annual_total(axis_env, category_id=3) == (14, 4, 90, 0, 1, 20)
+    assert _annual_total(axis_env, category_id=5) == (6, 1, 30, 0, 0, 0)
+    assert _annual_total(axis_env, category_id=4) == (5, 4, 160, 0, 0, 0)
+    row = axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL, category_id=3).breakdown[0]
+    assert (row.category_id, row.category_name) == (3, "備品 > 文具 > ペン")
+    assert (row.item_id, row.item_code, row.item_name) == (None, None, None)
+
+
+def test_dashboard_result_item_and_category_filters_are_anded(axis_env: _AxisEnv) -> None:
+    items = axis_env.items
+
+    assert _annual_total(axis_env, item_id=items["A"], category_id=3) == (0,) * 6
+    assert _annual_total(axis_env, item_id=items["B"], category_id=3) == (8, 3, 60, 0, 1, 20)
+    assert _annual_total(axis_env, item_id=items["C"], category_id=3) == (6, 1, 30, 0, 0, 0)
+    assert _annual_total(
+        axis_env, client_id=1, purchaser_id=2, category_id=2, item_id=items["B"]
+    ) == (8, 3, 60, 0, 1, 20)
+    assert (
+        _annual_total(axis_env, client_id=2, purchaser_id=2, category_id=2, item_id=items["B"])
+        == (0,) * 6
+    )
+    empty = axis_env.report.dashboard_result(
+        2025, PeriodKind.MONTHLY, item_id=items["A"], category_id=4
+    )
+    assert len(empty.totals) == len(empty.breakdown) == 12
+    assert all(_metrics(row) == (0,) * 6 for row in empty.breakdown)
+
+
+def test_dashboard_result_uses_the_current_category_of_the_item(
+    axis_env: _AxisEnv, seeded_conn: sqlite3.Connection
+) -> None:
+    _change_item_category(axis_env.inventory, axis_env.items["B"], 4)
+
+    assert _annual_total(axis_env, category_id=3) == (6, 1, 30, 0, 0, 0)
+    assert _annual_total(axis_env, category_id=4) == (13, 7, 220, 0, 1, 20)
+    by_category = axis_env.report.dashboard_result(
+        2025, PeriodKind.ANNUAL, group_by=frozenset({GroupAxis.CATEGORY})
+    ).breakdown
+    assert {row.category_name: row.inbound_quantity for row in by_category} == {
+        "備品 > 文具": 10,
+        "備品 > 工具": 13,
+        "備品 > 文具 > ペン > ボールペン": 6,
+    }
+
+
+def _change_item_category(inventory: InventoryService, item_id: int, category_id: int) -> None:
+    item = inventory.get_item(item_id)
+    assert item is not None
+    inventory.update_item(
+        ItemUpdate(
+            id=item.id,
+            client_id=item.client_id,
+            purchaser_id=item.purchaser_id,
+            name=item.name,
+            category_id=category_id,
+            location_id=item.location_id,
+            reorder_threshold=item.reorder_threshold,
+            reorder_quantity=item.reorder_quantity,
+            purchase_url=item.purchase_url,
+            supplier=item.supplier,
+            manufacturer_part_number=item.manufacturer_part_number,
+            application=item.application,
+            reference_price=item.reference_price,
+            note=item.note,
+        )
+    )
+
+
+def test_dashboard_result_keeps_inactive_items_in_item_and_category_filters(
+    axis_env: _AxisEnv,
+) -> None:
+    axis_env.inventory.deactivate_item(axis_env.items["B"])
+
+    assert _annual_total(axis_env, item_id=axis_env.items["B"]) == (8, 3, 60, 0, 1, 20)
+    assert _annual_total(axis_env, category_id=3) == (14, 4, 90, 0, 1, 20)
+
+
+@pytest.mark.parametrize("kind", [PeriodKind.ANNUAL, PeriodKind.MONTHLY])
+def test_dashboard_result_totals_match_breakdown_for_all_axis_combinations(
+    axis_env: _AxisEnv, kind: PeriodKind
+) -> None:
+    fiscal_year = None if kind is PeriodKind.ANNUAL else 2025
+    baseline = axis_env.report.dashboard_result(fiscal_year, kind)
+    expected_rows = {}
+    assert len(ALL_AXIS_SETS) == 16
+    for group_by in ALL_AXIS_SETS:
+        result = axis_env.report.dashboard_result(fiscal_year, kind, group_by=group_by)
+        assert result.totals == baseline.totals
+        for total in result.totals:
+            members = [row for row in result.breakdown if row.period_label == total.period_label]
+            assert [sum(_metrics(row)[index] for row in members) for index in range(6)] == list(
+                _metrics(total)
+            )
+        if kind is PeriodKind.ANNUAL:
+            expected_rows[group_by] = len(result.breakdown)
+
+    if kind is PeriodKind.ANNUAL:
+        axes = GroupAxis
+        assert expected_rows[frozenset()] == 1  # 履歴のある年度は 2025 年度のみ
+        assert expected_rows[frozenset({axes.ITEM})] == 4
+        assert expected_rows[frozenset({axes.CATEGORY})] == 4
+        assert expected_rows[frozenset({axes.CLIENT})] == 2
+        assert expected_rows[frozenset({axes.PURCHASER})] == 2
+        assert expected_rows[frozenset({axes.CLIENT, axes.PURCHASER})] == 3
+        assert expected_rows[frozenset(axes)] == 4
+
+
+def test_dashboard_result_group_rows_carry_axis_values_and_filtered_values(
+    axis_env: _AxisEnv,
+) -> None:
+    report = axis_env.report
+    by_item = report.dashboard_result(
+        2025, PeriodKind.ANNUAL, category_id=3, group_by=frozenset({GroupAxis.ITEM})
+    )
+    assert [
+        (row.category_id, row.category_name, row.item_code, row.client_id)
+        for row in by_item.breakdown
+    ] == [(3, "備品 > 文具 > ペン", "BP-0001", None), (3, "備品 > 文具 > ペン", "PN-0001", None)]
+    assert {(row.category_id, row.item_id) for row in by_item.totals} == {(3, None)}
+
+    by_category = report.dashboard_result(
+        2025,
+        PeriodKind.ANNUAL,
+        item_id=axis_env.items["B"],
+        group_by=frozenset({GroupAxis.CATEGORY}),
+    )
+    (row,) = by_category.breakdown
+    assert (row.category_id, row.category_name, row.item_id, row.item_code) == (
+        3,
+        "備品 > 文具 > ペン",
+        axis_env.items["B"],
+        "PN-0001",
+    )
+
+    both = report.dashboard_result(
+        2025, PeriodKind.ANNUAL, group_by=frozenset({GroupAxis.CATEGORY, GroupAxis.ITEM})
+    )
+    assert [(row.category_name, row.item_code) for row in both.breakdown] == [
+        ("備品 > 工具", "TL-0001"),
+        ("備品 > 文具", "ST-0001"),
+        ("備品 > 文具 > ペン", "PN-0001"),
+        ("備品 > 文具 > ペン > ボールペン", "BP-0001"),
+    ]
+
+
+def test_dashboard_result_orders_rows_by_period_client_purchaser_category_and_item(
+    axis_env: _AxisEnv,
+) -> None:
+    result = axis_env.report.dashboard_result(
+        2025, PeriodKind.ANNUAL, group_by=frozenset(GroupAxis)
+    )
+
+    assert [
+        (row.client_id, row.purchaser_id, row.category_name, row.item_code)
+        for row in result.breakdown
+    ] == [
+        (1, 1, "備品 > 工具", "TL-0001"),
+        (1, 1, "備品 > 文具", "ST-0001"),
+        (1, 2, "備品 > 文具 > ペン", "PN-0001"),
+        (2, 1, "備品 > 文具 > ペン > ボールペン", "BP-0001"),
+    ]
+    monthly = axis_env.report.dashboard_result(
+        2025, PeriodKind.MONTHLY, group_by=frozenset(GroupAxis)
+    )
+    assert [row.period_start for row in monthly.breakdown] == sorted(
+        row.period_start for row in monthly.breakdown
+    )
+
+
+def test_dashboard_result_new_axes_keep_unpriced_returns_and_stocktake_semantics(
+    axis_env: _AxisEnv,
+) -> None:
+    inventory = axis_env.inventory
+    unpriced_id = inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="E", category_id=2)
+    ).id
+    inventory.receive(unpriced_id, 1, 4)
+    cancelled = inventory.issue(unpriced_id, 1, 1, "取消")
+    inventory.issue(unpriced_id, 1, 2, "単価不明")
+    inventory.reverse(cancelled.id, 1)
+    inventory.return_to_supplier(unpriced_id, 1, 1)
+    inventory.stocktake(unpriced_id, 1, 3)
+
+    by_item = axis_env.report.dashboard_result(
+        2025, PeriodKind.ANNUAL, group_by=frozenset({GroupAxis.ITEM})
+    )
+    row = next(row for row in by_item.breakdown if row.item_id == unpriced_id)
+    assert _metrics(row) == (4, 2, 0, 2, 0, 0)
+    assert _metrics(by_item.totals[0]) == (33, 12, 270, 2, 1, 20)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"item_id": 0},
+        {"item_id": True},
+        {"item_id": "1"},
+        {"category_id": 0},
+        {"category_id": True},
+        {"category_id": 1.0},
+        {"group_by": {GroupAxis.CLIENT}},
+        {"group_by": [GroupAxis.CLIENT]},
+        {"group_by": frozenset({"client"})},
+        {"group_by": None},
+    ],
+)
+def test_dashboard_result_rejects_invalid_item_category_and_group_arguments(
+    axis_env: _AxisEnv, arguments: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError, match="ID|内訳軸"):
+        axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL, **arguments)  # type: ignore[arg-type]
+
+
+def test_dashboard_result_rejects_unknown_item_and_category(axis_env: _AxisEnv) -> None:
+    with pytest.raises(ValidationError, match="品目が見つかりません"):
+        axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL, item_id=999)
+    with pytest.raises(ValidationError, match="カテゴリが見つかりません"):
+        axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL, category_id=999)
+
+
+def test_dashboard_result_limits_are_checked_on_totals_with_new_axes(
+    axis_env: _AxisEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reports, "MAX_AGGREGATE_VALUE", 100)
+
+    with pytest.raises(ValidationError, match="集計値"):
+        axis_env.report.dashboard_result(2025, PeriodKind.ANNUAL)
+    assert _annual_total(axis_env, category_id=3)[2] == 90
+    with pytest.raises(ValidationError, match="集計値"):
+        axis_env.report.dashboard_result(
+            2025, PeriodKind.ANNUAL, category_id=2, group_by=frozenset({GroupAxis.ITEM})
+        )

@@ -18,7 +18,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
-from inventory_manager_mini.core.models import GroupBy, ItemFilter, PeriodKind, Reason
+from inventory_manager_mini.core.models import GroupAxis, ItemFilter, PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import BackupService, InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
@@ -368,7 +368,7 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
             reports.dashboard_result(
                 None if kind is PeriodKind.ANNUAL else reports.current_fiscal_year(),
                 kind,
-                group_by=GroupBy.CLIENT_PURCHASER,
+                group_by=frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER}),
             )
             elapsed = time.perf_counter() - started_at
             results.append((label, elapsed))
@@ -403,7 +403,7 @@ def test_dashboard_refresh_and_render_with_large_history(
     qtbot.addWidget(dashboard)
     if kind is PeriodKind.ANNUAL:
         dashboard.kind_combo.setCurrentIndex(dashboard.kind_combo.findData(kind))
-    dashboard.group_combo.setCurrentIndex(dashboard.group_combo.findData(GroupBy.CLIENT_PURCHASER))
+    dashboard.group_combo.setCurrentIndex(dashboard.group_combo.findData("client_purchaser"))
     original_dashboard_result = context.reports.dashboard_result
     started_at: list[float] = []
 

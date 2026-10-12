@@ -290,36 +290,36 @@
 
 #### N. core の改修 `core/models.py`・`core/reports.py`・`core/services.py`・`db/repositories.py`
 
-- [ ] `core/models.py`
-  - [ ] `GroupBy` を廃止し、`GroupAxis`(`CLIENT`・`PURCHASER`・`CATEGORY`・`ITEM` の `StrEnum`)を追加する
-  - [ ] `DashboardRow` に `category_id`・`category_name`(パス表記)・`item_id`・`item_code`・`item_name` を追加する
-  - [ ] 品目候補用の `ItemChoice`(`id`・`code`・`name`・`is_active`。frozen・slots の dataclass)を追加する
-- [ ] 品目候補の軽量取得を追加する(`ItemRepository` に取得メソッド、`InventoryService.list_item_choices()`)。管理番号順で、無効化済みを含む。購入情報は計算しない
-- [ ] `core/reports.py`
-  - [ ] `dashboard_result(...)` と `dashboard(...)` に `item_id`・`category_id` を追加し、`group_by` を `frozenset[GroupAxis]`(既定は空)にする。`GroupBy` の使用箇所(`core/`・`ui/`・`scripts/`・テスト)をすべて置き換える
-  - [ ] 検査: `item_id`・`category_id` の型・範囲は `ValueError`(既存の ID 検査と同じ)、存在しない ID は `ValidationError`。`group_by` が `frozenset[GroupAxis]` でなければ `ValueError`
-  - [ ] `_aggregate` の SQL は 1 本のまま、`items`・`categories` を JOIN し、品目は `m.item_id`、カテゴリは再帰 CTE(`ItemRepository.list` の `descendants` と同じ形)による `i.category_id` の子孫判定で、すべてプレースホルダにより絞り込む。f-string での SQL 組み立ては禁止
-  - [ ] カテゴリのパスは同じ読み取りトランザクション内でカテゴリ一覧から Python 側で生成する(区切りは品目一覧の `category_path` と同じ ` > `)。`ui/` の部品は import しない
-  - [ ] 集計キーを `(期間, クライアント, 発注主体, カテゴリ, 品目)` に拡張し、内訳軸に含まれない軸は絞り込み中の対象または `None` とする。名称取得はプレースホルダで行う
-  - [ ] 行の並びを 2.3 の規則に従い決定的にする。`totals` は内訳軸によらず同一値にし、取り消し行の期間判定・引当ロット帰属・集計上限の検証は現行どおり
-- [ ] `export_dashboard_csv` を 12 列に変更する(2.3 のとおり)。`_write_csv` の数式対策を引き続き使う
-- [ ] `scripts/generate_dummy_data.py` など `GroupBy` を参照する箇所があれば追従させる
-- [ ] `tests/test_reports.py`(手計算の期待値と固定時刻・タイムゾーン注入を使う)
-  - [ ] 品目の絞り込みで、その品目の入庫・出庫・支出・廃棄だけが集計されること
-  - [ ] カテゴリの絞り込みで、子孫カテゴリの品目が含まれ、兄弟・親のカテゴリの品目が含まれないこと(3 階層以上)
-  - [ ] 品目とカテゴリの併用が AND で、品目がカテゴリ配下にないとき全期間 0 になること
-  - [ ] クライアント・発注主体・品目・カテゴリの 4 軸同時絞り込みの期待値
-  - [ ] 品目のカテゴリを変更すると、過去履歴の集計が新しいカテゴリへ移ること
-  - [ ] 無効化済み品目が、品目絞り込み・カテゴリ絞り込みの双方で過去履歴の集計対象になること。カテゴリには有効/無効の状態を追加しない
-  - [ ] 内訳軸 4 軸の全 16 通りの組み合わせで、`totals` が同一で、`breakdown` の期間別合計が `totals` と一致すること(月次・年次)
-  - [ ] 絞り込み中の軸が内訳に含まれないとき、行にその ID・名称が入り、未絞り込みの軸は `None` であること。カテゴリ別・品目別のとき、行が直接カテゴリ・各品目になること。カテゴリ別と品目別の併用
-  - [ ] 行の並びが規則どおりであること
-  - [ ] 存在しない `item_id`・`category_id` で `ValidationError`、型・範囲の誤りと不正な `group_by` で `ValueError`
-  - [ ] 取り消し・複数ロット出庫・単価不明ロット・廃棄・返品・棚卸が、新しい軸でも既存どおり扱われること。集計上限の検証が `totals` でも維持されること
-  - [ ] 既存の `GroupBy` を使うテストを `GroupAxis` へ置き換え、期待値が変わらないこと
-- [ ] `tests/test_inventory_service.py`・`tests/test_repositories.py`: 品目候補が管理番号順で無効化済みを含み、購入情報を含まないこと
-- [ ] `tests/test_csv.py`: 12 列のヘッダと列順、「(すべて)」と名称・管理番号の出し分け、`=` で始まる品名・カテゴリ名への `'` 付与と数値列に付かないこと
-- [ ] `tests/test_dependency_rules.py` が引き続き成功すること
+- [x] `core/models.py`
+  - [x] `GroupBy` を廃止し、`GroupAxis`(`CLIENT`・`PURCHASER`・`CATEGORY`・`ITEM` の `StrEnum`)を追加する
+  - [x] `DashboardRow` に `category_id`・`category_name`(パス表記)・`item_id`・`item_code`・`item_name` を追加する
+  - [x] 品目候補用の `ItemChoice`(`id`・`code`・`name`・`is_active`。frozen・slots の dataclass)を追加する
+- [x] 品目候補の軽量取得を追加する(`ItemRepository` に取得メソッド、`InventoryService.list_item_choices()`)。管理番号順で、無効化済みを含む。購入情報は計算しない
+- [x] `core/reports.py`
+  - [x] `dashboard_result(...)` と `dashboard(...)` に `item_id`・`category_id` を追加し、`group_by` を `frozenset[GroupAxis]`(既定は空)にする。`GroupBy` の使用箇所(`core/`・`ui/`・`scripts/`・テスト)をすべて置き換える
+  - [x] 検査: `item_id`・`category_id` の型・範囲は `ValueError`(既存の ID 検査と同じ)、存在しない ID は `ValidationError`。`group_by` が `frozenset[GroupAxis]` でなければ `ValueError`
+  - [x] `_aggregate` の SQL は 1 本のまま、`items`・`categories` を JOIN し、品目は `m.item_id`、カテゴリは再帰 CTE(`ItemRepository.list` の `descendants` と同じ形)による `i.category_id` の子孫判定で、すべてプレースホルダにより絞り込む。f-string での SQL 組み立ては禁止
+  - [x] カテゴリのパスは同じ読み取りトランザクション内でカテゴリ一覧から Python 側で生成する(区切りは品目一覧の `category_path` と同じ ` > `)。`ui/` の部品は import しない
+  - [x] 集計キーを `(期間, クライアント, 発注主体, カテゴリ, 品目)` に拡張し、内訳軸に含まれない軸は絞り込み中の対象または `None` とする。名称取得はプレースホルダで行う
+  - [x] 行の並びを 2.3 の規則に従い決定的にする。`totals` は内訳軸によらず同一値にし、取り消し行の期間判定・引当ロット帰属・集計上限の検証は現行どおり
+- [x] `export_dashboard_csv` を 12 列に変更する(2.3 のとおり)。`_write_csv` の数式対策を引き続き使う
+- [x] `scripts/generate_dummy_data.py` など `GroupBy` を参照する箇所があれば追従させる
+- [x] `tests/test_reports.py`(手計算の期待値と固定時刻・タイムゾーン注入を使う)
+  - [x] 品目の絞り込みで、その品目の入庫・出庫・支出・廃棄だけが集計されること
+  - [x] カテゴリの絞り込みで、子孫カテゴリの品目が含まれ、兄弟・親のカテゴリの品目が含まれないこと(3 階層以上)
+  - [x] 品目とカテゴリの併用が AND で、品目がカテゴリ配下にないとき全期間 0 になること
+  - [x] クライアント・発注主体・品目・カテゴリの 4 軸同時絞り込みの期待値
+  - [x] 品目のカテゴリを変更すると、過去履歴の集計が新しいカテゴリへ移ること
+  - [x] 無効化済み品目が、品目絞り込み・カテゴリ絞り込みの双方で過去履歴の集計対象になること。カテゴリには有効/無効の状態を追加しない
+  - [x] 内訳軸 4 軸の全 16 通りの組み合わせで、`totals` が同一で、`breakdown` の期間別合計が `totals` と一致すること(月次・年次)
+  - [x] 絞り込み中の軸が内訳に含まれないとき、行にその ID・名称が入り、未絞り込みの軸は `None` であること。カテゴリ別・品目別のとき、行が直接カテゴリ・各品目になること。カテゴリ別と品目別の併用
+  - [x] 行の並びが規則どおりであること
+  - [x] 存在しない `item_id`・`category_id` で `ValidationError`、型・範囲の誤りと不正な `group_by` で `ValueError`
+  - [x] 取り消し・複数ロット出庫・単価不明ロット・廃棄・返品・棚卸が、新しい軸でも既存どおり扱われること。集計上限の検証が `totals` でも維持されること
+  - [x] 既存の `GroupBy` を使うテストを `GroupAxis` へ置き換え、期待値が変わらないこと
+- [x] `tests/test_inventory_service.py`・`tests/test_repositories.py`: 品目候補が管理番号順で無効化済みを含み、購入情報を含まないこと
+- [x] `tests/test_csv.py`: 12 列のヘッダと列順、「(すべて)」と名称・管理番号の出し分け、`=` で始まる品名・カテゴリ名への `'` 付与と数値列に付かないこと
+- [x] `tests/test_dependency_rules.py` が引き続き成功すること
 
 #### O. 内訳表モデル `ui/models/dashboard_table_model.py`
 
