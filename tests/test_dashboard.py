@@ -20,10 +20,18 @@ from inventory_manager_mini.core.models import GroupBy, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
-from inventory_manager_mini.ui.display_settings import DisplaySettings, apply_display_settings
+from inventory_manager_mini.ui.display_settings import (
+    DisplaySettings,
+    apply_display_settings,
+)
 from inventory_manager_mini.ui.models.dashboard_table_model import DashboardTableModel
 from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
-from tests.conftest import FixedClock, create_test_context
+from tests.conftest import (
+    FixedClock,
+    assert_buttons_reachable,
+    assert_fits_work_area,
+    create_test_context,
+)
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 FISCAL_2025_LABELS = [f"2025年{month}月" for month in range(4, 13)] + [
@@ -378,6 +386,56 @@ def test_empty_history_uses_zero_to_one_axis(qtbot: QtBot, empty_env: Env) -> No
     for view in (window.quantity_chart, window.amount_chart):
         axis = _value_axis(view)
         assert (axis.min(), axis.max()) == (0, 1)
+
+
+@pytest.mark.parametrize("scale", [100, 150])
+def test_dashboard_fits_work_area_and_monthly_labels_render(
+    qtbot: QtBot,
+    env: Env,
+    restore_app_font: Any,
+    scale: int,
+) -> None:
+    apply_display_settings(DisplaySettings(font_scale_percent=scale))
+    window = _open(qtbot, env)
+    qtbot.waitExposed(window)
+    qtbot.wait(30)
+
+    assert_fits_work_area(window)
+    assert_buttons_reachable(window, window.csv_button, window.png_button, window.close_button)
+    for view in (window.quantity_chart, window.amount_chart):
+        axis = _category_axis(view)
+        assert len(axis.categories()) == 12
+        assert axis.labelsAngle() == -45
+        image = view.grab().toImage()
+        assert not image.isNull()
+        assert (
+            len(
+                {
+                    image.pixel(x, y)
+                    for x in range(0, image.width(), 20)
+                    for y in range(0, image.height(), 20)
+                }
+            )
+            > 1
+        )
+
+
+def test_dashboard_breakdown_table_scrolls_when_grouped_rows_overflow(
+    qtbot: QtBot, env: Env
+) -> None:
+    window = _open(qtbot, env)
+    _select(window.group_combo, GroupBy.CLIENT_PURCHASER)
+    assert window._snapshot is not None
+    window.breakdown_model.set_rows(window._snapshot.result.breakdown * 50)
+    window.tabs.setCurrentIndex(1)
+    qtbot.wait(30)
+
+    assert window.breakdown_model.rowCount() > 30
+    assert window.breakdown_table.verticalScrollBar().maximum() > 0
+    table_top_left = window.breakdown_table.mapTo(window, window.breakdown_table.rect().topLeft())
+    assert window.rect().contains(table_top_left)
+    assert_fits_work_area(window)
+    assert_buttons_reachable(window, window.csv_button, window.png_button, window.close_button)
 
 
 def test_dashboard_csv_exports_the_displayed_breakdown(
