@@ -366,7 +366,7 @@
 
 - [x] M で更新した正本と実装の一致を確認し、完了状況を同期する(開発計画書のモジュール構成表・5.7・5.8・6.3・9 章)。モジュール構成表が `GroupAxis`・`ItemChoice` と一致することも確認する
 - [x] README のダッシュボードの項に、絞り込み(品目・カテゴリ)、内訳軸の組み合わせ、CSV の列を追記する
-- [ ] 手動確認(Windows。`INVENTORY_MANAGER_MINI_DATA_DIR` で一時フォルダを指定し、`scripts/generate_dummy_data.py` の DB を使う)
+- [x] 手動確認(Windows。`INVENTORY_MANAGER_MINI_DATA_DIR` で一時フォルダを指定し、`scripts/generate_dummy_data.py` の DB を使う)
   - [x] 品目コンボで管理番号・品名の一部から候補が絞れ、選択すると集計が更新されること
   - [x] カテゴリを選ぶと子孫カテゴリの品目も集計され、品目との併用で AND になること
   - [x] 内訳軸の各チェックの組み合わせで表の列・行が妥当で、グラフ・合計が変わらないこと
