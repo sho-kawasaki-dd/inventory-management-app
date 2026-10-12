@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QToolBar
 
 from inventory_manager_mini.core import services
 from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
@@ -25,6 +25,7 @@ from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
+from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 from tests.conftest import create_test_context
 
 
@@ -1512,3 +1513,133 @@ def test_restore_logs_rejected_source_as_error(
     assert "検査・準備を開始" in records[0].getMessage()
     assert "復元元を利用できません" in records[1].getMessage()
     assert records[1].exc_info is not None
+
+
+def _open_dashboard(window: MainWindow) -> DashboardWindow:
+    window.dashboard_action.trigger()
+    dashboard = window._dashboard_window
+    assert dashboard is not None
+    return dashboard
+
+
+def _count_dashboard_calls(monkeypatch, window: MainWindow) -> list[int]:
+    reports = window.context.reports
+    original = reports.dashboard_result
+    calls: list[int] = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(reports, "dashboard_result", counting)
+    return calls
+
+
+def _count_dashboard_shutdowns(monkeypatch) -> list[int]:
+    original = DashboardWindow.shutdown
+    calls: list[int] = []
+
+    def counting(self: DashboardWindow) -> None:
+        calls.append(1)
+        original(self)
+
+    monkeypatch.setattr(DashboardWindow, "shutdown", counting)
+    return calls
+
+
+def test_dashboard_opens_from_view_menu_and_is_reused(window_with_items, monkeypatch) -> None:
+    window, _first, _second = window_with_items
+    view_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "表示")
+    assert window.dashboard_action in view_menu.actions()
+    assert window.dashboard_action.text() == "ダッシュボード"
+    assert all(
+        window.dashboard_action not in toolbar.actions()
+        for toolbar in window.findChildren(QToolBar)
+    )
+    assert window._dashboard_window is None
+
+    first = _open_dashboard(window)
+    assert first.isVisible()
+    assert first.isWindow()
+    raised: list[bool] = []
+    monkeypatch.setattr(first, "raise_", lambda: raised.append(True))
+
+    window.dashboard_action.trigger()
+
+    assert window._dashboard_window is first
+    assert raised == [True]
+    first.hide()
+    window.dashboard_action.trigger()
+    assert window._dashboard_window is first
+    assert first.isVisible()
+
+
+def test_main_window_close_shuts_down_dashboard(window_with_items, monkeypatch) -> None:
+    window, _first, _second = window_with_items
+    _open_dashboard(window)
+    calls = _count_dashboard_calls(monkeypatch, window)
+    shutdowns = _count_dashboard_shutdowns(monkeypatch)
+    window.context.data_bus.data_changed.emit()
+
+    window.close()
+    QApplication.processEvents()
+
+    assert shutdowns == [1]
+    assert window._dashboard_window is None
+    assert calls == []
+
+
+def test_restore_shuts_down_dashboard_before_overwrite_without_double_shutdown(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    _open_dashboard(window)
+    calls = _count_dashboard_calls(monkeypatch, window)
+    shutdowns = _count_dashboard_shutdowns(monkeypatch)
+    original = window.context.backup.apply_restore
+    observed: list[DashboardWindow | None] = []
+
+    def observing_apply(prepared, db_path, backup_dir):
+        observed.append(window._dashboard_window)
+        return original(prepared, db_path, backup_dir)
+
+    monkeypatch.setattr(window.context.backup, "apply_restore", observing_apply)
+    window.context.data_bus.data_changed.emit()
+
+    window.restore_action.trigger()
+    QApplication.processEvents()
+
+    assert observed == [None]
+    assert window.exit_request is ExitRequest.RESTART
+    assert shutdowns == [1]
+    assert window._dashboard_window is None
+    assert calls == []
+
+
+def test_dashboard_can_be_reopened_after_failed_restore(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.Yes)
+    old = _open_dashboard(window)
+
+    def failing_apply(_prepared, _db_path, _backup_dir):
+        raise RestoreError(
+            "injected restore failure",
+            stage="overwrite",
+            recovered=True,
+            backup_path=tmp_path / "backups" / "pre-restore_test.db",
+        )
+
+    monkeypatch.setattr(window.context.backup, "apply_restore", failing_apply)
+
+    window.restore_action.trigger()
+
+    assert window._dashboard_window is None
+    assert window.exit_request is ExitRequest.NORMAL
+    new = _open_dashboard(window)
+    assert new is not old
+    assert new.isVisible()

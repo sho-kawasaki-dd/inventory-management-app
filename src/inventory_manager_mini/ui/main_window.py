@@ -4,7 +4,7 @@ from importlib import import_module
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,6 +38,7 @@ from inventory_manager_mini.ui.models.item_table_model import (
 )
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
+from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.context = context
         self.exit_request = ExitRequest.NORMAL
+        self._dashboard_window: DashboardWindow | None = None
         self.setWindowTitle("Inventory Manager mini")
         self.resize(1000, 650)
         self.setMinimumSize(800, 600)
@@ -253,6 +255,9 @@ class MainWindow(QMainWindow):
         self.inactive_checkbox.toggled.connect(self.include_inactive_action.setChecked)
         view_menu.addAction(self.include_inactive_action)
         view_menu.addAction(self.alert_panel.toggleViewAction())
+        self.dashboard_action = QAction("ダッシュボード", self)
+        self.dashboard_action.triggered.connect(self._open_dashboard)
+        view_menu.addAction(self.dashboard_action)
 
         tools_menu = self.menuBar().addMenu("ツール")
         self.settings_action = QAction("設定", self)
@@ -537,6 +542,7 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def _apply_restore(self, prepared: PreparedRestore) -> None:
+        self._shutdown_dashboard()
         paths = self.context.paths
         restore_error: RestoreError | None = None
         unexpected_error: Exception | None = None
@@ -620,6 +626,24 @@ class MainWindow(QMainWindow):
         self.exit_request = request
         self.close()
         QApplication.quit()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._shutdown_dashboard()
+        super().closeEvent(event)
+
+    def _open_dashboard(self) -> None:
+        if self._dashboard_window is None:
+            self._dashboard_window = DashboardWindow(self.context, self)
+        self._dashboard_window.show()
+        self._dashboard_window.raise_()
+        self._dashboard_window.activateWindow()
+
+    def _shutdown_dashboard(self) -> None:
+        if self._dashboard_window is None:
+            return
+        dashboard = self._dashboard_window
+        self._dashboard_window = None
+        dashboard.shutdown()
 
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():
