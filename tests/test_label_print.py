@@ -6,8 +6,18 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PySide6.QtCore import QMarginsF, QPointF, Qt
-from PySide6.QtGui import QFont, QPagedPaintDevice, QPageLayout, QPageSize
+from PySide6.QtCore import QMarginsF, QPointF, QRect, QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPagedPaintDevice,
+    QPageLayout,
+    QPageSize,
+    QPainter,
+    QPdfWriter,
+)
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QDialog, QDialogButtonBox
@@ -819,3 +829,284 @@ def test_print_preview_aborts_failed_print_without_duplicate_notification(
     assert abort_calls == [printer]
     assert len(messages) == 1
     assert "中止できませんでした" in caplog.text
+
+
+@pytest.fixture(autouse=True)
+def _run_in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+
+def test_label_print_dialog_page_count_follows_first_page_slots(qtbot) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    dialog = LabelPrintDialog([_item_row()])
+    qtbot.addWidget(dialog)
+    dialog.clear_all_button.click()
+    dialog.slot_checkboxes[0].setChecked(True)
+    dialog.slot_checkboxes[5].setChecked(True)
+    dialog.quantity_spins[0].setValue(14)
+
+    assert dialog.first_page_slots == [0, 5]
+    assert dialog.count_label.text() == "合計 14 枚 / 用紙 2 枚"
+
+    dialog.quantity_spins[0].setValue(15)
+    assert dialog.count_label.text() == "合計 15 枚 / 用紙 3 枚"
+
+
+class _MeasuringPainter:
+    """実際の QPainter に委譲し、描画文字列と描画先メトリクスでの幅を記録する。"""
+
+    def __init__(self) -> None:
+        self._painter = QPainter()
+        self.drawn: list[tuple[str, int, float]] = []
+
+    def begin(self, device: object) -> bool:
+        return self._painter.begin(cast(QPagedPaintDevice, device))
+
+    def end(self) -> bool:
+        return self._painter.end()
+
+    def setFont(self, font: QFont) -> None:
+        self._painter.setFont(font)
+
+    def fontMetrics(self) -> QFontMetrics:
+        return self._painter.fontMetrics()
+
+    def drawText(self, point: QPointF, text: str) -> None:
+        width = self._painter.fontMetrics().horizontalAdvance(text)
+        self.drawn.append((text, width, self._painter.font().pointSizeF()))
+        self._painter.drawText(point, text)
+
+
+def _pdf_writer(path: Path, dpi: int) -> QPdfWriter:
+    writer = QPdfWriter(str(path))
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setResolution(dpi)
+    return writer
+
+
+@pytest.mark.parametrize("dpi", [300, 1200])
+def test_render_labels_elides_long_text_within_inner_width_at_device_dpi(
+    monkeypatch, qapp, tmp_path: Path, dpi: int
+) -> None:
+    painter = _MeasuringPainter()
+    monkeypatch.setattr(label_renderer, "QPainter", lambda: painter)
+    long_item = replace(
+        _item_row("備" * 200),
+        name="品" * 200,
+        code="C" * 200,
+        location_name="場" * 200,
+    )
+    short_item = replace(_item_row("備考"), id=2, name="短い品名", code="S-1", location_name="棚B")
+
+    label_renderer.render_labels(
+        _pdf_writer(tmp_path / f"width-{dpi}.pdf", dpi),
+        [LabelPlacement(1, 0, 1), LabelPlacement(1, 1, 2)],
+        {1: long_item, 2: short_item},
+        LABEL_72212,
+        0.0,
+        0.0,
+    )
+
+    inner_width = math.floor((LABEL_72212.label_width_mm - 6.0) * dpi / 25.4)
+    long_rows, short_rows = painter.drawn[:4], painter.drawn[4:]
+    assert [row[2] for row in long_rows] == [11, 14, 10, 9]
+    for (text, width, _), original in zip(
+        long_rows,
+        (long_item.name, long_item.code, long_item.location_name, long_item.note),
+        strict=True,
+    ):
+        assert original is not None
+        assert text != original
+        assert text.endswith("…")
+        assert width <= inner_width
+    assert [row[0] for row in short_rows] == ["短い品名", "S-1", "棚B", "備考"]
+    assert all(width <= inner_width for _, width, _ in short_rows)
+
+
+def test_render_labels_offsets_move_drawing_position(monkeypatch) -> None:
+    dpi = 300
+    results: list[tuple[float, float]] = []
+    for offset_left, offset_top in ((0.0, 0.0), (2.0, -1.0)):
+        painter = _FakePainter()
+        _install_fake_painter(monkeypatch, painter)
+        label_renderer.render_labels(
+            _as_paged_device(_FakeDevice(dpi=dpi)),
+            [LabelPlacement(1, 3, 1)],
+            {1: _item_row()},
+            LABEL_72212,
+            offset_left,
+            offset_top,
+        )
+        results.append((painter.draw_calls[0][0], painter.draw_calls[0][1]))
+
+    assert results[1][0] - results[0][0] == pytest.approx(2.0 * dpi / 25.4)
+    assert results[1][1] - results[0][1] == pytest.approx(-1.0 * dpi / 25.4)
+
+
+def test_render_labels_handles_very_long_text_in_pdf(tmp_path: Path, qapp) -> None:
+    long_item = replace(_item_row("備" * 500), name="品" * 500, location_name="場" * 500)
+    pdf_path = tmp_path / "long.pdf"
+
+    label_renderer.render_labels(
+        _pdf_printer(pdf_path),
+        [LabelPlacement(1, 0, 1)],
+        {1: long_item},
+        LABEL_72212,
+        0.0,
+        0.0,
+    )
+
+    assert pdf_path.read_bytes().startswith(b"%PDF-")
+
+
+@pytest.mark.parametrize(
+    ("page_numbers", "expected_pages"),
+    [(None, 3), ([1, 2, 3], 3), ([2, 3], 2), ([3], 1), ([1, 3], 2), ([2, 2], 1)],
+)
+def test_render_labels_page_range_outputs_only_requested_pages(
+    qapp, tmp_path: Path, page_numbers: list[int] | None, expected_pages: int
+) -> None:
+    placements = assign_label_slots([LabelEntry(item_id=1, copies=30)], range(12))
+    pdf_path = tmp_path / "range.pdf"
+
+    label_renderer.render_labels(
+        _pdf_printer(pdf_path),
+        placements,
+        {1: _item_row()},
+        LABEL_72212,
+        0.0,
+        0.0,
+        page_numbers=page_numbers,
+    )
+
+    document = QPdfDocument()
+    document.load(str(pdf_path))
+    assert document.pageCount() == expected_pages
+
+
+@pytest.mark.parametrize(
+    ("page_numbers", "expected_new_pages", "expected_slots"),
+    [
+        ([2], 0, [0, 1, 2]),
+        ([1], 0, [5]),
+        ([1, 2], 1, [5, 0, 1, 2]),
+        (None, 1, [5, 0, 1, 2]),
+    ],
+)
+def test_render_labels_range_keeps_original_slots_without_reapplying_first_page_checks(
+    monkeypatch,
+    page_numbers: list[int] | None,
+    expected_new_pages: int,
+    expected_slots: list[int],
+) -> None:
+    painter = _FakePainter()
+    device = _FakeDevice(dpi=300)
+    _install_fake_painter(monkeypatch, painter)
+    placements = assign_label_slots([LabelEntry(item_id=1, copies=4)], [5])
+
+    label_renderer.render_labels(
+        _as_paged_device(device),
+        placements,
+        {1: _item_row()},
+        LABEL_72212,
+        0.0,
+        0.0,
+        page_numbers=page_numbers,
+    )
+
+    expected_xs = [
+        (slot_rect_mm(LABEL_72212, slot)[0] + 3.0) * 300 / 25.4 for slot in expected_slots
+    ]
+    drawn_xs = [call[0] for call in painter.draw_calls[0::4]]
+    assert device.new_page_calls == expected_new_pages
+    assert len(painter.draw_calls) == 4 * len(expected_slots)
+    assert drawn_xs == pytest.approx(expected_xs)
+
+
+def test_render_labels_drawing_error_stops_later_pages_and_ends_painter(monkeypatch) -> None:
+    painter = _FakePainter(draw_error=ValueError("draw failed"))
+    device = _FakeDevice()
+    _install_fake_painter(monkeypatch, painter)
+
+    with pytest.raises(ValueError, match="draw failed"):
+        label_renderer.render_labels(
+            _as_paged_device(device),
+            [LabelPlacement(1, 0, 1), LabelPlacement(2, 0, 1)],
+            {1: _item_row()},
+            LABEL_72212,
+            0.0,
+            0.0,
+        )
+
+    assert painter.begin_calls == 1
+    assert painter.end_calls == 1
+    assert device.new_page_calls == 0
+
+
+class _EndRaisingPainter(_FakePainter):
+    def end(self) -> bool:
+        self.end_calls += 1
+        raise OSError("end failed")
+
+
+def test_render_labels_keeps_drawing_error_when_end_raises(monkeypatch, caplog) -> None:
+    painter = _EndRaisingPainter(draw_error=ValueError("draw failed"))
+    _install_fake_painter(monkeypatch, painter)
+
+    with pytest.raises(ValueError, match="draw failed"):
+        label_renderer.render_labels(
+            _as_paged_device(_FakeDevice()),
+            [LabelPlacement(1, 0, 1)],
+            {1: _item_row()},
+            LABEL_72212,
+            0.0,
+            0.0,
+        )
+
+    assert painter.end_calls == 1
+    assert "終了処理にも失敗" in caplog.text
+
+
+def test_render_labels_reports_end_exception_without_drawing_error(monkeypatch) -> None:
+    painter = _EndRaisingPainter()
+    _install_fake_painter(monkeypatch, painter)
+
+    with pytest.raises(OSError, match="end failed"):
+        label_renderer.render_labels(
+            _as_paged_device(_FakeDevice()),
+            [LabelPlacement(1, 0, 1)],
+            {1: _item_row()},
+            LABEL_72212,
+            0.0,
+            0.0,
+        )
+
+
+def test_render_labels_leaves_deselected_slots_blank(qapp, tmp_path: Path) -> None:
+    scale = 3
+    placements = assign_label_slots([LabelEntry(item_id=1, copies=2)], [0, 3])
+    pdf_path = tmp_path / "slots.pdf"
+
+    label_renderer.render_labels(
+        _pdf_printer(pdf_path), placements, {1: _item_row()}, LABEL_72212, 0.0, 0.0
+    )
+
+    document = QPdfDocument()
+    document.load(str(pdf_path))
+    image = document.render(0, QSize(210 * scale, 297 * scale))
+    blank = QColor(image.pixelColor(0, 0))
+
+    for slot in range(LABEL_72212.columns * LABEL_72212.rows):
+        x, y, width, height = slot_rect_mm(LABEL_72212, slot)
+        crop = image.copy(
+            QRect(
+                round(x * scale) + 2,
+                round(y * scale) + 2,
+                round(width * scale) - 4,
+                round(height * scale) - 4,
+            )
+        )
+        empty = QImage(crop.size(), crop.format())
+        empty.fill(blank)
+        assert (crop == empty) is (slot not in (0, 3)), f"slot {slot}"
