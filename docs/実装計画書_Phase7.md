@@ -103,116 +103,116 @@
 
 #### A. 計画書・正本
 
-- [ ] 本書(`docs/実装計画書_Phase7.md`)をコミットする(`docs:`)
-- [ ] 7a で変更する仕様を、実装前に開発計画書へ反映し、同じ PR に含める
-  - [ ] 3.2: `ui/printing/` のモジュール構成(`layout.py`・`fonts.py`・`preview_dialog.py`・`label_renderer.py`・`label_print_dialog.py`・`inventory_sheet_renderer.py`)を追加する。`preview_dialog.py` は 7a で実装して共用し、`inventory_sheet_renderer.py` は 7b と明記する
-  - [ ] 3.6: ディレクトリ構成の `printing/` 欄を同期する
-  - [ ] 5.9: `ui_settings.json` の形式に `label_offset_left_mm`・`label_offset_top_mm`(−10.0〜+10.0)を追加し、設定ダイアログの補正欄、範囲外のフォールバック、「既定に戻す」の対象外、バックアップ・復元の対象外を記載する
-  - [ ] 6.2: ファイルメニューの「印刷」サブメニュー、ツールバー出力グループの「印刷」ドロップダウン、右クリックの棚ラベル、活性条件(棚ラベルは 1 件以上選択時)を記載し、「印刷はフェーズ 7 で追加」の注記を更新する
-  - [ ] 6.3: MainWindow は複数選択可で、編集・在庫操作・履歴・販売ページは 1 件選択時のみ活性であること、設定ダイアログの補正欄を記載する
-  - [ ] 8 章: 一覧の複数選択時の活性制御、補正値の保存と読み込み、ラベルの座標、固定用紙設定、範囲印刷、複数 DPI の文字幅、シグナル経由の描画例外とデバイス失敗の検査を追記する
-  - [ ] 9.1: 品目の並びは「一覧の表示順」、印刷用フォントは UI 設定と独立して固定、補正値による位置調整、共通プレビューの用紙固定・範囲印刷・例外処理・文字幅測定・描画失敗の扱いを追記する
+- [x] 本書(`docs/実装計画書_Phase7.md`)をコミットする(`docs:`)
+- [x] 7a で変更する仕様を、実装前に開発計画書へ反映し、同じ PR に含める
+  - [x] 3.2: `ui/printing/` のモジュール構成(`layout.py`・`fonts.py`・`preview_dialog.py`・`label_renderer.py`・`label_print_dialog.py`・`inventory_sheet_renderer.py`)を追加する。`preview_dialog.py` は 7a で実装して共用し、`inventory_sheet_renderer.py` は 7b と明記する
+  - [x] 3.6: ディレクトリ構成の `printing/` 欄を同期する
+  - [x] 5.9: `ui_settings.json` の形式に `label_offset_left_mm`・`label_offset_top_mm`(−10.0〜+10.0)を追加し、設定ダイアログの補正欄、範囲外のフォールバック、「既定に戻す」の対象外、バックアップ・復元の対象外を記載する
+  - [x] 6.2: ファイルメニューの「印刷」サブメニュー、ツールバー出力グループの「印刷」ドロップダウン、右クリックの棚ラベル、活性条件(棚ラベルは 1 件以上選択時)を記載し、「印刷はフェーズ 7 で追加」の注記を更新する
+  - [x] 6.3: MainWindow は複数選択可で、編集・在庫操作・履歴・販売ページは 1 件選択時のみ活性であること、設定ダイアログの補正欄を記載する
+  - [x] 8 章: 一覧の複数選択時の活性制御、補正値の保存と読み込み、ラベルの座標、固定用紙設定、範囲印刷、複数 DPI の文字幅、シグナル経由の描画例外とデバイス失敗の検査を追記する
+  - [x] 9.1: 品目の並びは「一覧の表示順」、印刷用フォントは UI 設定と独立して固定、補正値による位置調整、共通プレビューの用紙固定・範囲印刷・例外処理・文字幅測定・描画失敗の扱いを追記する
 
 #### B. 一覧の複数選択化 `ui/main_window.py`
 
-- [ ] `self.table` の選択モードを `ExtendedSelection` に変更する
-- [ ] `_selected_item_ids() -> list[int]` を新設する。選択行を proxy の行番号順に並べ、`mapToSource` → `item_model.row_at` で ID を返す(一覧の表示順)
-- [ ] `_selected_item_id()` を「ちょうど 1 件選択のときだけ ID、それ以外は `None`」に変更する。呼び出し元(`_edit_item`・`_open_stock_move`・`_open_history`・`_open_purchase_page`・`_toggle_item_active`・`_update_selection_actions`)が複数選択時に誤動作しないことを確認する
-- [ ] `_update_selection_actions` を、複数選択時は編集・廃止/再有効化・履歴・販売ページ・在庫操作をすべて不活性にするよう更新する。棚ラベルの `QAction` は 1 件以上で活性にする
-- [ ] `refresh()`・`refresh_items()` の選択復元を、単一 ID から選択中 ID の集合へ変更する(存在しなくなった ID は除外)。復元中に `selectionChanged` を過剰に発火させない
-- [ ] `ItemSortProxyModel.sort()` の選択保持が複数行でも維持されることを確認する(不足があれば `item_table_model.py` を修正)
+- [x] `self.table` の選択モードを `ExtendedSelection` に変更する
+- [x] `_selected_item_ids() -> list[int]` を新設する。選択行を proxy の行番号順に並べ、`mapToSource` → `item_model.row_at` で ID を返す(一覧の表示順)
+- [x] `_selected_item_id()` を「ちょうど 1 件選択のときだけ ID、それ以外は `None`」に変更する。呼び出し元(`_edit_item`・`_open_stock_move`・`_open_history`・`_open_purchase_page`・`_toggle_item_active`・`_update_selection_actions`)が複数選択時に誤動作しないことを確認する
+- [x] `_update_selection_actions` を、複数選択時は編集・廃止/再有効化・履歴・販売ページ・在庫操作をすべて不活性にするよう更新する。棚ラベルの `QAction` は 1 件以上で活性にする
+- [x] `refresh()`・`refresh_items()` の選択復元を、単一 ID から選択中 ID の集合へ変更する(存在しなくなった ID は除外)。復元中に `selectionChanged` を過剰に発火させない
+- [x] `ItemSortProxyModel.sort()` の選択保持が複数行でも維持されることを確認する(不足があれば `item_table_model.py` を修正)
 
 #### C. 面付けの純関数 `ui/printing/layout.py`(新規・Qt を import しない)
 
-- [ ] `ui/printing/__init__.py` を作成する
-- [ ] `LabelSpec`(frozen dataclass)を定義する。フィールド: 列数 2、段数 6、ラベル幅 86.4・高さ 42.3、左余白 18.6・上余白 21.6、横ピッチ 86.4・縦ピッチ 42.3(いずれも mm)。既定インスタンス `LABEL_72212` を提供する。用紙の寸法値の根拠(推定値であること)をコメントに 1 行で残す
-- [ ] `LabelEntry`(品目 ID・枚数)と `LabelPlacement`(1 始まりのページ番号・位置番号 0〜11・品目 ID)を定義する
-- [ ] `assign_label_slots(entries, first_page_slots, spec=LABEL_72212) -> list[LabelPlacement]` を実装する
+- [x] `ui/printing/__init__.py` を作成する
+- [x] `LabelSpec`(frozen dataclass)を定義する。フィールド: 列数 2、段数 6、ラベル幅 86.4・高さ 42.3、左余白 18.6・上余白 21.6、横ピッチ 86.4・縦ピッチ 42.3(いずれも mm)。既定インスタンス `LABEL_72212` を提供する。用紙の寸法値の根拠(推定値であること)をコメントに 1 行で残す
+- [x] `LabelEntry`(品目 ID・枚数)と `LabelPlacement`(1 始まりのページ番号・位置番号 0〜11・品目 ID)を定義する
+- [x] `assign_label_slots(entries, first_page_slots, spec=LABEL_72212) -> list[LabelPlacement]` を実装する
   - 品目を並びの順に、品目ごとの枚数だけ展開する
   - 1 枚目は `first_page_slots`(昇順の位置集合)の位置だけを、左→右、上→下の順に使う。溢れた分は 2 枚目以降に、全 12 位置を順に使う
   - `first_page_slots` が空、範囲外の位置、枚数が 1〜99 の範囲外は `ValueError`
   - 品目 0 件は空のリストを返す
-- [ ] `slot_rect_mm(spec, slot, offset_left_mm=0.0, offset_top_mm=0.0) -> tuple[float, float, float, float]` を実装する(位置番号は `行 = slot // 列数`、`列 = slot % 列数`。左上と幅・高さを返す)
-- [ ] `tests/test_dependency_rules.py` に、`ui/printing/layout.py` が `PySide6` を import しないことの検査を追加する
+- [x] `slot_rect_mm(spec, slot, offset_left_mm=0.0, offset_top_mm=0.0) -> tuple[float, float, float, float]` を実装する(位置番号は `行 = slot // 列数`、`列 = slot % 列数`。左上と幅・高さを返す)
+- [x] `tests/test_dependency_rules.py` に、`ui/printing/layout.py` が `PySide6` を import しないことの検査を追加する
 
 #### D. 表示設定の補正値 `ui/display_settings.py`・`ui/dialogs/settings_dialog.py`
 
-- [ ] `DisplaySettings` に `label_offset_left_mm: float = 0.0`・`label_offset_top_mm: float = 0.0` を追加する。範囲・刻みの定数(±10.0、0.1)を定義する
-- [ ] `load_display_settings` で、2 つのキーを項目ごとに検証する。数値(int/float。bool は不可)・有限・範囲内のみ採用し、小数 1 桁へ丸める。それ以外は 0.0 にフォールバックしてログに警告する。キーなしは黙って 0.0 とする。既存の `font_family`・`font_scale_percent` の挙動は変えない
-- [ ] `save_display_settings` に 2 つのキーを追加する(一時ファイル経由の置換は従来どおり)
-- [ ] `SettingsDialog` に「棚ラベル印字位置の補正」として左・上の `QDoubleSpinBox`(範囲 ±10.0、刻み 0.1、小数 1 桁、単位 mm)を追加する。説明ラベルに「正の値で右・下へ移動」を表示する
-- [ ] 「既定に戻す」はフォント・文字サイズのみを戻し、補正値を変更しない。OK で補正値を含めて保存する。キャンセルでは何も保存しない
-- [ ] `SettingsService.validate_all()` が UI 表示設定のキーを要求・許容しない既存の検査が、新キー追加後も成立することを確認する
+- [x] `DisplaySettings` に `label_offset_left_mm: float = 0.0`・`label_offset_top_mm: float = 0.0` を追加する。範囲・刻みの定数(±10.0、0.1)を定義する
+- [x] `load_display_settings` で、2 つのキーを項目ごとに検証する。数値(int/float。bool は不可)・有限・範囲内のみ採用し、小数 1 桁へ丸める。それ以外は 0.0 にフォールバックしてログに警告する。キーなしは黙って 0.0 とする。既存の `font_family`・`font_scale_percent` の挙動は変えない
+- [x] `save_display_settings` に 2 つのキーを追加する(一時ファイル経由の置換は従来どおり)
+- [x] `SettingsDialog` に「棚ラベル印字位置の補正」として左・上の `QDoubleSpinBox`(範囲 ±10.0、刻み 0.1、小数 1 桁、単位 mm)を追加する。説明ラベルに「正の値で右・下へ移動」を表示する
+- [x] 「既定に戻す」はフォント・文字サイズのみを戻し、補正値を変更しない。OK で補正値を含めて保存する。キャンセルでは何も保存しない
+- [x] `SettingsService.validate_all()` が UI 表示設定のキーを要求・許容しない既存の検査が、新キー追加後も成立することを確認する
 
 #### E. 印刷用フォント `ui/printing/fonts.py`(新規)
 
-- [ ] 候補フォント(`Yu Gothic UI`・`Meiryo UI`・`Noto Sans CJK JP`)から、`QFontDatabase.families()` に存在する最初のものを選び、なければ `QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)` を使う関数 `print_font(point_size, bold=False) -> QFont` を実装する。UI の文字サイズ倍率・`font_family` 設定を参照しない
+- [x] 候補フォント(`Yu Gothic UI`・`Meiryo UI`・`Noto Sans CJK JP`)から、`QFontDatabase.families()` に存在する最初のものを選び、なければ `QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)` を使う関数 `print_font(point_size, bold=False) -> QFont` を実装する。UI の文字サイズ倍率・`font_family` 設定を参照しない
 
 #### F. ラベル描画 `ui/printing/label_renderer.py`(新規)
 
-- [ ] `render_labels(device: QPagedPaintDevice, placements, items_by_id, spec, offset_left_mm, offset_top_mm, *, page_numbers=None) -> None` を実装する
+- [x] `render_labels(device: QPagedPaintDevice, placements, items_by_id, spec, offset_left_mm, offset_top_mm, *, page_numbers=None) -> None` を実装する
   - `page_numbers=None` は全ページ、それ以外は 2.3 の元ページ番号列とする。元の面付けから対象ページだけを選び、位置番号を詰め直さない。元の 2 ページ目以降には 1 ページ目の位置チェックを再適用しない。`placements` が空なら開始せず何も描かない
   - 共通クラスによる用紙設定の検証後、`QPainter.begin(device)` の戻り値を確認して開始する。`False` なら例外にして描画を続けない。`device.logicalDpiX()/Y()` で mm をデバイス座標へ変換する
   - 出力するページとページの間だけ `device.newPage()` を呼び、`False` なら例外にして後続ページを描かない。最初の出力ページの前や最後のページの後には呼ばない
   - 各ラベルは `slot_rect_mm` の矩形内側 3mm に、品名・管理番号・保管場所・備考の 4 行を 2.3 のフォント・順序で描画する。各フォント設定後に `painter.fontMetrics()` を取得し、内側幅をデバイス座標の整数幅へ切り下げて `elidedText` に渡す
   - 開始成功後は例外が起きても `try/finally` で `QPainter.end()` を呼ぶ。終了の `False` も失敗とするが、元の描画例外がある場合は終了失敗をログに残し、元の例外を上書きしない
-- [ ] 描画値(行位置・フォントサイズ・余白 3mm)をモジュール先頭の定数にまとめ、試し刷り後の調整箇所を 1 か所にする
+- [x] 描画値(行位置・フォントサイズ・余白 3mm)をモジュール先頭の定数にまとめ、試し刷り後の調整箇所を 1 か所にする
 
 #### G. 棚ラベルの印刷設定ダイアログ `ui/printing/label_print_dialog.py`(新規)
 
-- [ ] `LabelPrintDialog(items: list[ItemRow], parent)` を実装する。品目表(管理番号・品名・枚数 `QSpinBox` 1〜99、既定 1)、2 列×6 段の位置チェック(`LABEL_72212` の列数・段数から生成。既定は全オン)、「すべて選択」「すべて解除」、「合計 N 枚 / 用紙 M 枚」の表示を置く
-- [ ] 位置がすべてオフのとき OK を不活性にし、「印字位置を 1 つ以上選択してください」を表示する
-- [ ] 結果として `entries`(品目の並び順と枚数)と `first_page_slots` を返すプロパティを提供する
-- [ ] `QScrollArea` を使い、1366×768 かつ文字サイズ 150% で作業領域に収まり OK/キャンセルが操作できるようにする(`dialog_placement` の既存関数に従う)
-- [ ] 状態を保存しない(開くたびに全オン・枚数 1)
+- [x] `LabelPrintDialog(items: list[ItemRow], parent)` を実装する。品目表(管理番号・品名・枚数 `QSpinBox` 1〜99、既定 1)、2 列×6 段の位置チェック(`LABEL_72212` の列数・段数から生成。既定は全オン)、「すべて選択」「すべて解除」、「合計 N 枚 / 用紙 M 枚」の表示を置く
+- [x] 位置がすべてオフのとき OK を不活性にし、「印字位置を 1 つ以上選択してください」を表示する
+- [x] 結果として `entries`(品目の並び順と枚数)と `first_page_slots` を返すプロパティを提供する
+- [x] `QScrollArea` を使い、1366×768 かつ文字サイズ 150% で作業領域に収まり OK/キャンセルが操作できるようにする(`dialog_placement` の既存関数に従う)
+- [x] 状態を保存しない(開くたびに全オン・枚数 1)
 
 #### H0. 共通プレビュー制御 `ui/printing/preview_dialog.py`(新規・7b で再利用)
 
-- [ ] `QPrintPreviewDialog` を継承する `PrintPreviewDialog` を実装する。プリンタ・固定の用紙方向・総ページ数・描画コールバックを受け取り、プレビューと実印刷の状態を明示的に管理する。描画コールバックにはデバイスと 2.3 の `page_numbers` を渡す
-- [ ] 標準の縦横切替・ページ設定操作を非表示または無効化し、標準の印刷操作を共通クラスが管理する操作へ置き換える。内部 UI の操作識別・接続変更はこのモジュールだけで扱い、翻訳された表示文字列だけに依存しない。固定している Qt バージョンで操作を確実に識別できることを検証する
-- [ ] プレビュー描画と実印刷の各 `QPainter.begin()` 前に、A4・所定の向き・余白 0・フルページを再設定する。設定 API の戻り値と実際の `pageLayout()`・`fullPage()` を検査し、不一致なら描画前に例外にする。実印刷では `QPrintDialog` でプリンタが選ばれた後に再設定する
-- [ ] 独自の印刷操作で `QPrintDialog` を開き、指定可能な範囲を 1〜総ページ数にする。全ページとページ範囲を許可し、選択範囲・現在のページ指定は無効化する。キャンセルでは印刷しない。ダイアログ受諾後は `preview.print_()` を介さず、実プリンタに対して直接描画コールバックを呼び出して印刷を実行する
-- [ ] プレビューは常に `page_numbers=None` で描画する。実印刷だけ `printRange()` と `pageRanges()`(必要時は `fromPage()`・`toPage()`)を解決し、昇順の重複なしの元ページ番号列を渡す。不正な範囲・対象ページなしは開始前に拒否する。実印刷中の状態は `try/finally` で解除する
-- [ ] `paintRequested` に接続するコールバック内を `run_guarded` で包む。描画失敗を一度記録したら、その操作では以後の描画・印刷を拒否する。終了処理済みの例外を一度だけログ・通知し、プレビューを閉じる処理はコールバックから戻ってから `QTimer.singleShot(0, self.reject)` により遅延終了する
-- [ ] 実印刷の失敗時は `QPrinter.abort()` で中止を試みる。中止失敗もログに残すが追加のエラーダイアログは重ねず、送信・印刷済みページを取り消せるとは表示しない
-- [ ] `dialog_placement` の既存関数で配置し、1366×768 の作業領域内に収める
+- [x] `QPrintPreviewDialog` を継承する `PrintPreviewDialog` を実装する。プリンタ・固定の用紙方向・総ページ数・描画コールバックを受け取り、プレビューと実印刷の状態を明示的に管理する。描画コールバックにはデバイスと 2.3 の `page_numbers` を渡す
+- [x] 標準の縦横切替・ページ設定操作を非表示または無効化し、標準の印刷操作を共通クラスが管理する操作へ置き換える。内部 UI の操作識別・接続変更はこのモジュールだけで扱い、翻訳された表示文字列だけに依存しない。固定している Qt バージョンで操作を確実に識別できることを検証する
+- [x] プレビュー描画と実印刷の各 `QPainter.begin()` 前に、A4・所定の向き・余白 0・フルページを再設定する。設定 API の戻り値と実際の `pageLayout()`・`fullPage()` を検査し、不一致なら描画前に例外にする。実印刷では `QPrintDialog` でプリンタが選ばれた後に再設定する
+- [x] 独自の印刷操作で `QPrintDialog` を開き、指定可能な範囲を 1〜総ページ数にする。全ページとページ範囲を許可し、選択範囲・現在のページ指定は無効化する。キャンセルでは印刷しない。ダイアログ受諾後は `preview.print_()` を介さず、実プリンタに対して直接描画コールバックを呼び出して印刷を実行する
+- [x] プレビューは常に `page_numbers=None` で描画する。実印刷だけ `printRange()` と `pageRanges()`(必要時は `fromPage()`・`toPage()`)を解決し、昇順の重複なしの元ページ番号列を渡す。不正な範囲・対象ページなしは開始前に拒否する。実印刷中の状態は `try/finally` で解除する
+- [x] `paintRequested` に接続するコールバック内を `run_guarded` で包む。描画失敗を一度記録したら、その操作では以後の描画・印刷を拒否する。終了処理済みの例外を一度だけログ・通知し、プレビューを閉じる処理はコールバックから戻ってから `QTimer.singleShot(0, self.reject)` により遅延終了する
+- [x] 実印刷の失敗時は `QPrinter.abort()` で中止を試みる。中止失敗もログに残すが追加のエラーダイアログは重ねず、送信・印刷済みページを取り消せるとは表示しない
+- [x] `dialog_placement` の既存関数で配置し、1366×768 の作業領域内に収める
 
 #### H. MainWindow の導線 `ui/main_window.py`
 
-- [ ] 「ファイル」メニューに「印刷」サブメニューを追加し、「棚ラベル」`QAction`(`print_labels_action`)を置く(在庫表は 7b)。位置は「CSV 出力」サブメニューの直後
-- [ ] ツールバーの出力グループに「印刷」ドロップダウン(`QToolButton`、`InstantPopup`)を追加し、同じ `QAction` を共有する
-- [ ] 一覧の右クリックメニューの参照グループの後に区切り線を置き、棚ラベルを追加する
-- [ ] `_print_labels()` を実装する: 選択行(`_selected_item_ids`)の `ItemRow` を取得 → `LabelPrintDialog` → OK なら `assign_label_slots` で面付け → `QPrinter(HighResolution)` と H0 の `PrintPreviewDialog`(A4 縦)を生成する。共通クラスの描画コールバックから、指定された `page_numbers` とともに `render_labels` を呼ぶ。全体を `run_guarded` で包み、描画コールバック内の例外処理は H0 に委ねる
-- [ ] 補正値は印刷操作の開始ごとに表示設定ファイルから読み直す(`context.paths` の UI 表示設定パスを使い、読み込み失敗時は 0.0)。行・面付け・補正値はプレビューを開く前に固定し、そのプレビューの再描画・実印刷中には読み直さない。設定ダイアログで変更した値は次の印刷操作から反映する
+- [x] 「ファイル」メニューに「印刷」サブメニューを追加し、「棚ラベル」`QAction`(`print_labels_action`)を置く(在庫表は 7b)。位置は「CSV 出力」サブメニューの直後
+- [x] ツールバーの出力グループに「印刷」ドロップダウン(`QToolButton`、`InstantPopup`)を追加し、同じ `QAction` を共有する
+- [x] 一覧の右クリックメニューの参照グループの後に区切り線を置き、棚ラベルを追加する
+- [x] `_print_labels()` を実装する: 選択行(`_selected_item_ids`)の `ItemRow` を取得 → `LabelPrintDialog` → OK なら `assign_label_slots` で面付け → `QPrinter(HighResolution)` と H0 の `PrintPreviewDialog`(A4 縦)を生成する。共通クラスの描画コールバックから、指定された `page_numbers` とともに `render_labels` を呼ぶ。全体を `run_guarded` で包み、描画コールバック内の例外処理は H0 に委ねる
+- [x] 補正値は印刷操作の開始ごとに表示設定ファイルから読み直す(`context.paths` の UI 表示設定パスを使い、読み込み失敗時は 0.0)。行・面付け・補正値はプレビューを開く前に固定し、そのプレビューの再描画・実印刷中には読み直さない。設定ダイアログで変更した値は次の印刷操作から反映する
 
 #### I. 7a のテスト
 
-- [ ] `tests/test_print_layout.py`(新規): 次を検証する
-  - [ ] `assign_label_slots`: 全オン、一部オフ、飛び飛びのオフ、1 枚目で溢れて 2 枚目が全面になること、品目ごとの枚数による展開順、枚数 1 と 99 の境界、0 と 100 の拒否、`first_page_slots` が空・範囲外の拒否、品目 0 件
-  - [ ] `slot_rect_mm`: 全 12 位置の座標が `LabelSpec`(左余白 + 列×ピッチ、上余白 + 段×ピッチ)と一致すること。補正値 ±の加算
-  - [ ] `LabelSpec` の整合: 用紙 A4(210 × 297mm)に 12 面が収まること(右端・下端が用紙内)
-- [ ] `tests/test_display_settings.py`: 補正値の保存と再読み込みの往復、キーなし・文字列・bool・NaN・範囲外・小数 2 桁以上の扱い、他の項目が有効なら維持されること
-- [ ] `tests/test_settings_dialog.py`: 補正値の初期表示・保存、「既定に戻す」でフォント・文字サイズのみ戻り補正値が維持されること、キャンセルで保存されないこと
-- [ ] `tests/test_label_print.py`(新規):
-  - [ ] ダイアログ: 初期は全オン、「すべて解除」で OK 不活性と理由表示、「すべて選択」で復帰、合計枚数・用紙枚数の表示、開き直すと全オンへ戻ること、1366×768 かつ文字サイズ 150% で作業領域に収まり OK/キャンセルが操作可能なこと
-  - [ ] 描画: `QPdfWriter` または `QPrinter(PdfFormat)` で `tmp_path` に出力し、ページ数が面付けの結果と一致すること、ファイルが `%PDF-` で始まること、補正値で描画位置が変わること(スタブ化した描画先で座標を検証するなど、PDF のバイト比較に頼らない方法)、長い品名・備考で例外が起きないこと
-  - [ ] 範囲印刷: 全ページ・途中の範囲・最終ページのみで出力ページ数が一致すること。先頭・末尾に空白ページがなく、元の面付けの位置番号が維持され、2 ページ目以降に 1 ページ目の位置チェックが再適用されないこと
-  - [ ] 文字幅: 300 DPI・1200 DPI の描画先で、フォントごとに長い文字列が省略され、描画先のメトリクスで省略後の幅が内側幅以内になること。「例外なし」だけで合格にしない
-  - [ ] 異常系: 開始失敗・途中の改ページ失敗・描画例外・終了失敗を個別に注入し、後続ページを描かないこと。開始成功後は終了処理が実行され、描画例外と終了失敗が重なっても元の例外が維持されること
-  - [ ] オフにした位置に描画されないこと(`QImage` 等への描画で当該矩形が白のまま)
-  - [ ] `print_font` が存在しない候補のときフォールバックすること
-- [ ] `tests/test_label_print.py` に H0 の共通プレビューの検査も置き、7b でも再実行する:
-  - [ ] 固定している Qt バージョンで標準の縦横切替・ページ設定・印刷操作が制御され、翻訳の表示文字列に依存せず識別できること。変更された用紙設定が各描画前に所定の設定へ戻り、設定失敗時は描画を開始しないこと。プリンタ選択後にも再設定されること
-  - [ ] 印刷ダイアログの範囲は 1〜総ページ数で、全ページ・途中の範囲・最終ページのみが描画コールバックへ正しく渡ること。プレビューには範囲を適用しないこと。不正な範囲・対象ページなし・キャンセルでは印刷を開始しないこと
-  - [ ] `paintRequested` を実際に発火させて描画例外を注入し、ログ・エラー通知・終了処理・遅延したプレビュー終了を確認すること。通知は一度だけで、失敗後の再発火や印刷操作で描画を続けないこと。実印刷失敗では中止を試み、中止失敗でも通知が重複しないこと
-  - [ ] 1366×768 で作業領域内に収まること
-- [ ] `tests/test_main_window.py`: 複数選択時に編集・廃止・履歴・販売ページ・在庫操作が不活性になり、棚ラベルが活性になること。0 件選択で棚ラベルが不活性になること。1 件選択では従来どおりの活性状態であること。`refresh_items` 後に複数選択が維持されること。ファイル・ツールバー・右クリックの各導線から同じ `QAction` が操作できること。`PrintPreviewDialog.exec` を差し替えた状態で「選択 → ダイアログ → プレビュー起動」の流れが完走し、描画が選択行の表示順で行われること(ソート列を変えて確認)。再描画中に一覧や設定ファイルが変わっても、行・面付け・補正値のスナップショットが変わらないこと
-- [ ] 既存テスト(`test_main_window.py`・`test_item_table_model.py`・`test_alert_panel.py` など)が選択モード変更の影響で失敗する場合は、期待値を 1 件選択の前提に合わせて修正する
+- [x] `tests/test_print_layout.py`(新規): 次を検証する
+  - [x] `assign_label_slots`: 全オン、一部オフ、飛び飛びのオフ、1 枚目で溢れて 2 枚目が全面になること、品目ごとの枚数による展開順、枚数 1 と 99 の境界、0 と 100 の拒否、`first_page_slots` が空・範囲外の拒否、品目 0 件
+  - [x] `slot_rect_mm`: 全 12 位置の座標が `LabelSpec`(左余白 + 列×ピッチ、上余白 + 段×ピッチ)と一致すること。補正値 ±の加算
+  - [x] `LabelSpec` の整合: 用紙 A4(210 × 297mm)に 12 面が収まること(右端・下端が用紙内)
+- [x] `tests/test_display_settings.py`: 補正値の保存と再読み込みの往復、キーなし・文字列・bool・NaN・範囲外・小数 2 桁以上の扱い、他の項目が有効なら維持されること
+- [x] `tests/test_settings_dialog.py`: 補正値の初期表示・保存、「既定に戻す」でフォント・文字サイズのみ戻り補正値が維持されること、キャンセルで保存されないこと
+- [x] `tests/test_label_print.py`(新規):
+  - [x] ダイアログ: 初期は全オン、「すべて解除」で OK 不活性と理由表示、「すべて選択」で復帰、合計枚数・用紙枚数の表示、開き直すと全オンへ戻ること、1366×768 かつ文字サイズ 150% で作業領域に収まり OK/キャンセルが操作可能なこと
+  - [x] 描画: `QPdfWriter` または `QPrinter(PdfFormat)` で `tmp_path` に出力し、ページ数が面付けの結果と一致すること、ファイルが `%PDF-` で始まること、補正値で描画位置が変わること(スタブ化した描画先で座標を検証するなど、PDF のバイト比較に頼らない方法)、長い品名・備考で例外が起きないこと
+  - [x] 範囲印刷: 全ページ・途中の範囲・最終ページのみで出力ページ数が一致すること。先頭・末尾に空白ページがなく、元の面付けの位置番号が維持され、2 ページ目以降に 1 ページ目の位置チェックが再適用されないこと
+  - [x] 文字幅: 300 DPI・1200 DPI の描画先で、フォントごとに長い文字列が省略され、描画先のメトリクスで省略後の幅が内側幅以内になること。「例外なし」だけで合格にしない
+  - [x] 異常系: 開始失敗・途中の改ページ失敗・描画例外・終了失敗を個別に注入し、後続ページを描かないこと。開始成功後は終了処理が実行され、描画例外と終了失敗が重なっても元の例外が維持されること
+  - [x] オフにした位置に描画されないこと(`QImage` 等への描画で当該矩形が白のまま)
+  - [x] `print_font` が存在しない候補のときフォールバックすること
+- [x] `tests/test_label_print.py` に H0 の共通プレビュー検査を追加する(この検査は 7b でも再実行する):
+  - [x] 固定している Qt バージョンで標準の縦横切替・ページ設定・印刷操作が制御され、翻訳の表示文字列に依存せず識別できること。変更された用紙設定が各描画前に所定の設定へ戻り、設定失敗時は描画を開始しないこと。プリンタ選択後にも再設定されること
+  - [x] 印刷ダイアログの範囲は 1〜総ページ数で、全ページ・途中の範囲・最終ページのみが描画コールバックへ正しく渡ること。プレビューには範囲を適用しないこと。不正な範囲・対象ページなし・キャンセルでは印刷を開始しないこと
+  - [x] `paintRequested` を実際に発火させて描画例外を注入し、ログ・エラー通知・終了処理・遅延したプレビュー終了を確認すること。通知は一度だけで、失敗後の再発火や印刷操作で描画を続けないこと。実印刷失敗では中止を試み、中止失敗でも通知が重複しないこと
+  - [x] 1366×768 で作業領域内に収まること
+- [x] `tests/test_main_window.py`: 複数選択時に編集・廃止・履歴・販売ページ・在庫操作が不活性になり、棚ラベルが活性になること。0 件選択で棚ラベルが不活性になること。1 件選択では従来どおりの活性状態であること。`refresh_items` 後に複数選択が維持されること。ファイル・ツールバー・右クリックの各導線から同じ `QAction` が操作できること。`PrintPreviewDialog.exec` を差し替えた状態で「選択 → ダイアログ → プレビュー起動」の流れが完走し、描画が選択行の表示順で行われること(ソート列を変えて確認)。再描画中に一覧や設定ファイルが変わっても、行・面付け・補正値のスナップショットが変わらないこと
+- [x] 既存テスト(`test_main_window.py`・`test_item_table_model.py`・`test_alert_panel.py` など)が選択モード変更の影響で失敗する場合は、期待値を 1 件選択の前提に合わせて修正する
 
 #### J. 7a の仕上げ
 
-- [ ] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
-- [ ] 本書の 7a のチェックボックスを更新する
+- [x] `uv run ruff check`・`uv run ruff format --check`・`uv run pyright`・`uv run pytest --cov`・カバレッジ(`core/`・`db/` 90%)が成功する
+- [x] 本書の 7a のチェックボックスを更新する
 - [ ] 7a の PR を作成し、CI 成功後にマージする
 
 ### 7b. 在庫表・手動確認・文書(`feature/phase7-inventory-sheet`)

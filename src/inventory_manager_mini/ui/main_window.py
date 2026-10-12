@@ -1,14 +1,17 @@
 import logging
+from collections.abc import Sequence
 from enum import Enum, auto
 from importlib import import_module
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QPageLayout
+from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QLabel,
@@ -36,6 +39,10 @@ from inventory_manager_mini.ui.models.item_table_model import (
     ItemSortProxyModel,
     ItemTableModel,
 )
+from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+from inventory_manager_mini.ui.printing.label_renderer import render_labels
+from inventory_manager_mini.ui.printing.layout import LABEL_72212, assign_label_slots
+from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
 from inventory_manager_mini.ui.widgets.alert_panel import AlertPanel
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
 from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
@@ -113,7 +120,7 @@ class MainWindow(QMainWindow):
         self.table = QTableView(self)
         self.table.setModel(self.sort_model)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self.table.setSortingEnabled(True)
         self.sort_model.set_item_selection_model(self.table.selectionModel())
         self.table.selectionModel().selectionChanged.connect(self._update_selection_actions)
@@ -164,6 +171,14 @@ class MainWindow(QMainWindow):
         self.csv_export_menu.addAction(self.export_history_action)
         self.csv_export_button.setMenu(self.csv_export_menu)
         self.toolbar.addWidget(self.csv_export_button)
+        self.print_button = QToolButton(self.toolbar)
+        self.print_button.setText("印刷")
+        self.print_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.print_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.print_toolbar_menu = QMenu(self.print_button)
+        self.print_toolbar_menu.addAction(self.print_labels_action)
+        self.print_button.setMenu(self.print_toolbar_menu)
+        self.toolbar.addWidget(self.print_button)
 
     def _build_table_context_menu(self) -> None:
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -180,6 +195,10 @@ class MainWindow(QMainWindow):
         self.table.addAction(separator)
         self.table.addAction(self.history_action)
         self.table.addAction(self.purchase_page_action)
+        separator = QAction(self.table)
+        separator.setSeparator(True)
+        self.table.addAction(separator)
+        self.table.addAction(self.print_labels_action)
 
     @staticmethod
     def _master_combo() -> QComboBox:
@@ -196,6 +215,10 @@ class MainWindow(QMainWindow):
         self.csv_menu = file_menu.addMenu("CSV 出力")
         self.csv_menu.addAction(self.export_items_action)
         self.csv_menu.addAction(self.export_history_action)
+        self.print_menu = file_menu.addMenu("印刷")
+        self.print_labels_action = QAction("棚ラベル", self)
+        self.print_labels_action.triggered.connect(self._print_labels)
+        self.print_menu.addAction(self.print_labels_action)
         file_menu.addSeparator()
         self.backup_action = QAction("バックアップ", self)
         self.backup_action.triggered.connect(self._create_backup)
@@ -269,15 +292,10 @@ class MainWindow(QMainWindow):
         self._update_selection_actions()
 
     def refresh(self) -> None:
-        selected_id = self._selected_item_id()
+        selected_item_ids = self._selected_item_ids()
         self._refresh_master_choices()
-        self.refresh_items()
+        self.refresh_items(selected_item_ids=selected_item_ids)
         self.alert_panel.refresh()
-        if selected_id is not None:
-            source_row = self.item_model.row_of(selected_id)
-            if source_row is not None:
-                proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-                self.table.selectRow(proxy_index.row())
         self._update_selection_actions()
 
     def _refresh_master_choices(self) -> None:
@@ -331,30 +349,61 @@ class MainWindow(QMainWindow):
             include_inactive=self.inactive_checkbox.isChecked(),
         )
 
-    def refresh_items(self, *_args) -> None:
+    def refresh_items(self, *_args, selected_item_ids: list[int] | None = None) -> None:
         item_filter = self._current_item_filter()
-        selected_id = self._selected_item_id()
+        if selected_item_ids is None:
+            selected_item_ids = self._selected_item_ids()
         succeeded, rows = run_guarded(self, lambda: self.context.inventory.list_items(item_filter))
         if not succeeded or rows is None:
             return
         self.item_model.set_rows(rows)
-        if selected_id is not None:
-            source_row = self.item_model.row_of(selected_id)
-            if source_row is not None:
-                proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-                self.table.selectRow(proxy_index.row())
+        self._restore_item_selection(selected_item_ids)
         self.statusBar().showMessage(f"{len(rows):,} 件")
         self._update_selection_actions()
 
+    def _restore_item_selection(self, item_ids: list[int]) -> None:
+        selection_model = self.table.selectionModel()
+        proxy_indexes = []
+        for item_id in item_ids:
+            source_row = self.item_model.row_of(item_id)
+            if source_row is None:
+                continue
+            proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
+            if proxy_index.isValid():
+                proxy_indexes.append(proxy_index)
+        if not proxy_indexes:
+            selection_model.clearSelection()
+            return
+        selection = QItemSelection()
+        for proxy_index in proxy_indexes:
+            selection.select(proxy_index, proxy_index)
+        selection_model.select(
+            selection,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(
+            proxy_indexes[-1], QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+
+    def _selected_item_ids(self) -> list[int]:
+        selected = sorted(self.table.selectionModel().selectedRows(), key=lambda index: index.row())
+        item_ids = []
+        for proxy_index in selected:
+            source_index = self.sort_model.mapToSource(proxy_index)
+            if source_index.isValid():
+                item_ids.append(self.item_model.row_at(source_index.row()).id)
+        return item_ids
+
     def _selected_item_id(self) -> int | None:
-        selected = self.table.selectionModel().selectedRows()
-        if not selected:
+        selected_item_ids = self._selected_item_ids()
+        if len(selected_item_ids) != 1:
             return None
-        source_index = self.sort_model.mapToSource(selected[0])
-        return self.item_model.row_at(source_index.row()).id
+        return selected_item_ids[0]
 
     def _update_selection_actions(self, *_args) -> None:
-        selected_id = self._selected_item_id() if hasattr(self, "table") else None
+        selected_item_ids = self._selected_item_ids() if hasattr(self, "table") else []
+        selected_id = selected_item_ids[0] if len(selected_item_ids) == 1 else None
         row = None if selected_id is None else self.item_model.row_of(selected_id)
         item = None if row is None else self.item_model.row_at(row)
         has_selection = item is not None
@@ -367,6 +416,9 @@ class MainWindow(QMainWindow):
         can_move_stock = item is not None and item.is_active
         for action in self.stock_actions.values():
             action.setEnabled(can_move_stock)
+        print_labels_action = getattr(self, "print_labels_action", None)
+        if print_labels_action is not None:
+            print_labels_action.setEnabled(bool(selected_item_ids))
         if item is not None:
             self.toggle_active_action.setText("廃止" if item.is_active else "再有効化")
 
@@ -404,6 +456,48 @@ class MainWindow(QMainWindow):
         succeeded, url = run_guarded(self, lambda: validate_purchase_url(item.purchase_url))
         if succeeded and url is not None:
             QDesktopServices.openUrl(QUrl(url))
+
+    def _print_labels(self) -> None:
+        run_guarded(self, self._run_print_labels)
+
+    def _run_print_labels(self) -> None:
+        settings = load_display_settings(self.context.paths.ui_settings_path)
+        items = []
+        for item_id in self._selected_item_ids():
+            source_row = self.item_model.row_of(item_id)
+            if source_row is not None:
+                items.append(self.item_model.row_at(source_row))
+        if not items:
+            return
+
+        dialog = LabelPrintDialog(items, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        placements = assign_label_slots(dialog.entries, dialog.first_page_slots)
+        items_by_id = {item.id: item for item in items}
+        total_pages = max(placement.page_number for placement in placements)
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+
+        def render(device: QPrinter, page_numbers: Sequence[int] | None) -> None:
+            render_labels(
+                device,
+                placements,
+                items_by_id,
+                LABEL_72212,
+                settings.label_offset_left_mm,
+                settings.label_offset_top_mm,
+                page_numbers=page_numbers,
+            )
+
+        preview = PrintPreviewDialog(
+            printer,
+            QPageLayout.Orientation.Portrait,
+            total_pages,
+            render,
+            parent=self,
+        )
+        preview.exec()
 
     def _export_items_csv(self) -> None:
         item_filter = self._current_item_filter()
@@ -648,7 +742,13 @@ class MainWindow(QMainWindow):
     def _open_history_for_index(self, index) -> None:
         if not index.isValid():
             return
-        self.table.selectRow(index.row())
+        selection_model = self.table.selectionModel()
+        selection_model.select(
+            index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
         source_index = self.sort_model.mapToSource(index)
         self._show_history(self.item_model.row_at(source_index.row()).id)
 
@@ -692,7 +792,13 @@ class MainWindow(QMainWindow):
         if source_row is None:
             return
         proxy_index = self.sort_model.mapFromSource(self.item_model.index(source_row, 0))
-        self.table.selectRow(proxy_index.row())
+        selection_model = self.table.selectionModel()
+        selection_model.select(
+            proxy_index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection_model.setCurrentIndex(proxy_index, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.table.scrollTo(proxy_index)
 
     def _open_master_dialog(self, tab_name: str) -> None:

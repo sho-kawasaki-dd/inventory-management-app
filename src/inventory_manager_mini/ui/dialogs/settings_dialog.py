@@ -7,7 +7,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
+    QLabel,
     QMessageBox,
     QVBoxLayout,
 )
@@ -17,6 +20,9 @@ from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.display_settings import (
     ALLOWED_FONT_SCALES,
     DEFAULT_FONT_SCALE_PERCENT,
+    LABEL_OFFSET_MAX_MM,
+    LABEL_OFFSET_MIN_MM,
+    LABEL_OFFSET_STEP_MM,
     DisplaySettings,
     apply_display_settings,
     save_display_settings,
@@ -49,6 +55,8 @@ class SettingsDialog(QDialog):
             DEFAULT_FISCAL_YEAR_START_MONTH if self._saved_month is None else self._saved_month
         )
         self._select_display_settings(display_settings)
+        self.label_offset_left_spin.setValue(display_settings.label_offset_left_mm)
+        self.label_offset_top_spin.setValue(display_settings.label_offset_top_mm)
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -74,6 +82,15 @@ class SettingsDialog(QDialog):
             self.scale_combo.addItem(f"{percent}%", percent)
         form.addRow("文字サイズ", self.scale_combo)
         outer.addLayout(form)
+
+        offset_group = QGroupBox("棚ラベル印字位置の補正", self)
+        offset_form = QFormLayout(offset_group)
+        self.label_offset_left_spin = self._create_offset_spin_box(offset_group)
+        self.label_offset_top_spin = self._create_offset_spin_box(offset_group)
+        offset_form.addRow("左", self.label_offset_left_spin)
+        offset_form.addRow("上", self.label_offset_top_spin)
+        offset_form.addRow(QLabel("正の値で右・下へ移動", offset_group))
+        outer.addWidget(offset_group)
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -104,6 +121,15 @@ class SettingsDialog(QDialog):
             scale_index = self.scale_combo.findData(DEFAULT_FONT_SCALE_PERCENT)
         self.scale_combo.setCurrentIndex(scale_index)
 
+    @staticmethod
+    def _create_offset_spin_box(parent) -> QDoubleSpinBox:
+        spin_box = QDoubleSpinBox(parent)
+        spin_box.setRange(LABEL_OFFSET_MIN_MM, LABEL_OFFSET_MAX_MM)
+        spin_box.setSingleStep(LABEL_OFFSET_STEP_MM)
+        spin_box.setDecimals(1)
+        spin_box.setSuffix(" mm")
+        return spin_box
+
     def _reset_display_choices(self) -> None:
         self._select_display_settings(DisplaySettings())
 
@@ -122,12 +148,14 @@ class SettingsDialog(QDialog):
         new_settings = DisplaySettings(
             font_family=self.font_combo.currentData(),
             font_scale_percent=self.scale_combo.currentData(),
+            label_offset_left_mm=self.label_offset_left_spin.value(),
+            label_offset_top_mm=self.label_offset_top_spin.value(),
         )
         try:
             save_display_settings(self.context.paths.ui_settings_path, new_settings)
         except OSError as error:
             logger.exception("UI 表示設定を保存できませんでした")
-            message = "フォントと文字サイズを保存できませんでした。"
+            message = "表示設定を保存できませんでした。"
             if self._month_saved_in_dialog:
                 message += "\n年度開始月は保存済みです。"
             QMessageBox.warning(self, "設定を保存できません", f"{message}\n原因: {error}")

@@ -183,22 +183,25 @@ def test_proxy_sorts_values_and_places_none_last(column: int, rows, expected: li
     ]
 
 
-def test_proxy_sort_preserves_selected_source_row() -> None:
+def test_proxy_sort_preserves_multiple_selected_source_rows() -> None:
     source = ItemTableModel()
     source.set_rows([_item(1, quantity=10), _item(2, quantity=2), _item(3, quantity=5)])
     proxy = ItemSortProxyModel()
     proxy.setSourceModel(source)
     selection = QItemSelectionModel(proxy)
     proxy.set_item_selection_model(selection)
-    selected_source_index = source.index(0, 0)
-    selection.select(
-        proxy.mapFromSource(selected_source_index),
-        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
-    )
-    assert len(selection.selectedRows()) == 1
+    selected_source_indexes = [source.index(0, 0), source.index(2, 0)]
+    for source_index in selected_source_indexes:
+        selection.select(
+            proxy.mapFromSource(source_index),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    assert len(selection.selectedRows()) == 2
 
     proxy.sort(7, Qt.SortOrder.AscendingOrder)
 
     selected_proxy_rows = selection.selectedRows()
-    assert len(selected_proxy_rows) == 1
-    assert proxy.mapToSource(selected_proxy_rows[0]) == selected_source_index
+    assert len(selected_proxy_rows) == 2
+    assert {proxy.mapToSource(index).row() for index in selected_proxy_rows} == {
+        index.row() for index in selected_source_indexes
+    }

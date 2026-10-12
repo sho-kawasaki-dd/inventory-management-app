@@ -67,7 +67,7 @@ def test_initial_values_show_current_settings(
     family = QFontDatabase.families()[-1]
     dialog_context.settings.set_fiscal_year_start_month(10)
 
-    dialog = _open(qtbot, dialog_context, DisplaySettings(family, 125))
+    dialog = _open(qtbot, dialog_context, DisplaySettings(family, 125, -1.2, 2.3))
 
     assert dialog.month_combo.currentData() == 10
     assert [dialog.month_combo.itemData(i) for i in range(12)] == list(range(1, 13))
@@ -75,6 +75,12 @@ def test_initial_values_show_current_settings(
     assert dialog.font_combo.currentData() == family
     assert [dialog.scale_combo.itemText(i) for i in range(4)] == ["90%", "100%", "125%", "150%"]
     assert dialog.scale_combo.currentData() == 125
+    assert dialog.label_offset_left_spin.value() == pytest.approx(-1.2)
+    assert dialog.label_offset_top_spin.value() == pytest.approx(2.3)
+    assert dialog.label_offset_left_spin.suffix() == " mm"
+    assert dialog.label_offset_left_spin.minimum() == -10.0
+    assert dialog.label_offset_left_spin.maximum() == 10.0
+    assert dialog.label_offset_left_spin.singleStep() == pytest.approx(0.1)
 
 
 def test_unknown_font_and_invalid_scale_fall_back_to_defaults(qtbot, dialog_context) -> None:
@@ -121,22 +127,30 @@ def test_font_and_scale_are_saved_and_applied_immediately(
     dialog = _open(qtbot, dialog_context)
     _select_font(dialog, family)
     _select_scale(dialog, 150)
-
+    dialog.label_offset_left_spin.setValue(-2.1)
+    dialog.label_offset_top_spin.setValue(3.2)
     dialog._save()
 
-    assert _saved_json(dialog_context) == {"font_family": family, "font_scale_percent": 150}
-    assert dialog.display_settings == DisplaySettings(family, 150)
+    assert _saved_json(dialog_context) == {
+        "font_family": family,
+        "font_scale_percent": 150,
+        "label_offset_left_mm": -2.1,
+        "label_offset_top_mm": 3.2,
+    }
+    assert dialog.display_settings == DisplaySettings(family, 150, -2.1, 3.2)
     applied = QApplication.font()
     assert applied.family() == family
     if base_size > 0:
         assert applied.pointSizeF() == pytest.approx(base_size * 1.5)
 
 
-def test_reset_only_resets_font_and_scale_not_month(
+def test_reset_only_resets_font_and_scale_not_month_or_label_offsets(
     qtbot, dialog_context: AppContext, restore_app_font: QFont
 ) -> None:
     dialog_context.settings.set_fiscal_year_start_month(9)
-    dialog = _open(qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150))
+    dialog = _open(
+        qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150, -2.4, 3.1)
+    )
     dialog.month_combo.setCurrentIndex(dialog.month_combo.findData(2))
 
     dialog.reset_button.click()
@@ -144,6 +158,8 @@ def test_reset_only_resets_font_and_scale_not_month(
     assert dialog.font_combo.currentData() is None
     assert dialog.scale_combo.currentData() == 100
     assert dialog.month_combo.currentData() == 2
+    assert dialog.label_offset_left_spin.value() == pytest.approx(-2.4)
+    assert dialog.label_offset_top_spin.value() == pytest.approx(3.1)
     assert dialog.reset_button.text() == "既定に戻す"
 
 
@@ -152,9 +168,13 @@ def test_reset_then_cancel_changes_nothing(
 ) -> None:
     apply_display_settings(DisplaySettings(None, 150))
     font_before = QFont(QApplication.font())
-    dialog = _open(qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150))
+    dialog = _open(
+        qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150, -1.5, 2.5)
+    )
 
     dialog.reset_button.click()
+    dialog.label_offset_left_spin.setValue(-4.2)
+    dialog.label_offset_top_spin.setValue(1.7)
     dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel).click()
 
     assert dialog.result() == dialog.DialogCode.Rejected
@@ -168,12 +188,20 @@ def test_reset_then_ok_saves_and_applies_defaults(
 ) -> None:
     base_size = capture_base_font().pointSizeF()
     apply_display_settings(DisplaySettings(None, 150))
-    dialog = _open(qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150))
+    dialog = _open(
+        qtbot, dialog_context, DisplaySettings(QFontDatabase.families()[-1], 150, -1.5, 2.5)
+    )
 
     dialog.reset_button.click()
     dialog.button_box.button(QDialogButtonBox.StandardButton.Ok).click()
 
-    assert _saved_json(dialog_context) == {"font_family": None, "font_scale_percent": 100}
+    assert _saved_json(dialog_context) == {
+        "font_family": None,
+        "font_scale_percent": 100,
+        "label_offset_left_mm": -1.5,
+        "label_offset_top_mm": 2.5,
+    }
+    assert dialog.display_settings == DisplaySettings(None, 100, -1.5, 2.5)
     assert dialog.result() == dialog.DialogCode.Accepted
     if base_size > 0:
         assert QApplication.font().pointSizeF() == pytest.approx(base_size)

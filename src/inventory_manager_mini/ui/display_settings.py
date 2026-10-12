@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -14,9 +15,16 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_FONT_SCALES: tuple[int, ...] = (90, 100, 125, 150)
 DEFAULT_FONT_SCALE_PERCENT = 100
+LABEL_OFFSET_MIN_MM = -10.0
+LABEL_OFFSET_MAX_MM = 10.0
+LABEL_OFFSET_STEP_MM = 0.1
+DEFAULT_LABEL_OFFSET_MM = 0.0
 
 _FONT_FAMILY_KEY = "font_family"
 _FONT_SCALE_KEY = "font_scale_percent"
+_LABEL_OFFSET_LEFT_KEY = "label_offset_left_mm"
+_LABEL_OFFSET_TOP_KEY = "label_offset_top_mm"
+_MISSING = object()
 
 # 起動時に取得した OS 既定フォント。倍率はこのフォントに対して適用する。
 _base_font: QFont | None = None
@@ -26,6 +34,8 @@ _base_font: QFont | None = None
 class DisplaySettings:
     font_family: str | None = None
     font_scale_percent: int = DEFAULT_FONT_SCALE_PERCENT
+    label_offset_left_mm: float = DEFAULT_LABEL_OFFSET_MM
+    label_offset_top_mm: float = DEFAULT_LABEL_OFFSET_MM
 
 
 def default_display_settings() -> DisplaySettings:
@@ -47,6 +57,12 @@ def load_display_settings(path: Path) -> DisplaySettings:
     return DisplaySettings(
         font_family=_parse_font_family(data.get(_FONT_FAMILY_KEY)),
         font_scale_percent=_parse_font_scale(data.get(_FONT_SCALE_KEY)),
+        label_offset_left_mm=_parse_label_offset(
+            data.get(_LABEL_OFFSET_LEFT_KEY, _MISSING), _LABEL_OFFSET_LEFT_KEY
+        ),
+        label_offset_top_mm=_parse_label_offset(
+            data.get(_LABEL_OFFSET_TOP_KEY, _MISSING), _LABEL_OFFSET_TOP_KEY
+        ),
     )
 
 
@@ -71,10 +87,30 @@ def _parse_font_scale(value: object) -> int:
     return DEFAULT_FONT_SCALE_PERCENT
 
 
+def _parse_label_offset(value: object, key: str) -> float:
+    if value is _MISSING:
+        return DEFAULT_LABEL_OFFSET_MM
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            number = float(value)
+        except (OverflowError, ValueError):
+            number = math.nan
+        if math.isfinite(number) and LABEL_OFFSET_MIN_MM <= number <= LABEL_OFFSET_MAX_MM:
+            return round(number, 1)
+    logger.warning(
+        "UI 表示設定の位置補正値が不正なため %.1f mm を使用します: %s",
+        DEFAULT_LABEL_OFFSET_MM,
+        key,
+    )
+    return DEFAULT_LABEL_OFFSET_MM
+
+
 def save_display_settings(path: Path, settings: DisplaySettings) -> None:
     payload = {
         _FONT_FAMILY_KEY: settings.font_family,
         _FONT_SCALE_KEY: settings.font_scale_percent,
+        _LABEL_OFFSET_LEFT_KEY: settings.label_offset_left_mm,
+        _LABEL_OFFSET_TOP_KEY: settings.label_offset_top_mm,
     }
     fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
     temp_path = Path(temp_name)

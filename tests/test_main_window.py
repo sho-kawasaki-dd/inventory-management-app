@@ -12,20 +12,31 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QItemSelectionModel, QRect, Qt
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QToolBar, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QMessageBox,
+    QToolBar,
+    QToolButton,
+    QWidget,
+)
 
 from inventory_manager_mini.core import services
 from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
-from inventory_manager_mini.core.models import REASON_LABELS, NewItem, Reason
+from inventory_manager_mini.core.models import REASON_LABELS, ItemRow, NewItem, Reason
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
+from inventory_manager_mini.ui import main_window as main_window_module
 from inventory_manager_mini.ui.csv_export import _choose_export_path
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
+from inventory_manager_mini.ui.display_settings import DisplaySettings
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
+from inventory_manager_mini.ui.printing.layout import LabelEntry, LabelPlacement
 from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 from tests.conftest import create_test_context
 
@@ -38,7 +49,25 @@ def _select_item(window: MainWindow, item_id: int) -> None:
     source_row = window.item_model.row_of(item_id)
     assert source_row is not None
     proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
-    window.table.selectRow(proxy_index.row())
+    selection_model = window.table.selectionModel()
+    selection_model.select(
+        proxy_index,
+        QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    selection_model.setCurrentIndex(proxy_index, QItemSelectionModel.SelectionFlag.NoUpdate)
+
+
+def _select_items(window: MainWindow, item_ids: list[int]) -> None:
+    selection_model = window.table.selectionModel()
+    selection_model.clearSelection()
+    for item_id in item_ids:
+        source_row = window.item_model.row_of(item_id)
+        assert source_row is not None
+        proxy_index = window.sort_model.mapFromSource(window.item_model.index(source_row, 0))
+        selection_model.select(
+            proxy_index,
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
 
 
 def _set_model_purchase_url(window: MainWindow, item_id: int, url: str | None) -> None:
@@ -106,7 +135,7 @@ def test_main_window_starts_with_active_items_and_disabled_item_actions(window_w
     assert not window.edit_action.isEnabled()
     assert not window.toggle_active_action.isEnabled()
     assert window.table.selectionBehavior() == window.table.SelectionBehavior.SelectRows
-    assert window.table.selectionMode() == window.table.SelectionMode.SingleSelection
+    assert window.table.selectionMode() == window.table.SelectionMode.ExtendedSelection
 
 
 def test_search_debounces_name_code_and_manufacturer_number(qtbot, window_with_items) -> None:
@@ -224,6 +253,37 @@ def test_selection_actions_and_deactivate_reactivate(window_with_items, monkeypa
     assert window.item_model.row_at(window.item_model.row_of(first.id)).is_active is False
 
 
+def test_multiple_selection_disables_single_item_actions_and_survives_refresh(
+    window_with_items,
+) -> None:
+    window, first, second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    _select_items(window, [second.id, first.id])
+
+    expected_ids = sorted(
+        [first.id, second.id],
+        key=lambda item_id: window.sort_model.mapFromSource(
+            window.item_model.index(window.item_model.row_of(item_id), 0)
+        ).row(),
+    )
+    assert window._selected_item_ids() == expected_ids
+    assert window._selected_item_id() is None
+    assert not window.edit_action.isEnabled()
+    assert not window.toggle_active_action.isEnabled()
+    assert not window.history_action.isEnabled()
+    assert not window.purchase_page_action.isEnabled()
+    assert all(not action.isEnabled() for action in window.stock_actions.values())
+
+    window.refresh_items()
+    assert window._selected_item_ids() == expected_ids
+
+    window.refresh()
+    assert window._selected_item_ids() == expected_ids
+
+    window.location_combo.setCurrentIndex(window.location_combo.findData(1))
+    assert window._selected_item_ids() == [first.id]
+
+
 def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_items) -> None:
     window, first, second = window_with_items
     item_actions = [window.new_action, window.edit_action, window.toggle_active_action]
@@ -253,9 +313,19 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
         window.export_items_action,
         window.export_history_action,
     ]
+    assert window.toolbar.widgetForAction(toolbar_actions[13]) is window.print_button
+    assert window.print_button.text() == "印刷"
+    assert window.print_button.popupMode() == QToolButton.ToolButtonPopupMode.InstantPopup
+    assert window.print_toolbar_menu.actions() == [window.print_labels_action]
     file_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "ファイル")
     csv_menu = next(a.menu() for a in file_menu.actions() if a.text() == "CSV 出力")
+    print_menu = next(a.menu() for a in file_menu.actions() if a.text() == "印刷")
     assert csv_menu.actions() == [window.export_items_action, window.export_history_action]
+    assert print_menu.actions() == [window.print_labels_action]
+    print_menu_action_index = next(
+        index for index, action in enumerate(file_menu.actions()) if action.menu() is print_menu
+    )
+    assert print_menu_action_index == 1
     assert window.export_items_action.text() == "在庫一覧"
     assert window.export_history_action.text() == "履歴(全品目)"
     assert window.table.actions()[:3] == item_actions
@@ -264,6 +334,8 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     assert window.table.actions()[9].isSeparator()
     assert window.table.actions()[10] is window.history_action
     assert window.table.actions()[11] is window.purchase_page_action
+    assert window.table.actions()[12].isSeparator()
+    assert window.table.actions()[13] is window.print_labels_action
     assert window.table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
     item_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "品目")
     assert item_menu.actions()[:3] == item_actions
@@ -278,10 +350,12 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
 
     assert window.new_action.isEnabled()
     assert not window.history_action.isEnabled()
+    assert not window.print_labels_action.isEnabled()
     assert all(not action.isEnabled() for action in stock_actions)
     _select_item(window, first.id)
     assert window.edit_action.isEnabled()
     assert window.history_action.isEnabled()
+    assert window.print_labels_action.isEnabled()
     assert all(action.isEnabled() for action in stock_actions)
 
     window.inactive_checkbox.setChecked(True)
@@ -290,6 +364,98 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     assert window.history_action.isEnabled()
     assert window.toggle_active_action.text() == "再有効化"
     assert all(not action.isEnabled() for action in stock_actions)
+
+
+def test_print_labels_uses_display_order_and_fixed_settings_snapshot(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, first, second = window_with_items
+    window.inactive_checkbox.setChecked(True)
+    window.sort_model.sort(1, Qt.SortOrder.DescendingOrder)
+    _select_items(window, [second.id, first.id])
+    expected_ids = window._selected_item_ids()
+    assert expected_ids != [second.id, first.id]
+    names_by_id = {
+        window.item_model.row_at(row).id: window.item_model.row_at(row).name
+        for row in range(window.item_model.rowCount())
+    }
+    expected_names = [names_by_id[item_id] for item_id in expected_ids]
+
+    settings_path = tmp_path / "ui_settings.json"
+    window.context.paths = replace(window.context.paths, ui_settings_path=settings_path)
+    loaded_settings = DisplaySettings(label_offset_left_mm=1.2, label_offset_top_mm=-0.4)
+    settings_reads: list[Path] = []
+
+    def load_settings(path: Path) -> DisplaySettings:
+        settings_reads.append(path)
+        return loaded_settings
+
+    monkeypatch.setattr(main_window_module, "load_display_settings", load_settings)
+
+    label_dialog_items: list[int] = []
+
+    class AcceptedLabelDialog:
+        def __init__(self, items, parent) -> None:
+            assert parent is window
+            label_dialog_items.extend(item.id for item in items)
+            self.entries = [LabelEntry(item.id, 1) for item in items]
+            self.first_page_slots = [0]
+
+        def exec(self) -> int:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(main_window_module, "LabelPrintDialog", AcceptedLabelDialog)
+
+    render_calls: list[
+        tuple[object, list[LabelPlacement], dict[int, ItemRow], float, float, object]
+    ] = []
+
+    def record_render(
+        device, placements, items_by_id, _spec, offset_left, offset_top, *, page_numbers
+    ) -> None:
+        render_calls.append(
+            (device, placements, items_by_id, offset_left, offset_top, page_numbers)
+        )
+
+    monkeypatch.setattr(main_window_module, "render_labels", record_render)
+    previews: list[object] = []
+
+    class FakePreviewDialog:
+        def __init__(self, printer, orientation, total_pages, render_callback, parent) -> None:
+            assert parent is window
+            assert orientation == main_window_module.QPageLayout.Orientation.Portrait
+            assert total_pages == 2
+            self.printer = printer
+            self.render_callback = render_callback
+            previews.append(self)
+
+        def exec(self) -> int:
+            self.render_callback(self.printer, None)
+            changed_rows = [
+                replace(window.item_model.row_at(row), name="プレビュー中の変更")
+                for row in range(window.item_model.rowCount())
+            ]
+            window.item_model.set_rows(changed_rows)
+            self.render_callback(self.printer, [2])
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(main_window_module, "PrintPreviewDialog", FakePreviewDialog)
+
+    window.print_labels_action.trigger()
+
+    assert settings_reads == [settings_path]
+    assert label_dialog_items == expected_ids
+    assert len(previews) == 1
+    assert len(render_calls) == 2
+    assert [call[5] for call in render_calls] == [None, [2]]
+    assert all(call[3:5] == (1.2, -0.4) for call in render_calls)
+    assert all(
+        [placement.item_id for placement in call[1]] == expected_ids for call in render_calls
+    )
+    assert all(
+        [call[2][item_id].name for item_id in expected_ids] == expected_names
+        for call in render_calls
+    )
 
 
 def test_purchase_page_action_requires_selected_item_with_url(window_with_items) -> None:
