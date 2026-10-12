@@ -10,10 +10,11 @@ from PySide6.QtCore import QMarginsF, QPointF, Qt
 from PySide6.QtGui import QFont, QPagedPaintDevice, QPageLayout, QPageSize
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
 from inventory_manager_mini.core.models import ItemRow, PurchaseInfo
-from inventory_manager_mini.ui.printing import fonts, label_renderer
+from inventory_manager_mini.ui import error_handling
+from inventory_manager_mini.ui.printing import fonts, label_renderer, preview_dialog
 from inventory_manager_mini.ui.printing.layout import (
     LABEL_72212,
     LabelEntry,
@@ -414,3 +415,335 @@ def test_label_print_dialog_does_not_retain_settings_between_instances(qtbot) ->
 
     assert second.quantity_spins[0].value() == 1
     assert second.first_page_slots == list(range(12))
+
+
+def test_print_preview_locks_page_layout_and_replaces_native_actions(qtbot) -> None:
+    from PySide6.QtGui import QPageLayout, QPageSize
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    printer = _pdf_printer(Path("preview.pdf"))
+    calls: list[tuple[object, object]] = []
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        3,
+        lambda device, pages: calls.append((device, pages)),
+    )
+    qtbot.addWidget(dialog)
+
+    actions = dialog._toolbar.actions()
+    assert actions[20] is dialog.print_action
+    assert dialog.print_action.objectName() == "managedPrintAction"
+    assert all(not actions[index].isVisible() for index in (7, 8, 21))
+    assert all(not actions[index].isEnabled() for index in (7, 8, 21))
+
+    changed_layout = QPageLayout(
+        QPageSize(QPageSize.PageSizeId.Letter),
+        QPageLayout.Orientation.Landscape,
+        QMarginsF(5, 5, 5, 5),
+        QPageLayout.Unit.Millimeter,
+    )
+    assert printer.setPageLayout(changed_layout)
+    printer.setFullPage(False)
+    dialog.paintRequested.emit(printer)
+
+    actual = printer.pageLayout()
+    margins = actual.margins(QPageLayout.Unit.Millimeter)
+    assert calls == [(printer, None)]
+    assert actual.pageSize().id() == QPageSize.PageSizeId.A4
+    assert actual.orientation() == QPageLayout.Orientation.Portrait
+    assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (0, 0, 0, 0)
+    assert printer.fullPage()
+
+
+def test_print_preview_fits_work_area(qtbot) -> None:
+    from PySide6.QtGui import QPageLayout
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    dialog = PrintPreviewDialog(
+        _pdf_printer(Path("preview-work-area.pdf")),
+        QPageLayout.Orientation.Portrait,
+        1,
+        lambda _device, _pages: None,
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(10)
+
+    assert_fits_work_area(dialog)
+
+
+@pytest.mark.parametrize(
+    ("print_range", "first_page", "last_page", "expected"),
+    [
+        ("all", 1, 4, None),
+        ("range", 2, 3, [2, 3]),
+        ("range", 4, 4, [4]),
+    ],
+)
+def test_print_preview_passes_selected_original_page_numbers(
+    monkeypatch,
+    qtbot,
+    print_range: str,
+    first_page: int,
+    last_page: int,
+    expected: list[int] | None,
+) -> None:
+    from PySide6.QtGui import QPageLayout
+    from PySide6.QtPrintSupport import QAbstractPrintDialog
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    enum_range = QAbstractPrintDialog.PrintRange
+    selected_range = enum_range.AllPages if print_range == "all" else enum_range.PageRange
+
+    class FakePrintDialog:
+        def __init__(self, printer, _parent) -> None:
+            self.printer = printer
+            self.options = {}
+
+        def setMinMax(self, minimum, maximum) -> None:
+            self.minimum, self.maximum = minimum, maximum
+
+        def setFromTo(self, first, last) -> None:
+            self.from_page, self.to_page = first, last
+
+        def setOption(self, option, enabled) -> None:
+            self.options[option] = enabled
+
+        def setPrintRange(self, print_range) -> None:
+            self.configured_range = print_range
+
+        def exec(self) -> int:
+            changed_layout = QPageLayout(
+                QPageSize.PageSizeId.Letter,
+                QPageLayout.Orientation.Landscape,
+                QMarginsF(4, 4, 4, 4),
+                QPageLayout.Unit.Millimeter,
+            )
+            assert self.printer.setPageLayout(changed_layout)
+            self.printer.setFullPage(False)
+            return QDialog.DialogCode.Accepted
+
+        def printRange(self):
+            return selected_range
+
+        def fromPage(self) -> int:
+            return first_page
+
+        def toPage(self) -> int:
+            return last_page
+
+    fake_dialogs: list[FakePrintDialog] = []
+    original_init = FakePrintDialog.__init__
+
+    def record_fake_dialog(self, printer, parent) -> None:
+        original_init(self, printer, parent)
+        fake_dialogs.append(self)
+
+    monkeypatch.setattr(FakePrintDialog, "__init__", record_fake_dialog)
+    monkeypatch.setattr(preview_dialog, "QPrintDialog", FakePrintDialog)
+    printer = _pdf_printer(Path("preview-range.pdf"))
+    calls: list[tuple[object, object, bool]] = []
+
+    def render(device, page_numbers) -> None:
+        calls.append((device, page_numbers, device.fullPage()))
+
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Landscape,
+        4,
+        render,
+    )
+    qtbot.addWidget(dialog)
+    dialog.print_action.trigger()
+
+    assert calls == [(printer, expected, True)]
+    fake_dialog = fake_dialogs[0]
+    assert (fake_dialog.minimum, fake_dialog.maximum) == (1, 4)
+    assert (fake_dialog.from_page, fake_dialog.to_page) == (1, 4)
+    assert fake_dialog.configured_range == enum_range.AllPages
+    assert fake_dialog.options[QAbstractPrintDialog.PrintDialogOption.PrintPageRange]
+    assert not fake_dialog.options[QAbstractPrintDialog.PrintDialogOption.PrintSelection]
+    assert not fake_dialog.options[QAbstractPrintDialog.PrintDialogOption.PrintCurrentPage]
+
+    actual = printer.pageLayout()
+    margins = actual.margins(QPageLayout.Unit.Millimeter)
+    assert actual.pageSize().id() == QPageSize.PageSizeId.A4
+    assert actual.orientation() == QPageLayout.Orientation.Landscape
+    assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("failure", ["page_layout", "full_page"])
+def test_print_preview_does_not_render_when_page_configuration_fails(
+    monkeypatch, qtbot, failure: str
+) -> None:
+    from PySide6.QtGui import QPageLayout
+    from PySide6.QtPrintSupport import QPrinter
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    messages: list[tuple[object, ...]] = []
+    monkeypatch.setattr(error_handling.QMessageBox, "critical", lambda *args: messages.append(args))
+    printer = _pdf_printer(Path(f"preview-{failure}-error.pdf"))
+    calls: list[object] = []
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        1,
+        lambda device, _pages: calls.append(device),
+    )
+    qtbot.addWidget(dialog)
+
+    if failure == "page_layout":
+        monkeypatch.setattr(QPrinter, "setPageLayout", lambda _printer, _layout: False)
+    else:
+        monkeypatch.setattr(QPrinter, "setFullPage", lambda _printer, _enabled: None)
+
+    dialog.paintRequested.emit(printer)
+
+    assert calls == []
+    assert len(messages) == 1
+
+
+def test_print_preview_cancel_does_not_render(monkeypatch, qtbot) -> None:
+    from PySide6.QtGui import QPageLayout
+    from PySide6.QtWidgets import QDialog
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    class CancelledPrintDialog:
+        def __init__(self, _printer, _parent) -> None:
+            pass
+
+        def setMinMax(self, _minimum, _maximum) -> None:
+            pass
+
+        def setFromTo(self, _first, _last) -> None:
+            pass
+
+        def setOption(self, _option, _enabled) -> None:
+            pass
+
+        def setPrintRange(self, _print_range) -> None:
+            pass
+
+        def exec(self) -> int:
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(preview_dialog, "QPrintDialog", CancelledPrintDialog)
+    calls: list[object] = []
+    dialog = PrintPreviewDialog(
+        _pdf_printer(Path("preview-cancel.pdf")),
+        QPageLayout.Orientation.Portrait,
+        2,
+        lambda device, _pages: calls.append(device),
+    )
+    qtbot.addWidget(dialog)
+
+    dialog.print_action.trigger()
+
+    assert calls == []
+
+
+def test_print_preview_rejects_invalid_page_range(qtbot) -> None:
+    from PySide6.QtGui import QPageLayout
+    from PySide6.QtPrintSupport import QAbstractPrintDialog, QPrintDialog
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    class InvalidRangeDialog:
+        def printRange(self):
+            return QAbstractPrintDialog.PrintRange.PageRange
+
+        def fromPage(self) -> int:
+            return 0
+
+        def toPage(self) -> int:
+            return 2
+
+    dialog = PrintPreviewDialog(
+        _pdf_printer(Path("preview-invalid-range.pdf")),
+        QPageLayout.Orientation.Portrait,
+        2,
+        lambda _device, _pages: None,
+    )
+    qtbot.addWidget(dialog)
+
+    with pytest.raises(ValueError, match="範囲が不正"):
+        dialog._selected_page_numbers(cast(QPrintDialog, InvalidRangeDialog()))
+
+
+def test_print_preview_paint_signal_reports_failure_once_and_closes_later(
+    monkeypatch, qtbot, caplog
+) -> None:
+    from PySide6.QtGui import QPageLayout
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    messages: list[tuple[object, ...]] = []
+    monkeypatch.setattr(error_handling.QMessageBox, "critical", lambda *args: messages.append(args))
+    printer = _pdf_printer(Path("preview-error.pdf"))
+    draw_count = 0
+
+    def render(_device, _pages) -> None:
+        nonlocal draw_count
+        draw_count += 1
+        raise RuntimeError("描画テスト失敗")
+
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        1,
+        render,
+    )
+    qtbot.addWidget(dialog)
+    rejected: list[bool] = []
+    dialog.rejected.connect(lambda: rejected.append(True))
+
+    dialog.paintRequested.emit(printer)
+    dialog.paintRequested.emit(printer)
+    dialog.print_action.trigger()
+    qtbot.wait(10)
+
+    assert draw_count == 1
+    assert len(messages) == 1
+    assert "予期しないエラー" in str(messages[0][2])
+    assert "描画テスト失敗" in caplog.text
+    assert rejected == [True]
+
+
+def test_print_preview_aborts_failed_print_without_duplicate_notification(
+    monkeypatch, qtbot, caplog
+) -> None:
+    from PySide6.QtGui import QPageLayout
+    from PySide6.QtPrintSupport import QPrinter
+
+    from inventory_manager_mini.ui.printing.preview_dialog import PrintPreviewDialog
+
+    messages: list[tuple[object, ...]] = []
+    abort_calls: list[QPrinter] = []
+    monkeypatch.setattr(error_handling.QMessageBox, "critical", lambda *args: messages.append(args))
+    monkeypatch.setattr(QPrinter, "abort", lambda printer: abort_calls.append(printer) or False)
+    printer = _pdf_printer(Path("preview-abort.pdf"))
+
+    def render(_device, _pages) -> None:
+        raise RuntimeError("実印刷失敗")
+
+    dialog = PrintPreviewDialog(
+        printer,
+        QPageLayout.Orientation.Portrait,
+        1,
+        render,
+    )
+    qtbot.addWidget(dialog)
+    dialog._printing = True
+
+    assert not dialog._render_safely(printer, [1])
+    qtbot.wait(10)
+
+    assert abort_calls == [printer]
+    assert len(messages) == 1
+    assert "中止できませんでした" in caplog.text
