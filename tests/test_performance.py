@@ -18,9 +18,9 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
-from inventory_manager_mini.core.models import PeriodKind, Reason
+from inventory_manager_mini.core.models import ItemFilter, PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
-from inventory_manager_mini.core.services import InventoryService
+from inventory_manager_mini.core.services import BackupService, InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
 from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
@@ -53,6 +53,18 @@ def performance_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
         ensure_positive_active_quantities=True,
     )
     return db_path
+
+
+def _copy_performance_database(source_path: Path, destination_path: Path) -> Path:
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    source = connect(source_path)
+    destination = sqlite3.connect(destination_path, autocommit=True)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()
+        source.close()
+    return destination_path
 
 
 class PaintProbe(QObject):
@@ -285,8 +297,9 @@ def test_alert_panel_refresh_with_one_thousand_low_stock_items(
         conn.close()
 
 
-def test_service_outflow_save_with_large_history(performance_db: Path) -> None:
-    conn = connect(performance_db)
+def test_service_outflow_save_with_large_history(performance_db: Path, tmp_path: Path) -> None:
+    db_path = _copy_performance_database(performance_db, tmp_path / "outflow" / "inventory.db")
+    conn = connect(db_path)
     try:
         service = InventoryService(conn)
         assert conn.execute("SELECT quantity FROM items WHERE id = 1").fetchone()[0] > 0
@@ -300,8 +313,9 @@ def test_service_outflow_save_with_large_history(performance_db: Path) -> None:
         conn.close()
 
 
-def test_service_outflow_save_with_many_lots(performance_db: Path) -> None:
-    conn = connect(performance_db)
+def test_service_outflow_save_with_many_lots(performance_db: Path, tmp_path: Path) -> None:
+    db_path = _copy_performance_database(performance_db, tmp_path / "many-lots" / "inventory.db")
+    conn = connect(db_path)
     try:
         service = InventoryService(conn)
         item_id = 1
@@ -358,6 +372,54 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
         print(
             "大規模履歴のレポート: "
             + "、".join(f"{label} {elapsed:.3f} 秒" for label, elapsed in results)
+        )
+    finally:
+        conn.close()
+
+
+def test_csv_backup_and_restore_preparation_with_large_database(
+    performance_db: Path, tmp_path: Path
+) -> None:
+    db_path = _copy_performance_database(performance_db, tmp_path / "benchmark" / "inventory.db")
+    conn = connect(db_path)
+    try:
+        reports = ReportService(conn)
+        backup_service = BackupService(conn)
+        output_dir = tmp_path / "csv"
+        output_dir.mkdir()
+
+        started_at = time.perf_counter()
+        items_path = output_dir / "items.csv"
+        reports.export_items_csv(items_path, ItemFilter())
+        items_elapsed = time.perf_counter() - started_at
+        assert items_path.stat().st_size > 0
+
+        started_at = time.perf_counter()
+        history_path = output_dir / "history.csv"
+        reports.export_history_csv(history_path)
+        history_elapsed = time.perf_counter() - started_at
+        assert history_path.stat().st_size > 0
+
+        started_at = time.perf_counter()
+        backup_path = backup_service.create_current_backup(tmp_path / "backups")
+        backup_elapsed = time.perf_counter() - started_at
+        assert backup_path.is_file()
+
+        started_at = time.perf_counter()
+        prepared = backup_service.prepare_restore(backup_path)
+        restore_preparation_elapsed = time.perf_counter() - started_at
+        try:
+            assert prepared.item_count == 5000
+            assert prepared.movement_count >= 100000
+        finally:
+            prepared.close()
+
+        print(
+            f"品目 {prepared.item_count:,}・履歴 {prepared.movement_count:,} 件: "
+            f"在庫一覧 CSV {items_elapsed:.3f} 秒、"
+            f"履歴 CSV {history_elapsed:.3f} 秒、"
+            f"バックアップ {backup_elapsed:.3f} 秒、"
+            f"復元準備 {restore_preparation_elapsed:.3f} 秒"
         )
     finally:
         conn.close()

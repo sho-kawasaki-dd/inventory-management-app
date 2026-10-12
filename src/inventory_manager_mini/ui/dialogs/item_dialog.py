@@ -174,7 +174,8 @@ class ItemDialog(QDialog):
         self.button_box.accepted.connect(self._save)
         self.button_box.rejected.connect(self.reject)
         outer.addWidget(self.button_box)
-        self.resize(760, 700)
+        available = self.screen().availableGeometry()
+        self.resize(min(760, available.width() - 24), min(640, available.height() - 80))
 
     @staticmethod
     def _integer_edit(minimum: int, maximum: int) -> QLineEdit:

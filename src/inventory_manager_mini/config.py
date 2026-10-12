@@ -17,6 +17,7 @@ class AppPaths:
     db_path: Path
     backup_dir: Path
     lock_path: Path
+    ui_settings_path: Path
     log_dir: Path
     log_path: Path
 
@@ -27,6 +28,7 @@ class AppPaths:
             db_path=data_dir / "inventory.db",
             backup_dir=data_dir / "backups",
             lock_path=data_dir / "inventory.lock",
+            ui_settings_path=data_dir / "ui_settings.json",
             log_dir=log_dir,
             log_path=log_dir / "app.log",
         )
