@@ -1,11 +1,13 @@
 # Phase 8 実装計画書(パッケージング)
 
 - 作成日: 2026-10-13
-- ステータス: 計画(未着手)
+- ステータス: 実装中(8a)
 - 作業ブランチ: `feature/phase8-packaging`(8a)→ `feature/phase8-release-workflow`(8b)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(2.1・2.2・2.3・3.5・7.2・8・9・9.2・10・11 章)、[実装計画書_Phase2](実装計画書_Phase2.md)(4.2 試験ビルドの結果)、[実装計画書_Phase7](実装計画書_Phase7.md)(試し刷りの未実施項目)
 - 改訂履歴: 2026-10-13 初版。発行元・ライセンス・アイコン・インストールモード・タグ規則・成果物・凍結版の検査範囲・PR 分割(2 PR)を決定
   - 2026-10-13 レビュー反映。Qt Charts を含むアプリ全体の GPLv3 配布、対応ソース提供、法的通知の最小限の UI 変更、実データ保護、外部コマンドの失敗検出、Inno Setup・CI・版数検査・更新検証の計 11 論点を修正
+  - 2026-10-13 8a F 対応。README に Windows 配布・ビルド・ライセンス・対応ソース・検証データ保護の手順を追加
+  - 2026-10-13 8a 残務対応。不要な Qt モジュール・プラグイン・翻訳を spec で除外して対応ソースの範囲を絞り(2.3)、依存ソースを git 管理せず取得スクリプトと SHA256 検証で確保する方式に決定。棚卸し・通知・ソース案内・失敗系検証を実施
 
 ---
 
@@ -97,6 +99,8 @@
 | 更新検証 | 同版数の再インストールと異版数の更新を必須とし、rc2 を作成した場合は rc1 からの異ビルド置換も確認する |
 | デスクトップのショートカット | 任意タスク(既定オフ) |
 | UPX | 使用しない |
+| 同梱の絞り込み | アプリが使わない Qt6Pdf・Qml/Quick/QmlModels/QmlMeta/QmlWorkerScript・VirtualKeyboard・Network(QtNetwork.pyd・TLS プラグイン)・opengl32sw.dll・qtimageformats 由来と qpdf のプラグイン・platforms の qdirect2d/qminimal/qoffscreen・translations を spec の `is_bundled` で除外する(232 件・約 127.7 MiB → 111 件・約 78.5 MiB。ライセンス文書の追加前)。`scripts/check_bundle.py` が範囲外の Qt ファイルを検出して失敗させる。対応ソースは qtbase・qtsvg・qtcharts・pyside-setup・PyInstaller・hooks-contrib に絞る |
+| 依存ソースの置き場 | Git 管理せず `.gitignore`(`manifest.json` だけコミット)。`scripts/fetch_dependency_sources.py` が `manifest.json` の https URL から取得し SHA256 を検証する。Release ビルドは取得済みのソースを `-sources.zip` に同梱する(8b の CI でも同スクリプトを実行する) |
 | 出力ファイル名 | `inventory-manager-mini-<版数>[-rc<N>]-setup.exe`、アプリソースは同じ版数・接尾辞の `-sources.zip`、構成一覧は `-manifest.json`。必要な依存ソースも添付する。各ファイルの SHA256 は同名に `.sha256` を付ける。rc の接尾辞は `build.ps1` の `-Suffix` で渡す |
 
 ### 2.4 対象外
@@ -123,98 +127,104 @@
 
 #### A. ライセンス・メタデータ
 
-- [ ] `LICENSE`(MIT、`Copyright (c) 2026 IKinoCore`)を追加する
-- [ ] `packaging/licenses/GPL-3.0.txt` に GPLv3 の英語原文を追加する。`packaging/DISTRIBUTION_LICENSE.txt` に自作コードの MIT とアプリ全体の GPLv3 配布の関係、無保証・再配布条件を日本語で説明し、GPLv3 原文を含める
-- [ ] `pyproject.toml` に `license = "MIT"`・`license-files`・`authors = [{ name = "IKinoCore" }]` を追加する。自作コードの `LICENSE` と配布条件・必要なライセンス文書を `license-files` に含め、`uv lock`・`uv sync --locked` を確認する
-- [ ] 実配布ファイルを棚卸しする。Qt Charts、他の Qt モジュール・プラグイン、PySide6・shiboken6、Python と同梱ライブラリ、platformdirs、PyInstaller の bootloader と例外条項、アイコン等について名称・実版・著作権・ライセンス・変更有無・対応ソースの要否と入手先を記録する
-- [ ] `packaging/THIRD_PARTY_NOTICES.txt` を棚卸し結果に基づいて作成し、各ライセンス本文を `packaging/licenses/` にそろえる。元の通知と例外条項を保持し、GPLv3 との互換性と同梱条件を確認する
-- [ ] `packaging/SOURCE_CODE.txt` に版別の対応ソースの取得方法を記載する。アプリのソース・SQL・必要資産・`pyproject.toml`・`uv.lock`・spec・Inno Setup・ビルドスクリプト・ビルド/インストール手順、および必要な依存部分の対応ソースを提供対象にする。System Libraries 等の除外は理由を記録する
-- [ ] Qt・PySide6 等の実配布バイナリに対応するソースと必要なビルド設定・変更内容を確保する。上流 URL の案内だけに依存せず、自管理の Release に必要な依存ソースを添付する。ソースと wheel の版対応を確認する
-- [ ] 配布構成一覧(`-manifest.json`)にアプリ版・タグ・コミット SHA、依存の実版、各ソース成果物との対応、ビルドツールの実版を記録する。実データ・ログ・秘密情報は成果物に含めない
-- [ ] `ui/main_window.py` のバージョン情報画面に著作権、無保証、GPLv3 で再配布可能なこと、同梱ライセンスの参照方法を追加する。通常実行・凍結版でローカルの本文を参照できる配置を決め、`tests/test_main_window.py` に表示と参照の検証を追加する。業務処理や多重起動制御は変更しない
+- [x] `LICENSE`(MIT、`Copyright (c) 2026 IKinoCore`)を追加する
+- [x] `packaging/licenses/GPL-3.0.txt` に GPLv3 の英語原文を追加する。`packaging/DISTRIBUTION_LICENSE.txt` に自作コードの MIT とアプリ全体の GPLv3 配布の関係、無保証・再配布条件を日本語で説明し、GPLv3 原文を含める
+- [x] `pyproject.toml` に `license = "MIT"`・`license-files`・`authors = [{ name = "IKinoCore" }]` を追加する。自作コードの `LICENSE` と配布条件・必要なライセンス文書を `license-files` に含め、`uv lock`・`uv sync --locked` を確認する
+- [x] 実配布ファイルを棚卸しする。Qt Charts、他の Qt モジュール・プラグイン、PySide6・shiboken6、Python と同梱ライブラリ、platformdirs、PyInstaller の bootloader と例外条項、アイコン等について名称・実版・著作権・ライセンス・変更有無・対応ソースの要否と入手先を記録する(結果は `packaging/THIRD_PARTY_NOTICES.txt`。アイコンは未配置のため対象外)
+- [x] `packaging/THIRD_PARTY_NOTICES.txt` を棚卸し結果に基づいて作成し、各ライセンス本文を `packaging/licenses/` にそろえる。元の通知と例外条項を保持し、GPLv3 との互換性と同梱条件を確認する(`Qt-third-party-licenses.txt`・`Apache-2.0.txt`・`Python-LICENSE.txt`・`libffi-LICENSE.txt` を追加。Microsoft ランタイムの System Libraries 該当性は法務的確認が未了と明記)
+- [x] `packaging/SOURCE_CODE.txt` に版別の対応ソースの取得方法を記載する。アプリのソース・SQL・必要資産・`pyproject.toml`・`uv.lock`・spec・Inno Setup・ビルドスクリプト・ビルド/インストール手順、および必要な依存部分の対応ソースを提供対象にする。System Libraries 等の除外は理由を記録する
+- [x] Qt・PySide6 等の実配布バイナリに対応するソースと必要なビルド設定・変更内容を確保する。上流 URL の案内だけに依存せず、自管理の Release に必要な依存ソースを添付する。ソースと wheel の版対応を確認する(qtbase・qtsvg・qtcharts・pyside-setup 6.11.2、PyInstaller 6.22.3、hooks-contrib 2026.8 を `packaging/dependency-sources/manifest.json` に URL・SHA256 付きで記録。Qt のビルド設定は qtbase の `coin/` 等の上流公開情報に依存し、Qt・PyInstaller は改変なし)
+- [x] 配布構成一覧(`-manifest.json`)にアプリ版・タグ・コミット SHA、依存の実版、各ソース成果物との対応、ビルドツールの実版を記録する。実データ・ログ・秘密情報は成果物に含めない
+- [x] `ui/main_window.py` のバージョン情報画面に著作権、無保証、GPLv3 で再配布可能なこと、同梱ライセンスの参照方法を追加する。通常実行・凍結版でローカルの本文を参照できる配置を決め、`tests/test_main_window.py` に表示と参照の検証を追加する。業務処理や多重起動制御は変更しない
 - [ ] 法的通知の表示とオフラインでの本文参照を確認し、ソースを取得して変更・ビルド・インストールできる手順まで検証する。バイト単位で同一のバイナリを生成することは要件にしない
+  - 実施済み: 提供ソース(`-sources.zip`)を一時ディレクトリへ展開し、`uv sync --locked`・依存ソースの SHA256 検証・`build.ps1` でインストーラーまで生成できることを確認。未実施: 法的通知 UI の表示とオフライン参照(実機の手動確認)、そのインストーラーでのインストール(隔離環境)
 
 ライセンス判断の根拠は [Qt Charts のライセンス](https://doc.qt.io/qt-6/qtcharts-index.html#licenses)、[Qt for Python のライセンス](https://doc.qt.io/qtforpython-6/licenses.html)、[GPLv3 第 1・5・6 条](https://www.gnu.org/licenses/gpl-3.0.html)を確認する。対応完了は通知ファイルの存在だけで判断せず、実配布構成・適用条件・対応ソース提供を確認して判定する。
 
 #### B. PyInstaller spec
 
-- [ ] `packaging/inventory-manager-mini.spec` を作成する(パスは `SPECPATH` 基準)
-  - [ ] エントリは `src/inventory_manager_mini/__main__.py`
-  - [ ] `collect_data_files('inventory_manager_mini.db')` と `copy_metadata('inventory-manager-mini')`
-  - [ ] hiddenimports: `PySide6.QtCharts`・`PySide6.QtPrintSupport`・`collect_submodules('inventory_manager_mini')`
-  - [ ] `console=False`・`upx=False`・`name='inventory-manager-mini'`
-  - [ ] 通常実行・凍結版の法的通知 UI が参照する資源を同梱する。onedir の `_internal` 構造は維持し、exe と同じ階層に置く `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/` はビルド後に D のスクリプトでコピーする
-  - [ ] `packaging/app.ico` が存在する場合のみ `icon` を指定する
-- [ ] 試験ビルドと同等の onedir 構成が `dist/staging/<ビルドID>/inventory-manager-mini/` に得られることをローカルで確認する
+- [x] `packaging/inventory-manager-mini.spec` を作成する(パスは `SPECPATH` 基準)
+  - [x] エントリは `src/inventory_manager_mini/__main__.py`
+  - [x] `collect_data_files('inventory_manager_mini.db')` と `copy_metadata('inventory-manager-mini')`
+  - [x] hiddenimports: `PySide6.QtCharts`・`PySide6.QtPrintSupport`・`collect_submodules('inventory_manager_mini')`
+  - [x] `console=False`・`upx=False`・`name='inventory-manager-mini'`
+  - [x] 通常実行・凍結版の法的通知 UI が参照する資源を同梱する。onedir の `_internal` 構造は維持し、exe と同じ階層に置く `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/` はビルド後に D のスクリプトでコピーする
+  - [x] `packaging/app.ico` が存在する場合のみ `icon` を指定する
+- [x] 試験ビルドと同等の onedir 構成が `dist/staging/<ビルドID>/inventory-manager-mini/` に得られることをローカルで確認する
 
 #### C. Inno Setup スクリプト
 
-- [ ] `packaging/inventory-manager-mini.iss` を作成する
-  - [ ] `AppId` の GUID を新規生成して固定する(以後変更しない。本書 7 章 #2)
-  - [ ] `AppName`・`AppPublisher=IKinoCore`・`AppVersion`(`/DAppVersion` で受け取る)・`OutputBaseFilename`(`/DOutputName` で受け取る)。onedir の入力先は `/DBundleDir`、出力先は `/O` で D の今回のビルド用パスを受け取る
-  - [ ] `PrivilegesRequired=admin`・`PrivilegesRequiredOverridesAllowed=dialog`・`DefaultDirName={autopf}\Inventory Manager mini`
-  - [ ] `ArchitecturesAllowed=x64compatible`・`ArchitecturesInstallIn64BitMode=x64compatible`・`MinVersion=10.0`
-  - [ ] `[Languages]` に `Japanese.isl`、`LicenseFile` に `packaging/DISTRIBUTION_LICENSE.txt`
-  - [ ] `[Files]` に `/DBundleDir` で指定された onedir の全ファイル(`recursesubdirs`、ライセンス・ソース案内を含む)
-  - [ ] `[Icons]` にスタートメニュー(`{autoprograms}`)と、`[Tasks]` の `desktopicon`(`Flags: unchecked`)
-  - [ ] `[Run]` にインストール後の起動(`postinstall skipifsilent nowait`)
-  - [ ] 更新前の `PrepareToInstall` と `InitializeUninstall` で、対象 exe・DLL を `RmRegisterResources` に登録して `RmGetList` で使用中のプロセスを取得する。検出失敗・実行中は処理を開始せず、終了後に再確認する。セッションは必ず解放する。アプリへの名前付き mutex 追加や `AppMutex` による代用は行わない
-  - [ ] 手動終了を促し、キャンセルできるようにする。サイレント実行では実行中・検出失敗を非ゼロ終了とログで通知する。`CloseApplications=no`・`RestartApplications=no` とし、独自の検出で確認してから処理する。強制終了と自動再起動は行わない
-  - [ ] `SetupIconFile` は `#if FileExists(...)` で `app.ico` の存在を判定し、存在する場合だけ設定する。`UninstallDisplayIcon={app}\inventory-manager-mini.exe` はアイコンの有無によらず設定する
-  - [ ] `[UninstallDelete]` を記述しない(ユーザーデータとログを残す)
-- [ ] 日本語の言語ファイルが Inno Setup 6 の標準に含まれることを確認する(含まれない場合は代替を計画書へ追記)
+- [x] `packaging/inventory-manager-mini.iss` を作成する
+  - [x] `AppId` の GUID を新規生成して固定する(以後変更しない。本書 7 章 #2)
+  - [x] `AppName`・`AppPublisher=IKinoCore`・`AppVersion`(`/DAppVersion` で受け取る)・`OutputBaseFilename`(`/DOutputName` で受け取る)。onedir の入力先は `/DBundleDir`、出力先は `/O` で D の今回のビルド用パスを受け取る
+  - [x] `PrivilegesRequired=admin`・`PrivilegesRequiredOverridesAllowed=dialog`・`DefaultDirName={autopf}\Inventory Manager mini`
+  - [x] `ArchitecturesAllowed=x64compatible`・`ArchitecturesInstallIn64BitMode=x64compatible`・`MinVersion=10.0`
+  - [x] `[Languages]` に `Japanese.isl`、`LicenseFile` に `packaging/DISTRIBUTION_LICENSE.txt`(Inno Setup は BOM なしの UTF-8 を ANSI と解釈するため、`.iss` と `DISTRIBUTION_LICENSE.txt` は UTF-8 BOM 付きで保存する)
+  - [x] `[Files]` に `/DBundleDir` で指定された onedir の全ファイル(`recursesubdirs`、ライセンス・ソース案内を含む)
+  - [x] `[Icons]` にスタートメニュー(`{autoprograms}`)と、`[Tasks]` の `desktopicon`(`Flags: unchecked`)
+  - [x] `[Run]` にインストール後の起動(`postinstall skipifsilent nowait`。管理者権限のインストーラーからアプリが管理者で起動しないよう `runasoriginaluser` も付与)
+  - [x] 更新前の `PrepareToInstall` と `InitializeUninstall` で、対象 exe・DLL を `RmRegisterResources` に登録して `RmGetList` で使用中のプロセスを取得する。検出失敗・実行中は処理を開始せず、終了後に再確認する。セッションは必ず解放する。アプリへの名前付き mutex 追加や `AppMutex` による代用は行わない
+  - [x] 手動終了を促し、キャンセルできるようにする。サイレント実行では実行中・検出失敗を非ゼロ終了とログで通知する。`CloseApplications=no`・`RestartApplications=no` とし、独自の検出で確認してから処理する。強制終了と自動再起動は行わない
+  - [x] `SetupIconFile` は `#if FileExists(...)` で `app.ico` の存在を判定し、存在する場合だけ設定する。`UninstallDisplayIcon={app}\inventory-manager-mini.exe` はアイコンの有無によらず設定する
+  - [x] `[UninstallDelete]` を記述しない(ユーザーデータとログを残す)
+- [x] 日本語の言語ファイルが Inno Setup 6 の標準に含まれることを確認する(含まれない場合は代替を計画書へ追記)。6.7.3 の `Languages\Japanese.isl` を確認済み
 - [ ] アイコンあり・なしの両方でコンパイルする。全ユーザー・自分のみの各モードで、同じユーザー・別ユーザーによる起動中の更新/削除、終了後の再試行、検出失敗、サイレント実行を隔離環境で確認する。検知できない条件があれば完了扱いにせず方式を再検討する
+  - 実施済み(開発 PC・一時ディレクトリ・`ping.exe` の複製を疑似 exe に使用): アイコンあり・なし・必須定義欠落のコンパイル、自分のみ(同じユーザー)でのサイレント更新(終了コード 7)・アンインストール(終了コード 1)の拒否と、終了後の更新・削除の成功、`RmGetList` による PID・名称の取得
+  - 未実施(隔離環境で実施): 全ユーザーモード、別ユーザーの起動中プロセスの検出可否、対話時の再試行・キャンセル、検出失敗(Restart Manager のエラー)
 
 #### D. ビルドスクリプト
 
-- [ ] `packaging/build.ps1` を作成する(引数: `-Version`、`-Suffix`(既定は空)、`-IsccPath`(既定は標準のインストール先))
-  - [ ] `uv run python scripts/check_release_version.py --version <版数> --suffix=<接尾辞>` で入力形式と `pyproject.toml` との一致を検査する。空接尾辞も明示して扱う
-  - [ ] `-IsccPath` が指す ISCC の実版を本書 7 章 #3 の固定版と照合し、不一致なら失敗させる。Python・PyInstaller・Qt・uv・ISCC の使用パスと実版を記録する
-  - [ ] 呼び出しごとに新しいビルドIDを生成し、`dist/staging/<ビルドID>/` に隔離して出力する。PyInstaller の `--distpath` と `--workpath` を今回用に指定し、既存の成果物を入力にしない
-  - [ ] `uv run pyinstaller --noconfirm --clean --distpath <今回のステージング先> --workpath build/<ビルドID> packaging/inventory-manager-mini.spec`
-  - [ ] A のライセンス・通知・ソース案内を onedir の exe と同じ階層にコピーし、`uv run python scripts/check_bundle.py <今回のonedir>` で同梱検査する
-  - [ ] `ISCC.exe /DAppVersion=<版数> /DOutputName=inventory-manager-mini-<版数><接尾辞>-setup /DBundleDir=<今回のonedir> /O<今回のステージング先> packaging/inventory-manager-mini.iss`
-  - [ ] 今回のアプリソースを `-sources.zip` として作成し、必要な依存ソースと構成一覧をそろえる。Release ビルドではタグのコミットとソースが一致することを確認し、未コミットの変更を混入させない。ローカル検証版は検証用と明記する
-  - [ ] 各配布ファイルの SHA256 を `<成果物>.sha256`(`ハッシュ  ファイル名` 形式)として出力し、構成一覧とソースの対応・必須ファイル・空ファイル・秘密情報の非混入を確認する
-  - [ ] `$ErrorActionPreference = 'Stop'` に加え、すべての外部コマンド(uv・ISCC・git 等)の直後に `$LASTEXITCODE` を確認して非ゼロなら中断する。後続ビルド・ハッシュ作成・成果物確定を実行しない
-  - [ ] 全工程成功後だけ `dist/releases/<ビルドID>/` に配布対象を確定し、成功した出力先を呼び出し元へ返す。失敗時のステージング先と過去の配布先はアップロード対象にしない
-- [ ] 成果物の出力先を `.gitignore` 済みのディレクトリ(`dist/`)に限定し、コミット対象に含めない
-- [ ] 正常終了と、版数検査・PyInstaller・同梱検査・ISCC・ソース準備の各失敗を検証する。失敗後に後続処理や成果物確定が走らず、古い成功成果物が残っていても配布対象にならないことを確認する
+- [x] `packaging/build.ps1` を作成する(引数: `-Version`、`-Suffix`(既定は空)、`-IsccPath`(既定は標準のインストール先))
+  - [x] `uv run python scripts/check_release_version.py --version <版数> --suffix=<接尾辞>` で入力形式と `pyproject.toml` との一致を検査する。空接尾辞も明示して扱う
+  - [x] `-IsccPath` が指す ISCC の実版を本書 7 章 #3 の固定版と照合し、不一致なら失敗させる。Python・PyInstaller・Qt・uv・ISCC の使用パスと実版を記録する
+  - [x] 呼び出しごとに新しいビルドIDを生成し、`dist/staging/<ビルドID>/` に隔離して出力する。PyInstaller の `--distpath` と `--workpath` を今回用に指定し、既存の成果物を入力にしない
+  - [x] `uv run pyinstaller --noconfirm --clean --distpath <今回のステージング先> --workpath build/<ビルドID> packaging/inventory-manager-mini.spec`
+  - [x] A のライセンス・通知・ソース案内を onedir の exe と同じ階層にコピーし、`uv run python scripts/check_bundle.py <今回のonedir>` で同梱検査する
+  - [x] `ISCC.exe /DAppVersion=<版数> /DOutputName=inventory-manager-mini-<版数><接尾辞>-setup /DBundleDir=<今回のonedir> /O<今回のステージング先> packaging/inventory-manager-mini.iss`
+  - [x] 今回のアプリソースを `-sources.zip` として作成し、必要な依存ソースと構成一覧をそろえる。依存ソースは `packaging/dependency-sources/manifest.json` (`schema_version=1`、`audit_status=complete`、`sources` の `component`・`version`・`path`・`sha256`) で列挙し、パス・版・ハッシュを検査する。Release ビルドではタグのコミットとソースが一致することを確認し、未コミットの変更を混入させない。ローカル検証版は検証用と明記する(Release 経路の git 検査は 8b の rc タグで検証する。依存ソースの実体は取得スクリプト `scripts/fetch_dependency_sources.py` で用意する)
+  - [x] 各配布ファイルの SHA256 を `<成果物>.sha256`(`ハッシュ  ファイル名` 形式)として出力し、構成一覧とソースの対応・必須ファイル・空ファイル・秘密情報の非混入を確認する
+  - [x] `$ErrorActionPreference = 'Stop'` に加え、すべての外部コマンド(uv・ISCC・git 等)の直後に `$LASTEXITCODE` を確認して非ゼロなら中断する。後続ビルド・ハッシュ作成・成果物確定を実行しない
+  - [x] 全工程成功後だけ `dist/releases/<ビルドID>/` に配布対象を確定し、成功した出力先を呼び出し元へ返す。失敗時のステージング先と過去の配布先はアップロード対象にしない
+- [x] 成果物の出力先を `.gitignore` 済みのディレクトリ(`dist/`)に限定し、コミット対象に含めない
+- [x] 正常終了と、版数検査・PyInstaller・同梱検査・ISCC・ソース準備の各失敗を検証する。失敗後に後続処理や成果物確定が走らず、古い成功成果物が残っていても配布対象にならないことを確認する(提供ソースを展開した一時コピーで実施。結果は 4 章)
 
 #### E. 検査スクリプトとテスト
 
-- [ ] `scripts/check_release_version.py`: `--tag` と `--version` を排他的な入力モードとする。タグは `^v([0-9]+\.[0-9]+\.[0-9]+)(-rc[1-9][0-9]*)?$`、ローカル版数は `^[0-9]+\.[0-9]+\.[0-9]+$`、`--suffix` は空または `^-rc[1-9][0-9]*$` とする。接尾辞はローカルモードだけで指定し、`tomllib` で読んだ `project.version` と基本版数を照合する
-- [ ] 版数検査の成功時は標準出力に JSON(`version`・`suffix`・真偽値の `is_prerelease`)を返し、失敗時は標準エラーに理由を表示して非ゼロ終了する。CI は JSON を解析し、`$env:GITHUB_OUTPUT` に UTF-8 で step outputs を書く。真偽値は `true`/`false` の文字列にし、式では文字列比較で判定する
-- [ ] `scripts/check_bundle.py`: 引数の onedir 出力に対し、次のファイルが存在し空でないことを検査する。欠落を全件列挙して非 0 で終了する
-  - [ ] `inventory-manager-mini.exe`
-  - [ ] `PySide6/QtCharts.pyd`・`PySide6/Qt6Charts.dll`
-  - [ ] `PySide6/QtPrintSupport.pyd`・`PySide6/Qt6PrintSupport.dll`
-  - [ ] `PySide6/plugins/platforms/qwindows.dll`
-  - [ ] `inventory_manager_mini/db/schema.sql`・`schema_v3.sql`
-  - [ ] `inventory_manager_mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致)
-  - [ ] exe と同じ階層の `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/GPL-3.0.txt` と棚卸しで必要と判定した各本文、および UI が参照する資源
-  - [ ] ライブラリ・SQL・dist-info は `_internal`、利用者向け文書は exe と同じ階層を基準に検査する。配置は実ビルドで確定する
-- [ ] `tests/test_check_release_version.py`: 正式/rc タグ、`v` なしのローカル版数と空/rc 接尾辞の合格、版数不一致・タグの `v` なし・ローカル版数の `v` あり・桁不足・接尾辞違い・rc0・入力モード競合の不合格、および JSON 出力を検証する(`tmp_path` の `pyproject.toml` を使う)
-- [ ] `tests/test_check_bundle.py`: `tmp_path` に疑似 onedir を作り、全件そろう場合の合格、1 件ずつ欠落・空ファイル・版数不一致の dist-info での不合格、通知/本文の欠落、および欠落の全件列挙を検証する
-- [ ] `scripts/` のモジュールをテストから読み込む方法は既存の `tests/test_dummy_data.py` に合わせる
-- [ ] 依存ルールのテスト(`tests/test_dependency_rules.py`)に影響しないこと(`scripts/` は `src/` から参照されない)を確認する
+- [x] `scripts/check_release_version.py`: `--tag` と `--version` を排他的な入力モードとする。タグは `^v([0-9]+\.[0-9]+\.[0-9]+)(-rc[1-9][0-9]*)?$`、ローカル版数は `^[0-9]+\.[0-9]+\.[0-9]+$`、`--suffix` は空または `^-rc[1-9][0-9]*$` とする。接尾辞はローカルモードだけで指定し、`tomllib` で読んだ `project.version` と基本版数を照合する
+- [x] 版数検査の成功時は標準出力に JSON(`version`・`suffix`・真偽値の `is_prerelease`)を返し、失敗時は標準エラーに理由を表示して非ゼロ終了する
+- [ ] CI は JSON を解析し、`$env:GITHUB_OUTPUT` に UTF-8 で step outputs を書く。真偽値は `true`/`false` の文字列にし、式では文字列比較で判定する(8b H)
+- [x] `scripts/check_bundle.py`: 引数の onedir 出力に対し、次のファイルが存在し空でないことを検査する。欠落を全件列挙して非 0 で終了する
+  - [x] `inventory-manager-mini.exe`
+  - [x] `PySide6/QtCharts.pyd`・`PySide6/Qt6Charts.dll`
+  - [x] `PySide6/QtPrintSupport.pyd`・`PySide6/Qt6PrintSupport.dll`
+  - [x] `PySide6/plugins/platforms/qwindows.dll`
+  - [x] `inventory_manager_mini/db/schema.sql`・`schema_v3.sql`
+  - [x] `inventory_manager_mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致。実ビルドの正規化名)
+  - [x] exe と同じ階層の `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/GPL-3.0.txt` と `packaging/licenses/` の各本文、および UI が参照する資源
+  - [x] ライブラリ・SQL・dist-info は `_internal`、利用者向け文書は exe と同じ階層を基準に検査する
+- [x] 実ビルドで配置を確定し、必要なら検査パスを調整する(G)
+- [x] `tests/test_check_release_version.py`: 正式/rc タグ、`v` なしのローカル版数と空/rc 接尾辞の合格、版数不一致・タグの `v` なし・ローカル版数の `v` あり・桁不足・接尾辞違い・rc0・入力モード競合の不合格、および JSON 出力を検証する(`tmp_path` の `pyproject.toml` を使う)
+- [x] `tests/test_check_bundle.py`: `tmp_path` に疑似 onedir を作り、全件そろう場合の合格、1 件ずつ欠落・空ファイル・版数不一致の dist-info での不合格、通知/本文の欠落、および欠落の全件列挙を検証する
+- [x] `scripts/` のモジュールをテストから読み込む方法は既存の `tests/test_dummy_data.py` に合わせる
+- [x] 依存ルールのテスト(`tests/test_dependency_rules.py`)に影響しないこと(`scripts/` は `src/` から参照されない)を確認する
 
 #### F. README・文書
 
-- [ ] `README.md` に次を追記する
-  - [ ] Windows のインストール手順(インストールモードの選択、署名なしのため SmartScreen が警告する場合は「詳細情報」から実行すること、SHA256 の確認方法)
-  - [ ] アンインストール後もデータ(`%APPDATA%\inventory-manager-mini`)とログが残ること、完全に消す場合の手動削除手順
-  - [ ] ローカルでのビルド手順(固定版 Inno Setup 6 の導入と照合、`packaging/build.ps1` の使い方、今回の出力先と異常終了の扱い)
-  - [ ] アイコン `packaging/app.ico` の配置先と、未配置時は既定アイコンになること
-  - [ ] 自作コードの MIT、Qt Charts と結合したアプリ全体の GPLv3、第三者ライセンスの区別、無保証・再配布条件、同梱本文の参照方法
-  - [ ] Release ごとの対応ソース・構成一覧の取得方法、依存を含む変更/ビルド/インストール手順、バイナリ提供中のソース保持方針。実データは公開対象ではないこと
-  - [ ] 開発 PC での一時保存先の指定と exe の直接起動、インストーラーの起動チェックを外す手順。インストーラー・復元後の起動への継承確認と既定保存先の検証を隔離環境で行う手順
-- [ ] 本書(Phase 8)のステータスを更新する
+- [x] `README.md` に次を追記する
+  - [x] Windows のインストール手順(インストールモードの選択、署名なしのため SmartScreen が警告する場合は「詳細情報」から実行すること、SHA256 の確認方法)
+  - [x] アンインストール後もデータ(`%APPDATA%\inventory-manager-mini`)とログが残ること、完全に消す場合の手動削除手順
+  - [x] ローカルでのビルド手順(固定版 Inno Setup 6 の導入と照合、`packaging/build.ps1` の使い方、今回の出力先と異常終了の扱い)
+  - [x] アイコン `packaging/app.ico` の配置先と、未配置時は既定アイコンになること
+  - [x] 自作コードの MIT、Qt Charts と結合したアプリ全体の GPLv3、第三者ライセンスの区別、無保証・再配布条件、同梱本文の参照方法
+  - [x] Release ごとの対応ソース・構成一覧の取得方法、依存を含む変更/ビルド/インストール手順、バイナリ提供中のソース保持方針。実データは公開対象ではないこと
+  - [x] 開発 PC での一時保存先の指定と exe の直接起動、インストーラーの起動チェックを外す手順。インストーラー・復元後の起動への継承確認と既定保存先の検証を隔離環境で行う手順
+- [x] 本書(Phase 8)のステータスを更新する
 
 #### G. ローカルでの確認
 
-- [ ] `packaging/build.ps1 -Version 0.1.0` が成功し、`check_bundle.py` が合格する
+- [x] `packaging/build.ps1 -Version 0.1.0` が成功し、`check_bundle.py` が合格する(実ビルドで dist-info 名が `inventory_manager_mini-<版数>.dist-info` と判明したため検査パスを修正、構成一覧の uv 版の抽出を修正)
 - [ ] 開発 PC ではインストーラーの起動チェックを外し、`INVENTORY_MANAGER_MINI_DATA_DIR` に一時ディレクトリを指定した同じシェルから exe を直接起動する。起動前に環境変数を確認し、起動後にバージョン情報の DB パスを照合する。インストーラーからの起動と復元後の再起動の検証は開発 PC で行わない
+  - 実施済み: 一時保存先を指定して exe を直接起動し、MainWindow の表示と一時保存先への `inventory.db`・`logs`・`backups` の作成を確認。未実施: バージョン情報の DB パス照合(手動)
 - [ ] 実データのない隔離環境で、一時保存先を指定したシェルからインストーラーを実行し、インストール後の起動・復元後の再起動に一時保存先が継承されることを DB パスで確認する。継承失敗時は原因を記録し、起動経路を修正・再検証する
 - [ ] 保存先上書きなしのインストールと初回起動は、実データのない Sandbox・VM 等でのみ確認する。起動前に検証環境と保存先を確認し、DB マイグレーションによる実データ変更を防ぐ
 - [ ] Phase 2 で未確認だった「品目登録の DB 保存」と「バージョン情報の表示内容(アプリ版・スキーマ版・DB パス)」を凍結版で確認する
@@ -280,14 +290,15 @@
 
 | 項目 | 結果 | 備考 |
 | --- | --- | --- |
-| ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 未実施 | |
-| `check_bundle.py` の合格 | 未実施 | |
-| インストーラーのサイズ | 未実施 | |
-| 凍結版での品目登録・バージョン情報 | 未実施 | |
-| 法的通知・ライセンス本文・対応ソースと依存の版対応 | 未実施 | |
-| 提供ソースからのビルド・インストール | 未実施 | |
+| ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 確認済み(ローカル検証版) | PyInstaller 6.22.3、Python 3.13.12、Qt/PySide6 6.11.2、Inno Setup 6.7.3、uv 0.11.32 |
+| `check_bundle.py` の合格 | 確認済み | `build.ps1 -Version 0.1.0` の工程内で合格 |
+| インストーラーのサイズ | 確認済み | 約 34.6 MB(`inventory-manager-mini-0.1.0-setup.exe`)。Qt 除外後は約 22.4 MB |
+| 凍結版での品目登録・バージョン情報 | 要再確認 | 初回は `ModuleNotFoundError: inventory_manager_mini.ui.dialogs.item_dialog`。`ui/dialogs` 等が `__init__.py` のない名前空間パッケージで `collect_submodules` に拾われないため。spec でソースを走査して全モジュールを hiddenimports に追加して修正。修正版での品目登録・バージョン情報は手動で確認する。Qt 除外後の exe でも一時保存先を指定して起動し、MainWindow 表示と DB 作成を確認した(ダッシュボード・印刷プレビュー・PDF 出力は手動確認が必要) |
+| Qt 除外後の依存 DLL 解決 | 確認済み | 残存する全 DLL/PYD/EXE のインポート表を pefile で検査し、同梱または System32 で解決できない DLL が 0 件であることを確認 |
+| 法的通知・ライセンス本文・対応ソースと依存の版対応 | 一部確認済み | 棚卸し・通知・本文・対応ソース(6 件、URL・SHA256 照合済み、Qt 公式の `.sha256` と一致)を整備。未実施: バージョン情報 UI での表示とオフライン参照の実機確認、Microsoft ランタイムの System Libraries 扱いの法務確認 |
+| 提供ソースからのビルド・インストール | ビルドまで確認済み | `-sources.zip` を一時ディレクトリに展開し、`uv sync --locked`・依存ソース検証・`build.ps1` でインストーラーまで生成(git なしでも検証ビルド可。展開先ではコミット SHA を `unknown` と記録)。インストールは隔離環境で未実施。ソース ZIP は約 77 MB、インストーラーは約 22 MB(Qt 除外後) |
 | 検証環境と一時保存先の継承・実データの非変更 | 未実施 | |
-| 外部コマンド失敗時の中断・古い成果物の非配布 | 未実施 | |
+| 外部コマンド失敗時の中断・古い成果物の非配布 | 確認済み | 提供ソース展開先の一時コピーで、版数不一致・spec を失敗させる PyInstaller・許可外の Qt DLL による同梱検査・[Files] に存在しないファイルを指定した ISCC・依存ソースの SHA256 不一致の各ケースが非ゼロ終了し、`dist/releases/` に新しいディレクトが作られなかった(ISCC に未知セクションを追記するだけでは失敗せず、成果物が確定されたため別ケースに変更)。正常終了時の出力パスのみが確定先となる |
 | 起動中の更新/削除(各モード・別ユーザー・サイレント・検出失敗) | 未実施 | |
 | 同版数再インストール・異版数更新・rc 異ビルド置換 | 未実施 | rc2 未作成時は異ビルド置換だけ対象外 |
 | rc タグでのワークフロー結果 | 未実施 | |
@@ -343,8 +354,8 @@
 | # | 項目 | 期限 | 回答 |
 | --- | --- | --- | --- |
 | 1 | Phase 7 の実用紙試し刷りと `LabelSpec` の確定(開発計画書 11 章 #1) | 正式タグ `v0.1.0` の作成前 | 未実施 |
-| 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | 着手時に生成して本書に記録する |
-| 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 着手時点の最新 6 系を確認して記録する。ローカル/CI とも実際に使用する ISCC を照合する |
+| 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | `{8B4D1CC3-78CB-452A-8D8F-2D81019811FC}`(`packaging/inventory-manager-mini.iss`。以後変更しない) |
+| 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 6.7.3 に固定する。ローカル/CI とも実際に使用する ISCC を照合する |
 | 4 | `packaging/app.ico` の用意 | rc 検証前(未配置でもビルドは可能) | 利用者が用意する |
 | 5 | 実配布構成と必要な依存の対応ソース・ライセンス条件の確定 | 8a の A・D 完了まで | 実ビルドの棚卸しで確定し、構成一覧・通知・ソース成果物へ記録する。必要なソースを確保できない場合は配布しない |
 | 6 | 法的通知 UI の本文参照用資源と通常実行/凍結版の配置 | 8a の A・B 完了まで | 最小限の UI 変更で確定する。業務処理・多重起動制御・ウィンドウアイコンは対象外のまま |

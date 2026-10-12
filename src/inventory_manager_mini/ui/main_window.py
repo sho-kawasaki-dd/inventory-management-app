@@ -1,4 +1,5 @@
 import logging
+import sys
 from collections.abc import Sequence
 from enum import Enum, auto
 from importlib import import_module
@@ -57,6 +58,12 @@ from inventory_manager_mini.ui.widgets.dashboard import DashboardWindow
 logger = logging.getLogger(__name__)
 
 MAX_REJECTION_REASONS = 20
+
+
+def _distribution_license_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "DISTRIBUTION_LICENSE.txt"
+    return Path(__file__).resolve().parents[3] / "packaging" / "DISTRIBUTION_LICENSE.txt"
 
 
 class ExitRequest(Enum):
@@ -924,9 +931,31 @@ class MainWindow(QMainWindow):
             self.context.data_bus.data_changed.emit()
 
     def _show_about(self) -> None:
-        QMessageBox.information(
-            self,
-            "バージョン情報",
-            f"Inventory Manager mini {self.context.app_version}\n"
-            f"スキーマ版: {self.context.schema_version}\nDB: {self.context.db_path}",
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("バージョン情報")
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setText(f"Inventory Manager mini {self.context.app_version}")
+        dialog.setInformativeText(
+            f"スキーマ版: {self.context.schema_version}\n"
+            f"DB: {self.context.db_path}\n\n"
+            "Copyright (C) 2026 IKinoCore\n"
+            "自作コードは MIT ライセンスです。Qt Charts を含む本アプリの配布物全体は "
+            "GNU General Public License version 3 (GPLv3) で配布します。GPLv3 の条件に従って "
+            "再配布・改変できます。\n"
+            "本ソフトウェアは無保証です。ライセンス全文・第三者通知・対応ソース案内は、"
+            "「ライセンス文書を開く」から参照できます。"
         )
+        dialog.addButton("ライセンス文書を開く", QMessageBox.ButtonRole.ActionRole).clicked.connect(
+            self._open_distribution_license
+        )
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+
+    def _open_distribution_license(self) -> None:
+        path = _distribution_license_path()
+        if not path.is_file() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self,
+                "ライセンス文書",
+                f"同梱のライセンス文書を開けませんでした。\n{path}",
+            )

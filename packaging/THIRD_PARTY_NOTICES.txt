@@ -1,0 +1,95 @@
+Inventory Manager mini - 第三者ソフトウェア通知
+==================================================
+
+Inventory Manager mini(自作コードは MIT)は、下記の第三者ソフトウェアと結合して配布します。
+Qt Charts を含むため、結合したアプリケーション全体を GNU GPL v3 で配布します(DISTRIBUTION_LICENSE.txt 参照)。
+各ライセンスの原文は同梱の licenses/ にあります。対応ソースは同じ Release の -sources.zip 内
+packaging/dependency-sources/ に、版と SHA256 を付けて収録しています(manifest.json 参照)。
+
+この一覧は、PyInstaller の onedir に実際に含まれる構成(packaging/inventory-manager-mini.spec で不要な Qt モジュール・
+プラグイン・翻訳を除外した後の構成)を、2026-10-13 に棚卸しした結果です。配布ごとの実版は同梱の構成一覧
+(-manifest.json)で確認してください。scripts/check_bundle.py は、この範囲を超える Qt の DLL・プラグインが
+バンドルに含まれると失敗します。
+
+1. Qt 6.11.2(Qt for Python / PySide6 6.11.2 の wheel に含まれるバイナリ。Qt を改変せずそのまま使用)
+------------------------------------------------------------------------------------------------
+著作権: Copyright (C) The Qt Company Ltd. and other contributors.
+選択したライセンス: GNU GPL v3(Qt Charts は GPLv3 または商用ライセンスのため)。本配布では商用ライセンスを使用しません。
+原文: licenses/GPL-3.0.txt
+
+| 同梱ファイル(_internal/PySide6/) | 由来する Qt モジュール | 対応ソース(依存ソース manifest の component) |
+| --- | --- | --- |
+| Qt6Core.dll・Qt6Gui.dll・Qt6Widgets.dll・Qt6OpenGL.dll・Qt6OpenGLWidgets.dll・Qt6PrintSupport.dll | qtbase | Qt-qtbase |
+| plugins/platforms/qwindows.dll・plugins/styles/qmodernwindowsstyle.dll | qtbase | Qt-qtbase |
+| plugins/imageformats/qgif.dll・qico.dll・qjpeg.dll | qtbase | Qt-qtbase |
+| Qt6Svg.dll・plugins/imageformats/qsvg.dll・plugins/iconengines/qsvgicon.dll | qtsvg | Qt-qtsvg |
+| Qt6Charts.dll | qtcharts | Qt-qtcharts |
+
+除外して同梱しないもの: Qt6Pdf(qtwebengine)、Qt6Qml/Quick/QmlModels/QmlMeta/QmlWorkerScript(qtdeclarative)、
+Qt6VirtualKeyboard、Qt6Network と TLS プラグイン、opengl32sw.dll(Mesa)、qtimageformats 由来のプラグイン
+(qicns・qtga・qtiff・qwbmp・qwebp)、qpdf プラグイン、翻訳(.qm)。アプリはこれらを使用しません。
+
+qtbase・qtsvg が内包する第三者コード(各原通知は対応ソースの qt_attribution.json と LICENSES/、本文は
+licenses/Qt-third-party-licenses.txt)。Qt の標準ビルドでこれらは Core/Gui/qjpeg/Svg に静的に取り込まれます。
+実バイナリの文字列からは zlib 1.3.2・PCRE2 10.47(Qt6Core)、libjpeg-turbo 3.2.0(qjpeg)を確認しました。
+その他は Qt の標準ビルドに基づき、実際に取り込まれているかをバイナリからは個別に確認していないため、
+取り込まれている可能性があるものとして全件を記載します。
+- zlib 1.3.2(Zlib)・libpng 1.6.58(Libpng/libpng-2.0)・libjpeg-turbo 3.2.0(IJG AND BSD-3-Clause)
+- FreeType 2(FTL。その一部に MIT・Zlib・MIT-open-group)・HarfBuzz 14.3.0(MIT)・PCRE2 10.47(BSD-3-Clause + PCRE2 例外、JIT は BSD-2-Clause)
+- double-conversion 3.4.0(BSD-3-Clause)・MD4C 0.5.3(MIT)・TinyCBOR 7.0(MIT)
+- md4・md5・sha1・sha3・blake2・siphash・rfc6234(CC0-1.0・BSD・パブリックドメイン各種)
+- Unicode Character Database 36・CLDR v48.2(Unicode-3.0)、Apache Tika MIME 定義(Apache-2.0)、tl::expected(CC0-1.0)
+- Emoji Segmenter(Apache-2.0)、Adobe Glyph List(BSD-3-Clause)、sRGB ICC プロファイル(ICC License)
+- Vulkan Memory Allocator・D3D12 Memory Allocator・D3D12 mipmap generator・Khronos の OpenGL/Vulkan ヘッダ(MIT・Apache-2.0 OR MIT)
+- FreeType 由来のラスタライザ(FTL OR GPL-2.0-only。FTL を選択)、Smooth Scaling Algorithm(BSD-2-Clause AND Imlib2)、X Server helper(X11 AND HPND)
+- Wintab API(LCS/Telegraphics)、easing(BSD-3-Clause)
+- XSVG(HPND-sell-variant。qtsvg)
+
+2. PySide6 6.11.2・shiboken6 6.11.2
+------------------------------------
+著作権: Copyright (C) The Qt Company Ltd. and other contributors。
+wheel metadata は LGPL-3.0-only、GPL-2.0-only、GPL-3.0-only または商用条件を提示しています。本配布では GPL-3.0-only を選択します。
+対応ソース: PySide6(pyside-setup-everywhere-src-6.11.2。shiboken6 を含む)。
+libshiboken・shibokensupport が内包する Python 由来のコードは PSF License(licenses/Python-LICENSE.txt)です。
+同梱: PySide6 の QtCore・QtGui・QtWidgets・QtPrintSupport・QtCharts・QtOpenGL・QtOpenGLWidgets の各 .pyd、
+pyside6.abi3.dll、shiboken6 ディレクトリ。QtNetwork.pyd は除外しています。
+
+3. Python 3.13.12 とその同梱ライブラリ(uv 管理の python-build-standalone 20260211)
+---------------------------------------------------------------------------------
+- CPython(python313.dll・python3.dll・base_library.zip・各 .pyd): PSF License。原文: licenses/Python-LICENSE.txt
+  (同ファイルに bzip2 1.0.8 のライセンスを含みます)。
+- OpenSSL 3.5.5(libcrypto-3-x64.dll・libssl-3-x64.dll): Apache-2.0。著作権: The OpenSSL Project Authors。原文: licenses/Apache-2.0.txt
+- SQLite 3.50.4(sqlite3.dll): パブリックドメイン(作者による次の趣旨の宣言: "May you do good and not evil. May you find forgiveness for yourself
+  and forgive others. May you share freely, never taking more than you give.")。
+- libffi(libffi-8.dll): MIT。原文: licenses/libffi-LICENSE.txt
+- bzip2(_bz2.pyd に内包)・liblzma/xz(_lzma.pyd に内包。パブリックドメインまたは 0BSD)。
+これらは緩やかな許諾条件で GPLv3 と互換性があり、対応ソースの提供義務を伴いません。通知と許諾文を保持するために本書と licenses/ を同梱します。
+
+4. Microsoft の再配布可能コンポーネント
+--------------------------------------
+VCRUNTIME140.dll・VCRUNTIME140_1.dll・MSVCP140.dll・MSVCP140_1.dll・MSVCP140_2.dll(Visual C++ ランタイム)、
+ucrtbase.dll・api-ms-win-*.dll(Universal CRT)。Microsoft が再配布を許諾しているコンポーネントで、
+本アプリは改変せずそのまま同梱します。GPLv3 第 1 条の System Libraries に該当すると扱い、対応ソースは提供しません。
+該当性の判断はこの配布の責任者が確認してください(Microsoft のライセンス条件は各製品の再配布条項に従います)。
+
+5. PyInstaller 6.22.3 と pyinstaller-hooks-contrib 2026.8
+-------------------------------------------------------
+- exe(bootloader)と実行時の起動コード: GPL-2.0-or-later と Bootloader Exception。例外文を含む原通知は licenses/PyInstaller-COPYING.txt。
+  本アプリは GPLv3 で配布するため、PyInstaller のソース(pyinstaller-6.22.3.tar.gz)も対応ソースに収録しています。
+- run-time hooks: Apache-2.0(licenses/Apache-2.0.txt)。hooks-contrib のライセンス原文: licenses/PyInstaller-hooks-contrib-LICENSE.txt
+  (pyinstaller_hooks_contrib-2026.8.tar.gz を対応ソースに収録)。
+- bootloader・hooks とも改変していません。
+
+6. platformdirs 4.12.2
+----------------------
+MIT。元の著作権表示・許諾文・無保証表示は licenses/platformdirs-MIT.txt に保持しています(アプリの PYZ に含まれます)。
+
+7. 確認が必要な事項
+--------------------
+- Qt を含む各バイナリが Qt Company の公開 wheel と同一であることは、wheel の版(構成一覧に記録)でのみ確認しています。
+  Qt のビルド設定は qtbase ソースの coin/ ディレクトリ等の上流公開情報に依存します。
+- Microsoft ランタイムを System Libraries として扱う判断は、法務的な確認が未了です。
+- 上記は技術的な棚卸しであり、法的助言ではありません。
+
+Qt のライセンス情報: https://doc.qt.io/qt-6/qtcharts-index.html#licenses
+Qt for Python のライセンス情報: https://doc.qt.io/qtforpython-6/licenses.html
