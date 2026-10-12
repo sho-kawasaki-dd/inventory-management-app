@@ -13,6 +13,7 @@ from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     REASON_LABELS,
+    DashboardResult,
     DashboardRow,
     GroupBy,
     ItemFilter,
@@ -36,7 +37,7 @@ _AggregateKey = tuple[int, int | None, int | None]
 def fiscal_year_of(local_day: date, start_month: int) -> int:
     if type(start_month) is not int or not 1 <= start_month <= 12:
         raise ValueError("年度開始月は 1〜12 の整数で指定してください")
-    return local_day.year - (local_day.month < start_month)
+    return local_day.year if local_day.month >= start_month else local_day.year - 1
 
 
 def escape_csv_cell(value: str) -> str:
@@ -114,8 +115,22 @@ class ReportService:
         purchaser_id: int | None = None,
         group_by: GroupBy = GroupBy.NONE,
     ) -> list[DashboardRow]:
-        if type(fiscal_year) is not int:
+        return list(
+            self.dashboard_result(fiscal_year, kind, client_id, purchaser_id, group_by).breakdown
+        )
+
+    def dashboard_result(
+        self,
+        fiscal_year: int | None,
+        kind: PeriodKind,
+        client_id: int | None = None,
+        purchaser_id: int | None = None,
+        group_by: GroupBy = GroupBy.NONE,
+    ) -> DashboardResult:
+        if fiscal_year is not None and type(fiscal_year) is not int:
             raise ValueError("年度は整数で指定してください")
+        if fiscal_year is None and kind is not PeriodKind.ANNUAL:
+            raise ValueError("年度を省略できるのは年次集計だけです")
         if client_id is not None and (type(client_id) is not int or client_id < 1):
             raise ValueError("クライアント ID は正の整数で指定してください")
         if purchaser_id is not None and (type(purchaser_id) is not int or purchaser_id < 1):
@@ -123,23 +138,65 @@ class ReportService:
 
         with read_transaction(self.conn):
             start_month = self.settings.get_fiscal_year_start_month()
-            periods = self._periods(fiscal_year, kind, start_month)
-            result = self._aggregate(periods, client_id, purchaser_id, group_by)
-        return result
+            if fiscal_year is None:
+                years = self._available_fiscal_years(start_month)
+                periods = [
+                    period
+                    for year in years
+                    for period in self._periods(year, PeriodKind.ANNUAL, start_month)
+                ]
+            else:
+                periods = self._periods(fiscal_year, kind, start_month)
+            client_name = self._filtered_master_name("clients", client_id)
+            purchaser_name = self._filtered_master_name("purchasers", purchaser_id)
+            return self._aggregate(
+                periods,
+                client_id,
+                client_name,
+                purchaser_id,
+                purchaser_name,
+                group_by,
+            )
+
+    def _available_fiscal_years(self, start_month: int) -> list[int]:
+        row = self.conn.execute(
+            "SELECT MIN(moved_at), MAX(moved_at) FROM stock_movements"
+        ).fetchone()
+        current_year = fiscal_year_of(local_today(self.clock(), self.tz), start_month)
+        if row is None or row[0] is None or row[1] is None:
+            return [current_year]
+        first_year = fiscal_year_of(local_date(str(row[0]), self.tz), start_month)
+        last_year = fiscal_year_of(local_date(str(row[1]), self.tz), start_month)
+        return sorted({*range(first_year, last_year + 1), current_year})
+
+    def _filtered_master_name(self, table: str, entity_id: int | None) -> str | None:
+        if entity_id is None:
+            return None
+        if table == "clients":
+            row = self.conn.execute(
+                "SELECT name FROM clients WHERE id = ?", (entity_id,)
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT name FROM purchasers WHERE id = ?", (entity_id,)
+            ).fetchone()
+        if row is None:
+            label = "クライアント" if table == "clients" else "発注主体"
+            raise ValidationError(f"{label}が見つかりません")
+        return str(row[0])
 
     def _periods(
         self, fiscal_year: int, kind: PeriodKind, start_month: int
     ) -> list[tuple[str, date, date, date]]:
-        fiscal_start_year = fiscal_year if start_month == 1 else fiscal_year - 1
-        fiscal_start = date(fiscal_start_year, start_month, 1)
+        fiscal_start = date(fiscal_year, start_month, 1)
         if kind is PeriodKind.ANNUAL:
-            fiscal_end = date(fiscal_start_year + 1, start_month, 1)
+            fiscal_end = date(fiscal_year + 1, start_month, 1)
             return [(f"{fiscal_year}年度", fiscal_start, fiscal_start, fiscal_end)]
 
         periods: list[tuple[str, date, date, date]] = []
         for offset in range(12):
             absolute_month = start_month - 1 + offset
-            year = fiscal_start_year + absolute_month // 12
+            year = fiscal_year + absolute_month // 12
             month = absolute_month % 12 + 1
             period_start = date(year, month, 1)
             period_end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
@@ -150,9 +207,11 @@ class ReportService:
         self,
         periods: list[tuple[str, date, date, date]],
         client_id: int | None,
+        client_name: str | None,
         purchaser_id: int | None,
+        purchaser_name: str | None,
         group_by: GroupBy,
-    ) -> list[DashboardRow]:
+    ) -> DashboardResult:
         ranges = [local_range_to_utc(start, end, self.tz) for _, _, start, end in periods]
         parameters: dict[str, object] = {
             "range_start": ranges[0][0],
@@ -181,6 +240,7 @@ class ReportService:
             parameters,
         ).fetchall()
 
+        totals: dict[int, list[int]] = {}
         aggregates: dict[_AggregateKey, list[int]] = {}
         names: dict[_AggregateKey, tuple[str | None, str | None]] = {}
         for row in rows:
@@ -192,20 +252,25 @@ class ReportService:
             row_client_name = str(row[2])
             row_purchaser_id = int(row[3])
             row_purchaser_name = str(row[4])
-            if group_by is GroupBy.NONE:
-                key = (period_index, None, None)
-            elif group_by is GroupBy.CLIENT:
-                key = (period_index, row_client_id, None)
-            elif group_by is GroupBy.PURCHASER:
-                key = (period_index, None, row_purchaser_id)
-            else:
-                key = (period_index, row_client_id, row_purchaser_id)
+            totals.setdefault(period_index, [0, 0, 0, 0, 0, 0])
+            total_values = totals[period_index]
+            key_client_id = (
+                row_client_id
+                if group_by in (GroupBy.CLIENT, GroupBy.CLIENT_PURCHASER)
+                else client_id
+            )
+            key_purchaser_id = (
+                row_purchaser_id
+                if group_by in (GroupBy.PURCHASER, GroupBy.CLIENT_PURCHASER)
+                else purchaser_id
+            )
+            key = (period_index, key_client_id, key_purchaser_id)
             aggregates.setdefault(key, [0, 0, 0, 0, 0, 0])
             names.setdefault(
                 key,
                 (
-                    row_client_name if key[1] is not None else None,
-                    row_purchaser_name if key[2] is not None else None,
+                    row_client_name if key_client_id == row_client_id else client_name,
+                    row_purchaser_name if key_purchaser_id == row_purchaser_id else purchaser_name,
                 ),
             )
             values = aggregates[key]
@@ -214,50 +279,80 @@ class ReportService:
             allocation_quantity = None if row[7] is None else int(row[7])
             unit_price = None if row[8] is None else int(row[8])
             if reason is Reason.IN:
+                total_values[0] += delta
                 values[0] += delta
             elif reason is Reason.OUT:
                 if allocation_quantity is not None:
+                    total_values[1] += allocation_quantity
                     values[1] += allocation_quantity
                     if unit_price is None:
+                        total_values[3] += allocation_quantity
                         values[3] += allocation_quantity
                     else:
+                        total_values[2] += allocation_quantity * unit_price
                         values[2] += allocation_quantity * unit_price
             elif reason is Reason.DISPOSE and allocation_quantity is not None:
+                total_values[4] += allocation_quantity
                 values[4] += allocation_quantity
                 if unit_price is not None:
+                    total_values[5] += allocation_quantity * unit_price
                     values[5] += allocation_quantity * unit_price
 
-        if group_by is GroupBy.NONE:
-            for period_index in range(len(periods)):
-                key = (period_index, None, None)
+        for period_index in range(len(periods)):
+            totals.setdefault(period_index, [0, 0, 0, 0, 0, 0])
+            if group_by is GroupBy.NONE:
+                key = (period_index, client_id, purchaser_id)
                 aggregates.setdefault(key, [0, 0, 0, 0, 0, 0])
-                names.setdefault(key, (None, None))
+                names.setdefault(key, (client_name, purchaser_name))
 
-        output: list[DashboardRow] = []
-        for (period_index, row_client_id, row_purchaser_id), metrics in sorted(
-            aggregates.items(), key=lambda entry: (entry[0][0], entry[0][1] or 0, entry[0][2] or 0)
-        ):
+        def make_row(
+            period_index: int,
+            row_client_id: int | None,
+            row_client_name: str | None,
+            row_purchaser_id: int | None,
+            row_purchaser_name: str | None,
+            metrics: list[int],
+        ) -> DashboardRow:
             if any(value < 0 or value > MAX_AGGREGATE_VALUE for value in metrics[:3] + metrics[4:]):
                 raise ValidationError("集計値が 0〜1,000,000,000,000 の範囲を超えます")
             label, period_start, _, _ = periods[period_index]
-            client_name, purchaser_name = names[(period_index, row_client_id, row_purchaser_id)]
-            output.append(
-                DashboardRow(
-                    period_label=label,
-                    period_start=period_start,
-                    client_id=row_client_id,
-                    client_name=client_name,
-                    purchaser_id=row_purchaser_id,
-                    purchaser_name=purchaser_name,
-                    inbound_quantity=metrics[0],
-                    outbound_quantity=metrics[1],
-                    expenditure=metrics[2],
-                    unpriced_issue_quantity=metrics[3],
-                    disposed_quantity=metrics[4],
-                    disposal_amount=metrics[5],
+            return DashboardRow(
+                period_label=label,
+                period_start=period_start,
+                client_id=row_client_id,
+                client_name=row_client_name,
+                purchaser_id=row_purchaser_id,
+                purchaser_name=row_purchaser_name,
+                inbound_quantity=metrics[0],
+                outbound_quantity=metrics[1],
+                expenditure=metrics[2],
+                unpriced_issue_quantity=metrics[3],
+                disposed_quantity=metrics[4],
+                disposal_amount=metrics[5],
+            )
+
+        total_rows = tuple(
+            make_row(period_index, client_id, client_name, purchaser_id, purchaser_name, metrics)
+            for period_index, metrics in sorted(totals.items())
+        )
+        breakdown_rows: list[DashboardRow] = []
+        for (period_index, row_client_id, row_purchaser_id), metrics in sorted(
+            aggregates.items(), key=lambda entry: (entry[0][0], entry[0][1] or 0, entry[0][2] or 0)
+        ):
+            row_client_name, row_purchaser_name = names[
+                (period_index, row_client_id, row_purchaser_id)
+            ]
+            breakdown_rows.append(
+                make_row(
+                    period_index,
+                    row_client_id,
+                    row_client_name,
+                    row_purchaser_id,
+                    row_purchaser_name,
+                    metrics,
                 )
             )
-        return output
+        return DashboardResult(total_rows, tuple(breakdown_rows))
 
     def export_items_csv(self, path: Path, filter: ItemFilter) -> None:
         items = self.inventory.list_items(filter)
@@ -358,13 +453,8 @@ class ReportService:
     def export_dashboard_csv(
         self,
         path: Path,
-        fiscal_year: int,
-        kind: PeriodKind,
-        client_id: int | None = None,
-        purchaser_id: int | None = None,
-        group_by: GroupBy = GroupBy.NONE,
+        rows: Sequence[DashboardRow],
     ) -> None:
-        dashboard = self.dashboard(fiscal_year, kind, client_id, purchaser_id, group_by)
         header = (
             "年度/月",
             "クライアント",
@@ -376,7 +466,7 @@ class ReportService:
             "廃棄数",
             "廃棄額",
         )
-        rows = [
+        csv_rows = [
             (
                 row.period_label,
                 row.client_name if row.client_id is not None else "(すべて)",
@@ -388,6 +478,6 @@ class ReportService:
                 row.disposed_quantity,
                 row.disposal_amount,
             )
-            for row in dashboard
+            for row in rows
         ]
-        _write_csv(path, header, rows)
+        _write_csv(path, header, csv_rows)

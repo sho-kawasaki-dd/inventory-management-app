@@ -104,30 +104,30 @@
 
 #### B. core の改修 `core/models.py`・`core/reports.py`
 
-- [ ] 年度の定義を開発計画書 5.7 に統一する。開始月を `s` とすると、年度 `y` の期間は `[y年s月1日, (y+1)年s月1日)` とする。`_periods` の前年開始を修正し、`fiscal_year_of`・`current_fiscal_year`・`available_fiscal_years` と一致させる
-- [ ] 年度境界の修正に伴い、既存テスト・CSV テスト・性能テストの年度指定と期待値を見直す。誤った年度の期待値は互換性維持の対象にしない
-- [ ] `core/models.py` に `DashboardResult`(frozen・slots の dataclass。`totals: tuple[DashboardRow, ...]`・`breakdown: tuple[DashboardRow, ...]`)を追加する
-- [ ] `core/reports.py` の `_aggregate` を、1 回の走査で「期間別の合計(全期間を 0 で埋める)」と「内訳軸の行」を同時に作る形に変更する(SQL は 1 本のまま。取り消し行の期間判定・引当ロット帰属・集計上限の検証は現行どおり)
-- [ ] `dashboard_result(fiscal_year, kind, client_id, purchaser_id, group_by)` を追加する。`fiscal_year=None` かつ `ANNUAL` は `available_fiscal_years()` の全年度を 1 年度 1 区間とし、`None` と `MONTHLY` の組み合わせは `ValueError`。年度の列挙と集計は同じ `read_transaction` 内で行う
-- [ ] 既存の `dashboard()` は `dashboard_result()` を呼び、`breakdown` を従来どおり `list[DashboardRow]` で返す。行の並び・0 埋めの有無は維持する。ただし年度境界は正本の定義へ修正する。現行 `dashboard()` の年度・ID の型検査(`ValueError`)は `dashboard_result()` へ移し、`dashboard()` は委譲のみとする
-- [ ] 絞り込み中の軸の ID・名称を行(`totals`・`breakdown` とも)に設定する。マスタ名はプレースホルダで取得し、存在しない ID は `ValidationError` とする
-- [ ] `export_dashboard_csv(path, rows: Sequence[DashboardRow])` に変更し、再集計せず渡された行を出力する。「(すべて)」は ID が `None` の列にだけ出力する。名称列には「(無効)」を付けず、マスタ名をそのまま出力する。呼び出し元(テスト・性能テスト)を更新する
-- [ ] `tests/test_reports.py`
-  - [ ] 4 月開始の 2026 年度が 2026 年 4 月〜2027 年 3 月となること。開始境界の直前は 2025 年度、開始境界上は 2026 年度、終了境界上は 2027 年度に入ることを、固定時刻・タイムゾーン注入と手計算の期待値で検証する。1 月開始でも暦年どおりであること
-  - [ ] 現在日時を 2026 年 10 月 12 日に固定し、現在年度の月次・年次集計に同日の履歴が含まれること。全年度の推移にも同じ履歴が 2026 年度として含まれること
-  - [ ] 全年度の推移: 履歴のない年度が 0 で埋まること、年度ラベルと各年度の値が手計算の期待値および年度境界修正後の個別の `dashboard(年度, ANNUAL)` と一致すること、年度開始月変更後も一致すること
-  - [ ] `totals` が内訳軸 4 種のいずれでも同じ値で、`breakdown` の期間別合計と一致すること(月次・年次)
-  - [ ] クライアント・発注主体の絞り込み中は、内訳軸なしでも行にその ID・名称が入り、未絞り込みの軸は `None` であること。2 軸同時絞り込みも確認する
-  - [ ] 存在しない ID で `ValidationError`、`None` 年度と `MONTHLY` で `ValueError`
-  - [ ] 月またぎ取り消し・複数ロット出庫・単価不明ロット・廃棄・返品・棚卸が、`totals` でも既存どおり扱われること
-  - [ ] 集計上限ちょうどが許可され、超過が `ValidationError` となること(`totals` 経由でも検証)
-- [ ] `tests/test_csv.py`
-  - [ ] ヘッダ(9 列)と列順
-  - [ ] 絞り込みなしで畳み込んだ軸が「(すべて)」、絞り込み中は名称が出力されること
-  - [ ] 絞り込み中は名称が出力され、無効化済みマスタにも「(無効)」が付かないこと
-  - [ ] `=` で始まるクライアント名・発注主体名に数式対策の `'` が付き、数値列には付かないこと
-  - [ ] 書き込み不可の出力先で `FileOutputError`、既存ファイルが変更されないこと
-- [ ] `tests/test_dependency_rules.py` が引き続き成功すること
+- [x] 年度の定義を開発計画書 5.7 に統一する。開始月を `s` とすると、年度 `y` の期間は `[y年s月1日, (y+1)年s月1日)` とする。`_periods` の前年開始を修正し、`fiscal_year_of`・`current_fiscal_year`・`available_fiscal_years` と一致させる
+- [x] 年度境界の修正に伴い、既存テスト・CSV テスト・性能テストの年度指定と期待値を見直す。誤った年度の期待値は互換性維持の対象にしない
+- [x] `core/models.py` に `DashboardResult`(frozen・slots の dataclass。`totals: tuple[DashboardRow, ...]`・`breakdown: tuple[DashboardRow, ...]`)を追加する
+- [x] `core/reports.py` の `_aggregate` を、1 回の走査で「期間別の合計(全期間を 0 で埋める)」と「内訳軸の行」を同時に作る形に変更する(SQL は 1 本のまま。取り消し行の期間判定・引当ロット帰属・集計上限の検証は現行どおり)
+- [x] `dashboard_result(fiscal_year, kind, client_id, purchaser_id, group_by)` を追加する。`fiscal_year=None` かつ `ANNUAL` は `available_fiscal_years()` の全年度を 1 年度 1 区間とし、`None` と `MONTHLY` の組み合わせは `ValueError`。年度の列挙と集計は同じ `read_transaction` 内で行う
+- [x] 既存の `dashboard()` は `dashboard_result()` を呼び、`breakdown` を従来どおり `list[DashboardRow]` で返す。行の並び・0 埋めの有無は維持する。ただし年度境界は正本の定義へ修正する。現行 `dashboard()` の年度・ID の型検査(`ValueError`)は `dashboard_result()` へ移し、`dashboard()` は委譲のみとする
+- [x] 絞り込み中の軸の ID・名称を行(`totals`・`breakdown` とも)に設定する。マスタ名はプレースホルダで取得し、存在しない ID は `ValidationError` とする
+- [x] `export_dashboard_csv(path, rows: Sequence[DashboardRow])` に変更し、再集計せず渡された行を出力する。「(すべて)」は ID が `None` の列にだけ出力する。名称列には「(無効)」を付けず、マスタ名をそのまま出力する。呼び出し元(テスト・性能テスト)を更新する
+- [x] `tests/test_reports.py`
+  - [x] 4 月開始の 2026 年度が 2026 年 4 月〜2027 年 3 月となること。開始境界の直前は 2025 年度、開始境界上は 2026 年度、終了境界上は 2027 年度に入ることを、固定時刻・タイムゾーン注入と手計算の期待値で検証する。1 月開始でも暦年どおりであること
+  - [x] 現在日時を 2026 年 10 月 12 日に固定し、現在年度の月次・年次集計に同日の履歴が含まれること。全年度の推移にも同じ履歴が 2026 年度として含まれること
+  - [x] 全年度の推移: 履歴のない年度が 0 で埋まること、年度ラベルと各年度の値が手計算の期待値および年度境界修正後の個別の `dashboard(年度, ANNUAL)` と一致すること、年度開始月変更後も一致すること
+  - [x] `totals` が内訳軸 4 種のいずれでも同じ値で、`breakdown` の期間別合計と一致すること(月次・年次)
+  - [x] クライアント・発注主体の絞り込み中は、内訳軸なしでも行にその ID・名称が入り、未絞り込みの軸は `None` であること。2 軸同時絞り込みも確認する
+  - [x] 存在しない ID で `ValidationError`、`None` 年度と `MONTHLY` で `ValueError`
+  - [x] 月またぎ取り消し・複数ロット出庫・単価不明ロット・廃棄・返品・棚卸が、`totals` でも既存どおり扱われること
+  - [x] 集計上限ちょうどが許可され、超過が `ValidationError` となること(`totals` 経由でも検証)
+- [x] `tests/test_csv.py`
+  - [x] ヘッダ(9 列)と列順
+  - [x] 絞り込みなしで畳み込んだ軸が「(すべて)」、絞り込み中は名称が出力されること
+  - [x] 絞り込み中は名称が出力され、無効化済みマスタにも「(無効)」が付かないこと
+  - [x] `=` で始まるクライアント名・発注主体名に数式対策の `'` が付き、数値列には付かないこと
+  - [x] 書き込み不可の出力先で `FileOutputError`、既存ファイルが変更されないこと
+- [x] `tests/test_dependency_rules.py` が引き続き成功すること
 
 #### C. 内訳表モデル `ui/models/dashboard_table_model.py`(新規)
 

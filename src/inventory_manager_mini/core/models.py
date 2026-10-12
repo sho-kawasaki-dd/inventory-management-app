@@ -225,3 +225,9 @@ class DashboardRow:
     unpriced_issue_quantity: int
     disposed_quantity: int
     disposal_amount: int
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardResult:
+    totals: tuple[DashboardRow, ...]
+    breakdown: tuple[DashboardRow, ...]

@@ -18,7 +18,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
-from inventory_manager_mini.core.models import ItemFilter, PeriodKind, Reason
+from inventory_manager_mini.core.models import GroupBy, ItemFilter, PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import BackupService, InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
@@ -365,7 +365,7 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
             ("月次", PeriodKind.MONTHLY),
         ):
             started_at = time.perf_counter()
-            reports.dashboard(fiscal_year, kind)
+            reports.dashboard_result(fiscal_year, kind, group_by=GroupBy.CLIENT_PURCHASER)
             elapsed = time.perf_counter() - started_at
             results.append((label, elapsed))
             assert elapsed <= 2.0, f"{label}集計に {elapsed:.3f} 秒かかりました"

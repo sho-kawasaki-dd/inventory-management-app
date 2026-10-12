@@ -215,7 +215,8 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
     inventory.receive(item_id, 1, 1, unit_price=100)
     output = tmp_path / "dashboard.csv"
 
-    report.export_dashboard_csv(output, 2026, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT)
+    rows = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT)
+    report.export_dashboard_csv(output, rows)
     rows = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
 
     assert rows[0] == [
@@ -231,6 +232,29 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
     ]
     assert rows[1][1:3] == ["総務", "(すべて)"]
     assert rows[1][3] == "1"
+
+
+def test_dashboard_csv_exports_filtered_inactive_master_names_safely(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _item(inventory)
+    inventory.receive(item_id, 1, 1, unit_price=100)
+    seeded_conn.execute("UPDATE clients SET name = ?, is_active = 0 WHERE id = 1", ("=顧客",))
+    seeded_conn.execute(
+        "UPDATE purchasers SET name = ?, is_active = 0 WHERE id = 1", ("+発注主体",)
+    )
+    rows = report.dashboard_result(2025, PeriodKind.ANNUAL, client_id=1, purchaser_id=1).breakdown
+    output = tmp_path / "filtered-dashboard.csv"
+
+    report.export_dashboard_csv(output, rows)
+    exported = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
+
+    assert exported[1][1:3] == ["'=顧客", "'+発注主体"]
+    assert exported[1][3:] == ["1", "0", "0", "0", "0", "0"]
 
 
 def test_csv_replace_failure_preserves_existing_file_and_removes_temporary_file(
@@ -254,5 +278,12 @@ def test_csv_replace_failure_preserves_existing_file_and_removes_temporary_file(
 
     assert str(output) in error_info.value.message
     assert isinstance(error_info.value.__cause__, OSError)
+    assert output.read_bytes() == b"existing content"
+    assert list(tmp_path.glob(".existing.csv.*.tmp")) == []
+
+    dashboard_rows = report.dashboard(2025, PeriodKind.ANNUAL)
+    with pytest.raises(FileOutputError, match="replace failed"):
+        report.export_dashboard_csv(output, dashboard_rows)
+
     assert output.read_bytes() == b"existing content"
     assert list(tmp_path.glob(".existing.csv.*.tmp")) == []

@@ -90,11 +90,14 @@ def test_dashboard_uses_local_month_boundaries_and_original_reversal_period(
     fixed_clock.current = datetime(2025, 4, 1, 0, 0, tzinfo=UTC)
     inventory.reverse(issue.id, 1)
 
-    rows = report.dashboard(2025, PeriodKind.MONTHLY)
+    result = report.dashboard_result(2024, PeriodKind.MONTHLY)
+    rows = result.breakdown
     march = next(row for row in rows if row.period_label == "2025年3月")
-    april = report.dashboard(2026, PeriodKind.MONTHLY)[0]
+    march_total = next(row for row in result.totals if row.period_label == "2025年3月")
+    april = report.dashboard(2025, PeriodKind.MONTHLY)[0]
 
     assert (march.inbound_quantity, march.outbound_quantity) == (2, 0)
+    assert (march_total.inbound_quantity, march_total.outbound_quantity) == (2, 0)
     assert (april.period_label, april.inbound_quantity, april.outbound_quantity) == (
         "2025年4月",
         3,
@@ -102,8 +105,8 @@ def test_dashboard_uses_local_month_boundaries_and_original_reversal_period(
     )
     assert len(rows) == 12
     assert fiscal_year_of(datetime(2026, 3, 31).date(), 4) == 2025
-    assert report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.NONE)[0].inbound_quantity == 2
-    assert report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.NONE)[0].inbound_quantity == 3
+    assert report.dashboard(2024, PeriodKind.ANNUAL, group_by=GroupBy.NONE)[0].inbound_quantity == 2
+    assert report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.NONE)[0].inbound_quantity == 3
 
 
 def test_dashboard_aggregates_all_grouping_axes_and_combined_filters(
@@ -132,10 +135,10 @@ def test_dashboard_aggregates_all_grouping_axes_and_combined_filters(
     master.deactivate_client(2)
     master.deactivate_purchaser(1)
 
-    ungrouped = report.dashboard(2026, PeriodKind.ANNUAL)[0]
-    by_client = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT)
-    by_purchaser = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.PURCHASER)
-    by_pair = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
+    ungrouped = report.dashboard(2025, PeriodKind.ANNUAL)[0]
+    by_client = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT)
+    by_purchaser = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.PURCHASER)
+    by_pair = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
     for rows in (by_client, by_purchaser, by_pair):
         for field in (
             "inbound_quantity",
@@ -154,7 +157,7 @@ def test_dashboard_aggregates_all_grouping_axes_and_combined_filters(
     }
 
     filtered = report.dashboard(
-        2026,
+        2025,
         PeriodKind.ANNUAL,
         client_id=1,
         purchaser_id=2,
@@ -163,7 +166,7 @@ def test_dashboard_aggregates_all_grouping_axes_and_combined_filters(
     assert [(row.client_id, row.purchaser_id, row.outbound_quantity) for row in filtered] == [
         (1, 2, 2)
     ]
-    assert report.dashboard(2026, PeriodKind.ANNUAL, client_id=2)[0].outbound_quantity == 3
+    assert report.dashboard(2025, PeriodKind.ANNUAL, client_id=2)[0].outbound_quantity == 3
 
 
 def test_dashboard_excludes_returns_adjustments_and_reversed_unpriced_issues(
@@ -184,7 +187,7 @@ def test_dashboard_excludes_returns_adjustments_and_reversed_unpriced_issues(
     zero_price_id = _create_item(inventory, name="0円", reference_price=0)
     inventory.issue(zero_price_id, 1, 1, "0円費用")
 
-    row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    row = report.dashboard_result(2025, PeriodKind.ANNUAL).totals[0]
     assert row.outbound_quantity == 5
     assert row.expenditure == 100
     assert row.unpriced_issue_quantity == 2
@@ -253,10 +256,14 @@ def test_changing_fiscal_year_start_month_changes_annual_periods(
     fixed_clock.current = datetime(2026, 3, 31, 15, 0, tzinfo=UTC)
     inventory.receive(item_id, 1, 3)
 
-    assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 2
-    assert report.dashboard(2027, PeriodKind.ANNUAL)[0].inbound_quantity == 3
+    assert fiscal_year_of(datetime(2026, 3, 31).date(), 4) == 2025
+    assert fiscal_year_of(datetime(2026, 4, 1).date(), 4) == 2026
+    assert fiscal_year_of(datetime(2027, 4, 1).date(), 4) == 2027
+    assert report.dashboard(2025, PeriodKind.ANNUAL)[0].inbound_quantity == 2
+    assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 3
     settings.set_fiscal_year_start_month(1)
     assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 5
+    assert report.current_fiscal_year() == 2026
 
 
 def _new_report_item(
@@ -298,7 +305,7 @@ def test_dashboard_judges_limits_by_final_totals_not_row_order(
     inventory.reverse(first.id, 1)
 
     # 同一時刻の行は ID 順に並ぶため、途中合計は 120 まで達するが最終値は 60
-    assert report.dashboard(2026, PeriodKind.ANNUAL)[0].inbound_quantity == 60
+    assert report.dashboard(2025, PeriodKind.ANNUAL)[0].inbound_quantity == 60
 
 
 @pytest.mark.parametrize(
@@ -327,13 +334,13 @@ def test_dashboard_accepts_totals_at_the_limit_and_rejects_beyond(
 
     _record(inventory, kind, item_id, at_limit)
     for period_kind in (PeriodKind.ANNUAL, PeriodKind.MONTHLY):
-        rows = report.dashboard(2026, period_kind)
-        assert max(getattr(row, metric) for row in rows) == 100
+        result = report.dashboard_result(2025, period_kind)
+        assert max(getattr(row, metric) for row in result.totals) == 100
 
     _record(inventory, kind, item_id, 1)
     for period_kind in (PeriodKind.ANNUAL, PeriodKind.MONTHLY):
         with pytest.raises(ValidationError, match="集計値"):
-            report.dashboard(2026, period_kind)
+            report.dashboard_result(2025, period_kind)
 
 
 def test_dashboard_sums_beyond_int64_with_python_integers(
@@ -370,10 +377,10 @@ def test_dashboard_sums_beyond_int64_with_python_integers(
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
 
     with pytest.raises(ValidationError, match="集計値"):
-        report.dashboard(2026, PeriodKind.ANNUAL)
+        report.dashboard(2025, PeriodKind.ANNUAL)
 
     monkeypatch.setattr(reports, "MAX_AGGREGATE_VALUE", 10**30)
-    row = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    row = report.dashboard(2025, PeriodKind.ANNUAL)[0]
     assert type(row.expenditure) is int
     assert row.expenditure == 10 * huge_price
 
@@ -393,8 +400,8 @@ def test_dashboard_attributes_costs_to_allocated_lot_purchasers(
     inventory.issue(item_id, 1, 1, "出庫")
     inventory.dispose(item_id, 1, 3)
 
-    all_rows = report.dashboard(2026, PeriodKind.ANNUAL)[0]
-    by_purchaser = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.PURCHASER)
+    all_rows = report.dashboard_result(2025, PeriodKind.ANNUAL).totals[0]
+    by_purchaser = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.PURCHASER)
     purchaser_totals = {row.purchaser_id: row for row in by_purchaser}
     assert (all_rows.outbound_quantity, all_rows.expenditure) == (1, 10)
     assert (all_rows.disposed_quantity, all_rows.disposal_amount) == (3, 70)
@@ -411,7 +418,7 @@ def test_dashboard_attributes_costs_to_allocated_lot_purchasers(
         purchaser_totals[2].disposal_amount,
     ) == (0, 0, 2, 60)
 
-    by_pair = report.dashboard(2026, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
+    by_pair = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT_PURCHASER)
     for field in (
         "inbound_quantity",
         "outbound_quantity",
@@ -423,7 +430,7 @@ def test_dashboard_attributes_costs_to_allocated_lot_purchasers(
         assert sum(getattr(row, field) for row in by_pair) == getattr(all_rows, field)
 
     filtered = report.dashboard(
-        2026,
+        2025,
         PeriodKind.ANNUAL,
         client_id=2,
         purchaser_id=1,
@@ -451,7 +458,7 @@ def test_dashboard_counts_unpriced_issue_quantity_and_reversal_by_original_perio
         2025, PeriodKind.MONTHLY
     )[-1]
     january = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock).dashboard(
-        2026, PeriodKind.MONTHLY
+        2025, PeriodKind.MONTHLY
     )[0]
     assert (december.outbound_quantity, december.unpriced_issue_quantity) == (2, 2)
     assert (january.outbound_quantity, january.unpriced_issue_quantity) == (0, 0)
@@ -473,7 +480,7 @@ def test_dashboard_attributes_outflow_to_issue_period_across_lot_periods(
     inventory.issue(item_id, 1, 3, "期間をまたぐ引当")
 
     rows = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock).dashboard(
-        2026, PeriodKind.MONTHLY
+        2025, PeriodKind.MONTHLY
     )
     december = next(row for row in rows if row.period_label == "2025年12月")
     january = next(row for row in rows if row.period_label == "2026年1月")
@@ -515,8 +522,8 @@ def test_monthly_annual_and_total_aggregates_agree_across_months(
     fixed_clock.current = datetime(2026, 3, 20, tzinfo=UTC)
     inventory.reverse(july_issue.id, 1)
 
-    monthly = report.dashboard(2026, PeriodKind.MONTHLY)
-    annual = report.dashboard(2026, PeriodKind.ANNUAL)[0]
+    monthly = report.dashboard(2025, PeriodKind.MONTHLY)
+    annual = report.dashboard(2025, PeriodKind.ANNUAL)[0]
     totals = inventory.aggregates.get()
     assert compute_aggregates(seeded_conn) == totals
     for field in (
@@ -529,3 +536,136 @@ def test_monthly_annual_and_total_aggregates_agree_across_months(
         assert sum(getattr(row, field) for row in monthly) == getattr(annual, field)
         assert getattr(annual, field) == totals[field]
     assert next(row for row in monthly if row.period_label == "2025年7月").outbound_quantity == 0
+
+
+def test_dashboard_result_all_fiscal_years_and_totals_match_breakdown(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    settings: SettingsService,
+    fixed_clock: FixedClock,
+) -> None:
+    settings.set_fiscal_year_start_month(4)
+    fixed_clock.current = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
+    item_id = _create_item(inventory, name="年度推移", quantity=0, reference_price=10)
+    fixed_clock.current = datetime(2024, 3, 31, 23, 59, tzinfo=UTC)
+    inventory.receive(item_id, 1, 2)
+    fixed_clock.current = datetime(2024, 4, 1, 0, 0, tzinfo=UTC)
+    inventory.receive(item_id, 1, 3)
+    fixed_clock.current = datetime(2026, 10, 12, 10, 0, tzinfo=UTC)
+    inventory.receive(item_id, 1, 4, unit_price=10)
+    inventory.issue(item_id, 1, 2, "当日出庫")
+    inventory.dispose(item_id, 1, 1)
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+
+    result = report.dashboard_result(None, PeriodKind.ANNUAL)
+
+    assert report.current_fiscal_year() == 2026
+    assert [row.period_label for row in result.totals] == [
+        "2023年度",
+        "2024年度",
+        "2025年度",
+        "2026年度",
+    ]
+    assert [row.inbound_quantity for row in result.totals] == [2, 3, 0, 4]
+    for fiscal_year, row in zip(range(2023, 2027), result.totals, strict=True):
+        assert report.dashboard(fiscal_year, PeriodKind.ANNUAL)[0] == row
+    assert result.totals[-1].period_start.isoformat() == "2026-04-01"
+    assert (
+        result.totals[-1].inbound_quantity,
+        result.totals[-1].outbound_quantity,
+        result.totals[-1].expenditure,
+        result.totals[-1].disposed_quantity,
+        result.totals[-1].disposal_amount,
+    ) == (4, 2, 20, 1, 10)
+    october = next(
+        row
+        for row in report.dashboard_result(2026, PeriodKind.MONTHLY).totals
+        if row.period_label == "2026年10月"
+    )
+    assert (
+        october.inbound_quantity,
+        october.outbound_quantity,
+        october.expenditure,
+        october.disposed_quantity,
+        october.disposal_amount,
+    ) == (4, 2, 20, 1, 10)
+    metric_fields = (
+        "inbound_quantity",
+        "outbound_quantity",
+        "expenditure",
+        "unpriced_issue_quantity",
+        "disposed_quantity",
+        "disposal_amount",
+    )
+    for kind, fiscal_year in (
+        (PeriodKind.ANNUAL, None),
+        (PeriodKind.MONTHLY, 2026),
+    ):
+        expected = (
+            result if kind is PeriodKind.ANNUAL else report.dashboard_result(fiscal_year, kind)
+        )
+        for group_by in GroupBy:
+            grouped = report.dashboard_result(fiscal_year, kind, group_by=group_by)
+            assert grouped.totals == expected.totals
+            for field in metric_fields:
+                assert [
+                    sum(
+                        getattr(row, field)
+                        for row in grouped.breakdown
+                        if row.period_label == total.period_label
+                    )
+                    for total in grouped.totals
+                ] == [getattr(row, field) for row in grouped.totals]
+
+    settings.set_fiscal_year_start_month(1)
+    calendar_years = report.dashboard_result(None, PeriodKind.ANNUAL)
+    assert report.current_fiscal_year() == 2026
+    assert [row.period_label for row in calendar_years.totals] == [
+        "2024年度",
+        "2025年度",
+        "2026年度",
+    ]
+    assert [row.inbound_quantity for row in calendar_years.totals] == [5, 0, 4]
+    for fiscal_year, row in zip(range(2024, 2027), calendar_years.totals, strict=True):
+        assert report.dashboard(fiscal_year, PeriodKind.ANNUAL)[0] == row
+
+
+def test_dashboard_result_keeps_filtered_axis_names_and_validates_arguments(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("UTC"), clock=fixed_clock)
+    item_id = _create_item(inventory, name="絞り込み", client_id=1, purchaser_id=2, quantity=0)
+    inventory.receive(item_id, 1, 2)
+
+    filtered = report.dashboard_result(
+        2025, PeriodKind.ANNUAL, client_id=1, purchaser_id=2, group_by=GroupBy.NONE
+    )
+    assert (
+        filtered.breakdown[0].client_id,
+        filtered.breakdown[0].client_name,
+        filtered.breakdown[0].purchaser_id,
+        filtered.breakdown[0].purchaser_name,
+    ) == (1, "総務", 2, "部門")
+    assert filtered.totals[0].inbound_quantity == 2
+    grouped_filter = report.dashboard_result(
+        2025,
+        PeriodKind.ANNUAL,
+        client_id=1,
+        purchaser_id=2,
+        group_by=GroupBy.CLIENT,
+    )
+    assert (
+        grouped_filter.breakdown[0].client_id,
+        grouped_filter.breakdown[0].client_name,
+        grouped_filter.breakdown[0].purchaser_id,
+        grouped_filter.breakdown[0].purchaser_name,
+    ) == (1, "総務", 2, "部門")
+
+    with pytest.raises(ValidationError, match="クライアントが見つかりません"):
+        report.dashboard_result(2025, PeriodKind.ANNUAL, client_id=999)
+    with pytest.raises(ValidationError, match="発注主体が見つかりません"):
+        report.dashboard_result(2025, PeriodKind.ANNUAL, purchaser_id=999)
+    with pytest.raises(ValueError, match="年度を省略できるのは年次"):
+        report.dashboard_result(None, PeriodKind.MONTHLY)
