@@ -169,18 +169,18 @@
 
 #### D. ビルドスクリプト
 
-- [ ] `packaging/build.ps1` を作成する(引数: `-Version`、`-Suffix`(既定は空)、`-IsccPath`(既定は標準のインストール先))
+- [x] `packaging/build.ps1` を作成する(引数: `-Version`、`-Suffix`(既定は空)、`-IsccPath`(既定は標準のインストール先))
   - [ ] `uv run python scripts/check_release_version.py --version <版数> --suffix=<接尾辞>` で入力形式と `pyproject.toml` との一致を検査する。空接尾辞も明示して扱う
   - [ ] `-IsccPath` が指す ISCC の実版を本書 7 章 #3 の固定版と照合し、不一致なら失敗させる。Python・PyInstaller・Qt・uv・ISCC の使用パスと実版を記録する
   - [ ] 呼び出しごとに新しいビルドIDを生成し、`dist/staging/<ビルドID>/` に隔離して出力する。PyInstaller の `--distpath` と `--workpath` を今回用に指定し、既存の成果物を入力にしない
   - [ ] `uv run pyinstaller --noconfirm --clean --distpath <今回のステージング先> --workpath build/<ビルドID> packaging/inventory-manager-mini.spec`
   - [ ] A のライセンス・通知・ソース案内を onedir の exe と同じ階層にコピーし、`uv run python scripts/check_bundle.py <今回のonedir>` で同梱検査する
   - [ ] `ISCC.exe /DAppVersion=<版数> /DOutputName=inventory-manager-mini-<版数><接尾辞>-setup /DBundleDir=<今回のonedir> /O<今回のステージング先> packaging/inventory-manager-mini.iss`
-  - [ ] 今回のアプリソースを `-sources.zip` として作成し、必要な依存ソースと構成一覧をそろえる。Release ビルドではタグのコミットとソースが一致することを確認し、未コミットの変更を混入させない。ローカル検証版は検証用と明記する
+  - [ ] 今回のアプリソースを `-sources.zip` として作成し、必要な依存ソースと構成一覧をそろえる。依存ソースは `packaging/dependency-sources/manifest.json` (`schema_version=1`、`audit_status=complete`、`sources` の `component`・`version`・`path`・`sha256`) で列挙し、パス・版・ハッシュを検査する。Release ビルドではタグのコミットとソースが一致することを確認し、未コミットの変更を混入させない。ローカル検証版は検証用と明記する
   - [ ] 各配布ファイルの SHA256 を `<成果物>.sha256`(`ハッシュ  ファイル名` 形式)として出力し、構成一覧とソースの対応・必須ファイル・空ファイル・秘密情報の非混入を確認する
   - [ ] `$ErrorActionPreference = 'Stop'` に加え、すべての外部コマンド(uv・ISCC・git 等)の直後に `$LASTEXITCODE` を確認して非ゼロなら中断する。後続ビルド・ハッシュ作成・成果物確定を実行しない
   - [ ] 全工程成功後だけ `dist/releases/<ビルドID>/` に配布対象を確定し、成功した出力先を呼び出し元へ返す。失敗時のステージング先と過去の配布先はアップロード対象にしない
-- [ ] 成果物の出力先を `.gitignore` 済みのディレクトリ(`dist/`)に限定し、コミット対象に含めない
+- [x] 成果物の出力先を `.gitignore` 済みのディレクトリ(`dist/`)に限定し、コミット対象に含めない
 - [ ] 正常終了と、版数検査・PyInstaller・同梱検査・ISCC・ソース準備の各失敗を検証する。失敗後に後続処理や成果物確定が走らず、古い成功成果物が残っていても配布対象にならないことを確認する
 
 #### E. 検査スクリプトとテスト
@@ -346,7 +346,7 @@
 | --- | --- | --- | --- |
 | 1 | Phase 7 の実用紙試し刷りと `LabelSpec` の確定(開発計画書 11 章 #1) | 正式タグ `v0.1.0` の作成前 | 未実施 |
 | 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | `{8B4D1CC3-78CB-452A-8D8F-2D81019811FC}`(`packaging/inventory-manager-mini.iss`。以後変更しない) |
-| 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 着手時点の最新 6 系を確認して記録する。ローカル/CI とも実際に使用する ISCC を照合する |
+| 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 6.7.3 に固定する。ローカル/CI とも実際に使用する ISCC を照合する |
 | 4 | `packaging/app.ico` の用意 | rc 検証前(未配置でもビルドは可能) | 利用者が用意する |
 | 5 | 実配布構成と必要な依存の対応ソース・ライセンス条件の確定 | 8a の A・D 完了まで | 実ビルドの棚卸しで確定し、構成一覧・通知・ソース成果物へ記録する。必要なソースを確保できない場合は配布しない |
 | 6 | 法的通知 UI の本文参照用資源と通常実行/凍結版の配置 | 8a の A・B 完了まで | 最小限の UI 変更で確定する。業務処理・多重起動制御・ウィンドウアイコンは対象外のまま |
