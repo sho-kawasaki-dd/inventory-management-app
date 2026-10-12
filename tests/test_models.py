@@ -14,8 +14,9 @@ from inventory_manager_mini.core.models import (
     Client,
     DashboardRow,
     FifoEstimate,
-    GroupBy,
+    GroupAxis,
     Item,
+    ItemChoice,
     ItemFilter,
     ItemRow,
     ItemUpdate,
@@ -56,6 +57,7 @@ def _field_names(model: type[Any]) -> set[str]:
         MovementRow,
         ItemFilter,
         DashboardRow,
+        ItemChoice,
     ],
 )
 def test_models_are_frozen_and_slotted(model: type[Any]) -> None:
@@ -148,12 +150,13 @@ def test_input_and_display_models_match_their_roles() -> None:
 def test_dashboard_model_and_enum_values() -> None:
     assert [reason.value for reason in Reason] == ["in", "out", "return", "dispose", "adjust"]
     assert [period.value for period in PeriodKind] == ["annual", "monthly"]
-    assert [group.value for group in GroupBy] == [
-        "none",
+    assert [axis.value for axis in GroupAxis] == [
         "client",
         "purchaser",
-        "client_purchaser",
+        "category",
+        "item",
     ]
+    assert _field_names(ItemChoice) == {"id", "code", "name", "is_active"}
     assert _field_names(DashboardRow) == {
         "period_label",
         "period_start",
@@ -161,6 +164,11 @@ def test_dashboard_model_and_enum_values() -> None:
         "client_name",
         "purchaser_id",
         "purchaser_name",
+        "category_id",
+        "category_name",
+        "item_id",
+        "item_code",
+        "item_name",
         "inbound_quantity",
         "outbound_quantity",
         "expenditure",

@@ -5,18 +5,18 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import shiboken6
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QChartView, QValueAxis
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtGui import QHideEvent, QImage, QShowEvent
-from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox
+from PySide6.QtCore import QCoreApplication, QEvent, QModelIndex, Qt
+from PySide6.QtGui import QFocusEvent, QHideEvent, QImage, QShowEvent
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import GroupBy, NewItem, PeriodKind
+from inventory_manager_mini.core.models import GroupAxis, NewItem, PeriodKind
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.ui.context import AppContext
@@ -35,6 +35,15 @@ from tests.conftest import (
 )
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
+
+
+class GroupBy:
+    NONE: frozenset[GroupAxis] = frozenset()
+    CLIENT = frozenset({GroupAxis.CLIENT})
+    PURCHASER = frozenset({GroupAxis.PURCHASER})
+    CLIENT_PURCHASER = frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER})
+
+
 FISCAL_2025_LABELS = [f"2025年{month}月" for month in range(4, 13)] + [
     f"2026年{month}月" for month in range(1, 4)
 ]
@@ -161,6 +170,76 @@ def _select(combo: QComboBox, data: object) -> None:
     combo.setCurrentIndex(index)
 
 
+def _set_group(window: DashboardWindow, axes: frozenset[GroupAxis]) -> None:
+    for axis, check in window.group_checks.items():
+        check.blockSignals(True)
+        check.setChecked(axis in axes)
+        check.blockSignals(False)
+    window._conditions_changed(0)
+
+
+def _group_of(window: DashboardWindow) -> frozenset[GroupAxis]:
+    return frozenset(axis for axis, check in window.group_checks.items() if check.isChecked())
+
+
+ALL_AXES = frozenset(GroupAxis)
+
+
+def _pick_item(window: DashboardWindow, item_id: int | None) -> None:
+    """候補の選択(コンボのドロップダウンまたは補完候補の確定)を再現する。"""
+    index = window.item_combo.findData(item_id)
+    assert index >= 0
+    window.item_combo.setCurrentIndex(index)
+    window.item_combo.activated.emit(index)
+
+
+def _pick_category(window: DashboardWindow, category_id: int | None) -> None:
+    window.category_picker.set_current_category_id(category_id)
+    window.category_picker.category_changed.emit(category_id)
+
+
+def _type_item_text(window: DashboardWindow, text: str) -> None:
+    line_edit = window.item_combo.lineEdit()
+    assert line_edit is not None
+    line_edit.setText(text)
+
+
+def _press_enter_in_item_combo(qtbot: QtBot, window: DashboardWindow) -> None:
+    line_edit = window.item_combo.lineEdit()
+    assert line_edit is not None
+    completer = window.item_combo.completer()
+    popup = completer.popup() if completer is not None else None
+    if popup is not None:
+        popup.hide()
+    qtbot.keyClick(line_edit, Qt.Key.Key_Return)
+
+
+def _move_focus_out_of_item_combo(window: DashboardWindow) -> None:
+    line_edit = window.item_combo.lineEdit()
+    assert line_edit is not None
+    QApplication.sendEvent(
+        line_edit, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.TabFocusReason)
+    )
+
+
+def _add_category_tree(env: Env) -> dict[str, int]:
+    """備品 > 文具 > 筆記具 と 備品 > 電気 を追加し、末端カテゴリに品目 D・E の履歴を入れる。"""
+    pen_category = env.master.add_category("筆記具", "PN", parent_id=2).id
+    electric_category = env.master.add_category("電気", "EL", parent_id=1).id
+    item_d = env.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="品目D", category_id=pen_category)
+    ).id
+    item_e = env.inventory.create_item(
+        NewItem(client_id=2, purchaser_id=2, name="品目E", category_id=electric_category)
+    ).id
+    _at(env.clock, "2025-05-12")
+    env.inventory.receive(item_d, 1, 3, unit_price=100)
+    env.inventory.receive(item_e, 1, 7, unit_price=100)
+    _at(env.clock, "2025-05-25")
+    env.inventory.issue(item_e, 1, 2, "部署W")
+    return {"pen": pen_category, "electric": electric_category, "d": item_d, "e": item_e}
+
+
 def _totals_text(
     inbound: int,
     outbound: int,
@@ -270,6 +349,8 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
             label,
             "(すべて)",
             "(すべて)",
+            "(すべて)",
+            "(すべて)",
             f"{inbound[index]:,}",
             f"{outbound[index]:,}",
             f"{expenditure[index]:,}円",
@@ -279,7 +360,7 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
     ]
     assert _table_rows(window.breakdown_model) == expected_rows
     assert _table_rows(window.disposal_model) == [
-        ["2025年6月", "(すべて)", "(すべて)", "2", "400円"]
+        ["2025年6月", "(すべて)", "(すべて)", "(すべて)", "(すべて)", "2", "400円"]
     ]
 
     assert _bar_series(window.quantity_chart) == {"入庫数": inbound, "出庫数": outbound}
@@ -298,10 +379,12 @@ def test_monthly_values_match_hand_calculation(qtbot: QtBot, env: Env) -> None:
 def test_disposal_table_excludes_rows_without_disposal(qtbot: QtBot, env: Env) -> None:
     window = _open(qtbot, env)
     _select(window.year_combo, 2025)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
 
     assert window.breakdown_model.rowCount() > window.disposal_model.rowCount()
-    assert _table_rows(window.disposal_model) == [["2025年6月", "経理", "(すべて)", "2", "400円"]]
+    assert _table_rows(window.disposal_model) == [
+        ["2025年6月", "経理", "(すべて)", "(すべて)", "(すべて)", "2", "400円"]
+    ]
 
 
 def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, env: Env) -> None:
@@ -310,7 +393,7 @@ def test_chart_replacement_deletes_old_chart_and_rotates_labels(qtbot: QtBot, en
     assert _category_axis(window.quantity_chart).labelsAngle() == -45
     assert _category_axis(window.amount_chart).labelsAngle() == -45
 
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     assert all(not shiboken6.isValid(chart) for chart in old_charts)
@@ -367,7 +450,7 @@ def test_bar_tooltips_show_period_series_value_and_survive_chart_replacement(
 
     _select(window.kind_combo, PeriodKind.MONTHLY)
     old_chart = window.quantity_chart.chart()
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert not shiboken6.isValid(old_chart)
     new_series = window.quantity_chart.chart().series()[0]
@@ -385,18 +468,18 @@ def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
 
     assert window.breakdown_model.rowCount() == 12
     for group_by in (GroupBy.CLIENT, GroupBy.PURCHASER, GroupBy.CLIENT_PURCHASER):
-        _select(window.group_combo, group_by)
+        _set_group(window, group_by)
 
         assert window.totals_label.text() == label
         assert _bar_series(window.quantity_chart) == quantity
         assert _bar_series(window.amount_chart) == amount
         assert window.breakdown_model.rowCount() == 6
-        assert _column_sum(window.breakdown_model, 3) == 24
-        assert _column_sum(window.breakdown_model, 4) == 14
-        assert _column_sum(window.breakdown_model, 5) == 1300
-        assert _column_sum(window.breakdown_model, 6) == 2
+        assert _column_sum(window.breakdown_model, 5) == 24
+        assert _column_sum(window.breakdown_model, 6) == 14
+        assert _column_sum(window.breakdown_model, 7) == 1300
+        assert _column_sum(window.breakdown_model, 8) == 2
 
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     rows = _table_rows(window.breakdown_model)
     assert [(row[0], row[1], row[2]) for row in rows] == [
         ("2025年5月", "総務", "(すべて)"),
@@ -406,7 +489,7 @@ def test_group_switch_changes_only_table_rows(qtbot: QtBot, env: Env) -> None:
         ("2025年7月", "総務", "(すべて)"),
         ("2025年8月", "経理", "(すべて)"),
     ]
-    assert [row[3:] for row in rows[:3]] == [
+    assert [row[5:] for row in rows[:3]] == [
         ["10", "4", "400円", "0"],
         ["5", "0", "0円", "0"],
         ["6", "8", "900円", "0"],
@@ -489,7 +572,19 @@ def test_dashboard_fits_work_area_and_monthly_labels_render(
     qtbot.wait(30)
 
     assert_fits_work_area(window)
-    assert_buttons_reachable(window, window.csv_button, window.png_button, window.close_button)
+    assert_buttons_reachable(
+        window,
+        window.csv_button,
+        window.png_button,
+        window.close_button,
+        window.client_combo,
+        window.purchaser_combo,
+        window.category_picker.button,
+        window.item_combo,
+        window.year_combo,
+        window.kind_combo,
+        *window.group_checks.values(),
+    )
     for view in (window.quantity_chart, window.amount_chart):
         axis = _category_axis(view)
         assert len(axis.categories()) == 12
@@ -512,7 +607,7 @@ def test_dashboard_breakdown_table_scrolls_when_grouped_rows_overflow(
     qtbot: QtBot, env: Env
 ) -> None:
     window = _open(qtbot, env)
-    _select(window.group_combo, GroupBy.CLIENT_PURCHASER)
+    _set_group(window, GroupBy.CLIENT_PURCHASER)
     assert window._snapshot is not None
     window.breakdown_model.set_rows(window._snapshot.result.breakdown * 50)
     window.tabs.setCurrentIndex(1)
@@ -536,7 +631,7 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
     caplog.set_level("INFO")
     window = _open(qtbot, env)
     _select(window.client_combo, 1)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     destination = tmp_path / "dashboard.csv"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
 
@@ -549,6 +644,9 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
         "年度/月",
         "クライアント",
         "発注主体",
+        "カテゴリ",
+        "管理番号",
+        "品名",
         "入庫数",
         "出庫数",
         "支出額",
@@ -562,6 +660,9 @@ def test_dashboard_csv_exports_the_displayed_breakdown(
             row.period_label,
             row.client_name,
             row.purchaser_name if row.purchaser_id is not None else "(すべて)",
+            "(すべて)",
+            "(すべて)",
+            "(すべて)",
             str(row.inbound_quantity),
             str(row.outbound_quantity),
             str(row.expenditure),
@@ -697,9 +798,9 @@ def test_exports_after_aggregation_failure_use_last_successful_snapshot(
     png_before = selected_path["value"].read_bytes()
 
     probe.fail = True
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     assert len(messages) == 1
-    assert window.group_combo.currentData() == GroupBy.NONE
+    assert _group_of(window) == GroupBy.NONE
 
     selected_path["value"] = tmp_path / "after.csv"
     window.csv_button.click()
@@ -721,7 +822,7 @@ def test_export_buttons_follow_acquisition_and_active_tab(
     assert not window.png_button.isEnabled()
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     assert window.csv_button.isEnabled()
     assert window.png_button.isEnabled()
     window.tabs.setCurrentIndex(1)
@@ -736,7 +837,7 @@ def test_data_changed_updates_once_and_keeps_selection(
 ) -> None:
     window = _open(qtbot, env)
     _select(window.client_combo, 1)
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
     probe = ReportProbe(monkeypatch, env.context.reports)
     assert window.totals_label.text() == _totals_text(5, 0, 0, 0, 0, 0)
 
@@ -748,7 +849,7 @@ def test_data_changed_updates_once_and_keeps_selection(
     _settle(qtbot, probe, 1)
     assert window.totals_label.text() == _totals_text(12, 0, 0, 0, 0, 0)
     assert window.client_combo.currentData() == 1
-    assert window.group_combo.currentData() == GroupBy.CLIENT
+    assert _group_of(window) == GroupBy.CLIENT
 
     env.master.deactivate_purchaser(1)
     env.context.data_bus.data_changed.emit()
@@ -761,7 +862,7 @@ def test_data_changed_updates_once_and_keeps_selection(
     _settle(qtbot, probe, 3)
     assert _category_axis(window.quantity_chart).categories()[0] == "2026年1月"
     assert window.client_combo.currentData() == 1
-    assert window.group_combo.currentData() == GroupBy.CLIENT
+    assert _group_of(window) == GroupBy.CLIENT
 
 
 def test_hidden_window_defers_aggregation_until_shown(
@@ -868,11 +969,11 @@ def test_aggregation_error_restores_last_successful_state(
     probe = ReportProbe(monkeypatch, env.context.reports)
     probe.fail = True
 
-    _select(window.group_combo, GroupBy.PURCHASER)
+    _set_group(window, GroupBy.PURCHASER)
     assert len(messages) == 1
     assert "範囲を超えます" in messages[0]
     assert probe.calls == 1
-    assert window.group_combo.currentData() == GroupBy.NONE
+    assert _group_of(window) == GroupBy.NONE
     assert window.client_combo.currentData() == 1
     assert window.year_combo.currentData() == 2025
 
@@ -891,9 +992,9 @@ def test_aggregation_error_restores_last_successful_state(
     assert _bar_series(window.quantity_chart) == quantity
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.PURCHASER)
+    _set_group(window, GroupBy.PURCHASER)
     assert len(messages) == 3
-    assert window.group_combo.currentData() == GroupBy.PURCHASER
+    assert _group_of(window) == GroupBy.PURCHASER
 
 
 def test_first_aggregation_failure_keeps_not_acquired_state_until_success(
@@ -911,6 +1012,9 @@ def test_first_aggregation_failure_keeps_not_acquired_state_until_success(
     assert window._snapshot is None
     assert window.year_combo.count() == 0
     assert not window.year_combo.isEnabled()
+    assert window.item_combo.count() == 0
+    assert not window.item_combo.isEnabled()
+    assert not window.category_picker.isEnabled()
     assert window.breakdown_model.rowCount() == 0
     assert window.disposal_model.rowCount() == 0
     assert _bar_series(window.quantity_chart) == {}
@@ -944,8 +1048,433 @@ def test_condition_change_retries_after_first_failure(
     assert len(messages) == 1
 
     probe.fail = False
-    _select(window.group_combo, GroupBy.CLIENT)
+    _set_group(window, GroupBy.CLIENT)
 
     assert len(messages) == 1
     assert window._snapshot is not None
     assert window.totals_label.text().count("--") == 0
+
+
+@pytest.mark.parametrize(
+    ("label", "item_key", "category_key", "expected_totals", "inbound_by_month"),
+    [
+        ("品目 A", "a", None, (16, 12, 1300, 0, 0, 0), {1: 10, 2: 6}),
+        ("品目 D", "d", None, (3, 0, 0, 0, 0, 0), {1: 3}),
+        ("筆記具", None, "pen", (3, 0, 0, 0, 0, 0), {1: 3}),
+        ("文具(子孫を含む)", None, 2, (27, 14, 1300, 2, 2, 400), {1: 18, 2: 6, 3: 3}),
+        ("電気(兄弟)", None, "electric", (7, 2, 200, 0, 0, 0), {1: 7}),
+        ("備品(親)", None, 1, (34, 16, 1500, 2, 2, 400), {1: 25, 2: 6, 3: 3}),
+        ("D ∧ 文具", "d", 2, (3, 0, 0, 0, 0, 0), {1: 3}),
+        ("A ∧ 筆記具(配下にない)", "a", "pen", (0, 0, 0, 0, 0, 0), {}),
+    ],
+)
+def test_item_and_category_filters_match_hand_calculation(
+    qtbot: QtBot,
+    env: Env,
+    label: str,
+    item_key: str | None,
+    category_key: str | int | None,
+    expected_totals: tuple[int, int, int, int, int, int],
+    inbound_by_month: dict[int, int],
+) -> None:
+    ids = {**env.items, **_add_category_tree(env)}
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    if item_key is not None:
+        _pick_item(window, ids[item_key])
+    if category_key is not None:
+        _pick_category(window, ids[category_key] if isinstance(category_key, str) else category_key)
+
+    assert window.totals_label.text() == _totals_text(*expected_totals), label
+    inbound, outbound, expenditure, unpriced, disposed, disposal_amount = expected_totals
+    assert sum(_bar_series(window.quantity_chart)["入庫数"]) == inbound
+    assert _bar_series(window.quantity_chart)["入庫数"] == _padded(inbound_by_month)
+    assert sum(_bar_series(window.quantity_chart)["出庫数"]) == outbound
+    assert sum(_bar_series(window.amount_chart)["支出額"]) == expenditure
+    assert window.breakdown_model.rowCount() == 12
+    assert _column_sum(window.breakdown_model, 5) == inbound
+    assert _column_sum(window.breakdown_model, 6) == outbound
+    assert _column_sum(window.breakdown_model, 7) == expenditure
+    assert _column_sum(window.breakdown_model, 8) == unpriced
+    disposal_rows = _table_rows(window.disposal_model)
+    assert (len(disposal_rows) > 0) == (disposed > 0)
+    assert sum(int(row[5].replace(",", "")) for row in disposal_rows) == disposed
+    assert (
+        sum(int(row[6].replace(",", "").removesuffix("円")) for row in disposal_rows)
+        == disposal_amount
+    )
+
+
+def test_filtered_axes_appear_in_ungrouped_rows(qtbot: QtBot, env: Env) -> None:
+    ids = _add_category_tree(env)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    _pick_item(window, ids["d"])
+    may = _table_rows(window.breakdown_model)[1]
+    assert may == [
+        "2025年5月",
+        "(すべて)",
+        "(すべて)",
+        "(すべて)",
+        "PN-0001 品目D",
+        "3",
+        "0",
+        "0円",
+        "0",
+    ]
+
+    _pick_item(window, None)
+    _pick_category(window, ids["pen"])
+    may = _table_rows(window.breakdown_model)[1]
+    assert may[3:5] == ["備品 > 文具 > 筆記具", "(すべて)"]
+
+
+@pytest.mark.parametrize("axes", [frozenset(), ALL_AXES], ids=("all-off", "all-on"))
+def test_group_checks_change_only_table_rows_and_columns(
+    qtbot: QtBot, env: Env, axes: frozenset[GroupAxis]
+) -> None:
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    _set_group(window, GroupBy.CLIENT)
+    label = window.totals_label.text()
+    quantity = _bar_series(window.quantity_chart)
+    amount = _bar_series(window.amount_chart)
+
+    _set_group(window, axes)
+
+    assert _group_of(window) == axes
+    assert window.totals_label.text() == label
+    assert _bar_series(window.quantity_chart) == quantity
+    assert _bar_series(window.amount_chart) == amount
+    assert window.breakdown_model.rowCount() == (6 if axes else 12)
+    assert _column_sum(window.breakdown_model, 5) == 24
+    assert _column_sum(window.breakdown_model, 6) == 14
+    assert _column_sum(window.breakdown_model, 7) == 1300
+    assert _column_sum(window.breakdown_model, 8) == 2
+    first = _table_rows(window.breakdown_model)[0]
+    if axes:
+        assert first == [
+            "2025年5月",
+            "総務",
+            "本部",
+            "備品 > 文具",
+            "ST-0001 品目A",
+            "10",
+            "4",
+            "400円",
+            "0",
+        ]
+        assert _table_rows(window.disposal_model) == [
+            [
+                "2025年6月",
+                "経理",
+                "部門",
+                "備品 > 文具",
+                "ST-0002 品目B",
+                "2",
+                "400円",
+            ]
+        ]
+    else:
+        assert first[1:5] == ["(すべて)"] * 4
+
+
+def test_category_and_item_axes_can_be_combined(qtbot: QtBot, env: Env) -> None:
+    ids = _add_category_tree(env)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    _set_group(window, frozenset({GroupAxis.CATEGORY}))
+    rows = _table_rows(window.breakdown_model)
+    assert {(row[3], row[4]) for row in rows} == {
+        ("備品 > 文具", "(すべて)"),
+        ("備品 > 文具 > 筆記具", "(すべて)"),
+        ("備品 > 電気", "(すべて)"),
+    }
+
+    _set_group(window, frozenset({GroupAxis.ITEM}))
+    assert {row[4] for row in _table_rows(window.breakdown_model)} == {
+        "ST-0001 品目A",
+        "ST-0002 品目B",
+        "ST-0003 品目C",
+        "PN-0001 品目D",
+        "EL-0001 品目E",
+    }
+    assert ids["d"] > 0
+
+
+def test_item_combo_lists_inactive_items_and_completes_by_partial_text(
+    qtbot: QtBot, env: Env
+) -> None:
+    env.inventory.deactivate_item(env.items["c"])
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+
+    assert [window.item_combo.itemText(index) for index in range(window.item_combo.count())] == [
+        "すべて",
+        "ST-0001 品目A",
+        "ST-0002 品目B",
+        "ST-0003 品目C (無効)",
+    ]
+    completer = window.item_combo.completer()
+    assert completer is not None
+
+    def completions(prefix: str) -> list[str]:
+        completer.setCompletionPrefix(prefix)
+        model = completer.completionModel()
+        return [model.index(row, 0).data() for row in range(completer.completionCount())]
+
+    assert completions("目あ") == []
+    assert completions("目b") == ["ST-0002 品目B"]
+    assert completions("st-0003") == ["ST-0003 品目C (無効)"]
+    assert len(completions("品目")) == 3
+
+    _pick_item(window, env.items["c"])
+    assert window._item_id == env.items["c"]
+    assert window.item_combo.currentText() == "ST-0003 品目C (無効)"
+    assert window.totals_label.text() == _totals_text(3, 2, 0, 2, 0, 0)
+
+
+def test_item_input_is_committed_only_by_enter_focus_out_or_candidate_selection(
+    qtbot: QtBot, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    line_edit = window.item_combo.lineEdit()
+    assert line_edit is not None
+
+    line_edit.selectAll()
+    qtbot.keyClicks(line_edit, "st-000")
+    qtbot.wait(30)
+    assert window._item_id is None
+    assert probe.calls == 0
+
+    _type_item_text(window, "ST-0002 品目B")
+    assert window._item_id is None
+    assert probe.calls == 0
+
+    _press_enter_in_item_combo(qtbot, window)
+    assert window._item_id == env.items["b"]
+    assert probe.calls == 1
+    assert window.totals_label.text() == _totals_text(5, 0, 0, 0, 2, 400)
+
+    _press_enter_in_item_combo(qtbot, window)
+    _move_focus_out_of_item_combo(window)
+    assert probe.calls == 1
+
+    _type_item_text(window, "ST-0001 品目A")
+    _move_focus_out_of_item_combo(window)
+    assert window._item_id == env.items["a"]
+    assert probe.calls == 2
+    _move_focus_out_of_item_combo(window)
+    _press_enter_in_item_combo(qtbot, window)
+    assert probe.calls == 2
+
+    _pick_item(window, env.items["c"])
+    assert probe.calls == 3
+    _pick_item(window, env.items["c"])
+    assert probe.calls == 3
+
+    completer = window.item_combo.completer()
+    assert completer is not None
+    completer.setCompletionPrefix("st-0002")
+    cast(Any, completer).activated[QModelIndex].emit(completer.completionModel().index(0, 0))
+    qtbot.wait(30)
+    assert window._item_id == env.items["b"]
+    assert probe.calls == 4
+
+
+@pytest.mark.parametrize("initial_item", ["a", None], ids=("item-selected", "all-selected"))
+@pytest.mark.parametrize("invalid_text", ["存在しない品目", "", "ST-9999"])
+@pytest.mark.parametrize("commit", ["enter", "focus-out"])
+def test_unknown_item_text_reverts_to_confirmed_selection(
+    qtbot: QtBot,
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_item: str | None,
+    invalid_text: str,
+    commit: str,
+) -> None:
+    window = _open(qtbot, env)
+    if initial_item is not None:
+        _pick_item(window, env.items[initial_item])
+    expected_id = window._item_id
+    expected_text = window.item_combo.currentText()
+    count = window.item_combo.count()
+    probe = ReportProbe(monkeypatch, env.context.reports)
+
+    _type_item_text(window, invalid_text)
+    if commit == "enter":
+        _press_enter_in_item_combo(qtbot, window)
+    else:
+        _move_focus_out_of_item_combo(window)
+
+    assert window._item_id == expected_id
+    assert window.item_combo.currentText() == expected_text
+    assert window.item_combo.count() == count
+    assert probe.calls == 0
+
+
+def test_data_changed_follows_item_and_category_changes_and_keeps_selection(
+    qtbot: QtBot, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _add_category_tree(env)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    _pick_category(window, 2)
+    _pick_item(window, ids["d"])
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    assert window.totals_label.text() == _totals_text(3, 0, 0, 0, 0, 0)
+
+    new_item = env.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="品目F", category_id=ids["pen"])
+    ).id
+    env.context.data_bus.data_changed.emit()
+    _settle(qtbot, probe, 1)
+    assert window.item_combo.findData(new_item) >= 0
+    assert window._item_id == ids["d"]
+    assert window.item_combo.currentText() == "PN-0001 品目D"
+    assert window.category_picker.current_category_id() == 2
+
+    env.inventory.deactivate_item(ids["d"])
+    env.context.data_bus.data_changed.emit()
+    _settle(qtbot, probe, 2)
+    assert window.item_combo.currentText() == "PN-0001 品目D (無効)"
+    assert window._item_id == ids["d"]
+    assert window.totals_label.text() == _totals_text(3, 0, 0, 0, 0, 0)
+
+    env.master.move_category(ids["pen"], ids["electric"])
+    env.context.data_bus.data_changed.emit()
+    _settle(qtbot, probe, 3)
+    assert window.totals_label.text() == _totals_text(0, 0, 0, 0, 0, 0)
+    assert window.category_picker.current_category_id() == 2
+    assert window._item_id == ids["d"]
+
+    _pick_category(window, ids["electric"])
+    assert window.totals_label.text() == _totals_text(3, 0, 0, 0, 0, 0)
+
+
+def test_selection_returns_to_all_when_selected_choices_disappear(
+    qtbot: QtBot, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    removable_category = env.master.add_category("空", "EM", parent_id=1).id
+    removable_item = env.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="消える品目", category_id=2)
+    ).id
+    env.context.data_bus.data_changed.emit()
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    _settle(qtbot, probe, 1)
+    _pick_category(window, removable_category)
+    _pick_item(window, removable_item)
+    assert window.totals_label.text() == _totals_text(0, 0, 0, 0, 0, 0)
+
+    env.master.delete_category(removable_category)
+    env.inventory.conn.execute("DELETE FROM items WHERE id = ?", (removable_item,))
+    env.context.data_bus.data_changed.emit()
+    _settle(qtbot, probe, 4)
+
+    assert window.category_picker.current_category_id() is None
+    assert window.category_picker.display.text() == "すべて"
+    assert window._item_id is None
+    assert window.item_combo.currentText() == "すべて"
+    assert window.totals_label.text() == _totals_text(24, 14, 1300, 2, 2, 400)
+
+
+def test_aggregation_error_restores_item_category_and_group_checks(
+    qtbot: QtBot,
+    env: Env,
+    messages: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = _add_category_tree(env)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    _pick_category(window, 2)
+    _pick_item(window, ids["d"])
+    _set_group(window, frozenset({GroupAxis.CATEGORY, GroupAxis.ITEM}))
+    label = window.totals_label.text()
+    rows = _table_rows(window.breakdown_model)
+    disposal_rows = _table_rows(window.disposal_model)
+    quantity = _bar_series(window.quantity_chart)
+    amount = _bar_series(window.amount_chart)
+    probe = ReportProbe(monkeypatch, env.context.reports)
+    probe.fail = True
+
+    def assert_restored() -> None:
+        assert window._item_id == ids["d"]
+        assert window.item_combo.currentText() == "PN-0001 品目D"
+        assert window.category_picker.current_category_id() == 2
+        assert _group_of(window) == frozenset({GroupAxis.CATEGORY, GroupAxis.ITEM})
+        assert window.totals_label.text() == label
+        assert _table_rows(window.breakdown_model) == rows
+        assert _table_rows(window.disposal_model) == disposal_rows
+        assert _bar_series(window.quantity_chart) == quantity
+        assert _bar_series(window.amount_chart) == amount
+
+    _pick_item(window, env.items["a"])
+    assert (len(messages), probe.calls) == (1, 1)
+    assert_restored()
+
+    _pick_category(window, ids["electric"])
+    assert (len(messages), probe.calls) == (2, 2)
+    assert_restored()
+
+    _set_group(window, GroupBy.CLIENT)
+    assert (len(messages), probe.calls) == (3, 3)
+    assert_restored()
+
+    probe.fail = False
+    _pick_item(window, env.items["a"])
+    assert len(messages) == 3
+    assert window._item_id == env.items["a"]
+
+
+def test_dashboard_csv_matches_rows_for_item_category_filters_and_axes(
+    qtbot: QtBot,
+    env: Env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add_category_tree(env)
+    window = _open(qtbot, env)
+    _select(window.year_combo, 2025)
+    _pick_category(window, 2)
+    _set_group(window, frozenset({GroupAxis.CATEGORY, GroupAxis.ITEM, GroupAxis.PURCHASER}))
+    destination = tmp_path / "filtered.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(destination), ""))
+
+    window.csv_button.click()
+
+    with destination.open(encoding="utf-8-sig", newline="") as file:
+        output = list(csv.reader(file))
+    assert window._snapshot is not None
+    expected = [
+        [
+            row.period_label,
+            row.client_name or "(すべて)",
+            row.purchaser_name or "(すべて)",
+            row.category_name or "(すべて)",
+            row.item_code or "(すべて)",
+            row.item_name or "(すべて)",
+            str(row.inbound_quantity),
+            str(row.outbound_quantity),
+            str(row.expenditure),
+            str(row.unpriced_issue_quantity),
+            str(row.disposed_quantity),
+            str(row.disposal_amount),
+        ]
+        for row in window._snapshot.result.breakdown
+    ]
+    assert len(output) == window.breakdown_model.rowCount() + 1
+    assert output[1:] == expected
+    assert all(row[1] == "(すべて)" for row in output[1:])
+    assert {row[3] for row in output[1:]} == {
+        "備品 > 文具",
+        "備品 > 文具 > 筆記具",
+    }
+    assert all(row[4] != "(すべて)" for row in output[1:])

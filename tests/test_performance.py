@@ -18,7 +18,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
-from inventory_manager_mini.core.models import GroupBy, ItemFilter, PeriodKind, Reason
+from inventory_manager_mini.core.models import GroupAxis, ItemFilter, PeriodKind, Reason
 from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.core.services import BackupService, InventoryService
 from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
@@ -353,8 +353,17 @@ def test_service_outflow_save_with_many_lots(performance_db: Path, tmp_path: Pat
         conn.close()
 
 
+_ALL_AXES = frozenset(GroupAxis)
+_DASHBOARD_SCENARIOS = {
+    "全軸": {},
+    "品目絞込": {"item_id": 1},
+    "カテゴリ絞込": {"category_id": 1},
+}
+
+
+@pytest.mark.parametrize("scenario", list(_DASHBOARD_SCENARIOS))
 def test_report_annual_and_monthly_aggregation_with_large_history(
-    performance_db: Path,
+    performance_db: Path, scenario: str
 ) -> None:
     conn = connect(performance_db)
     try:
@@ -368,26 +377,53 @@ def test_report_annual_and_monthly_aggregation_with_large_history(
             reports.dashboard_result(
                 None if kind is PeriodKind.ANNUAL else reports.current_fiscal_year(),
                 kind,
-                group_by=GroupBy.CLIENT_PURCHASER,
+                group_by=_ALL_AXES,
+                **_DASHBOARD_SCENARIOS[scenario],
             )
             elapsed = time.perf_counter() - started_at
             results.append((label, elapsed))
-            assert elapsed <= 2.0, f"{label}集計に {elapsed:.3f} 秒かかりました"
+            assert elapsed <= 2.0, f"{scenario}の{label}集計に {elapsed:.3f} 秒かかりました"
         print(
-            "大規模履歴のレポート: "
+            f"大規模履歴のレポート(全内訳軸・{scenario}): "
             + "、".join(f"{label} {elapsed:.3f} 秒" for label, elapsed in results)
         )
     finally:
         conn.close()
 
 
+def _finish_dashboard_render(dashboard: DashboardWindow) -> None:
+    QApplication.processEvents()
+    assert not dashboard.chart_content.grab().isNull()
+
+
+def _dashboard_condition_change(dashboard: DashboardWindow, scenario: str) -> Callable[[], None]:
+    if scenario == "全軸":
+        return lambda: dashboard.client_combo.setCurrentIndex(1)
+    if scenario == "品目絞込":
+        index = dashboard.item_combo.findData(1)
+        assert index > 0
+
+        def pick_item() -> None:
+            dashboard.item_combo.setCurrentIndex(index)
+            dashboard.item_combo.activated.emit(index)
+
+        return pick_item
+
+    def pick_category() -> None:
+        dashboard.category_picker.set_current_category_id(1)
+        dashboard.category_picker.category_changed.emit(1)
+
+    return pick_category
+
+
+@pytest.mark.parametrize("scenario", list(_DASHBOARD_SCENARIOS))
 @pytest.mark.parametrize(
     "kind",
     (PeriodKind.MONTHLY, PeriodKind.ANNUAL),
     ids=("月次", "年次推移"),
 )
 def test_dashboard_refresh_and_render_with_large_history(
-    qtbot, monkeypatch, performance_db: Path, kind: PeriodKind
+    qtbot, monkeypatch, performance_db: Path, kind: PeriodKind, scenario: str
 ) -> None:
     conn = open_database(
         performance_db,
@@ -403,29 +439,47 @@ def test_dashboard_refresh_and_render_with_large_history(
     qtbot.addWidget(dashboard)
     if kind is PeriodKind.ANNUAL:
         dashboard.kind_combo.setCurrentIndex(dashboard.kind_combo.findData(kind))
-    dashboard.group_combo.setCurrentIndex(dashboard.group_combo.findData(GroupBy.CLIENT_PURCHASER))
+    for check in dashboard.group_checks.values():
+        check.blockSignals(True)
+        check.setChecked(True)
+        check.blockSignals(False)
     original_dashboard_result = context.reports.dashboard_result
-    started_at: list[float] = []
+    calls: list[None] = []
 
-    def track_dashboard_result(*args, **kwargs):
-        started_at.append(time.perf_counter())
+    def count_dashboard_result(*args, **kwargs):
+        calls.append(None)
         return original_dashboard_result(*args, **kwargs)
 
-    monkeypatch.setattr(context.reports, "dashboard_result", track_dashboard_result)
+    monkeypatch.setattr(context.reports, "dashboard_result", count_dashboard_result)
     try:
+        # 計測は選択肢の取得(_collect_snapshot の開始前)から同期描画の完了までとする
+        started_at = time.perf_counter()
         dashboard.show()
-        QApplication.processEvents()
-        image = dashboard.chart_content.grab()
-        completed_at = time.perf_counter()
-        assert len(started_at) == 1
+        _finish_dashboard_render(dashboard)
+        initial_elapsed = time.perf_counter() - started_at
+        assert len(calls) == 1
         assert dashboard.breakdown_model.rowCount() > 0
-        assert not image.isNull()
+        assert dashboard.item_combo.count() > 5000
         assert dashboard.quantity_chart.chart().series()
         assert dashboard.amount_chart.chart().series()
-        elapsed = completed_at - started_at[0]
+
+        change = _dashboard_condition_change(dashboard, scenario)
+        started_at = time.perf_counter()
+        change()
+        _finish_dashboard_render(dashboard)
+        change_elapsed = time.perf_counter() - started_at
+        assert len(calls) == 2
+        assert dashboard.breakdown_model.rowCount() > 0
+
         label = "年次推移" if kind is PeriodKind.ANNUAL else "月次"
-        print(f"ダッシュボード再集計+両グラフ描画({label}): {elapsed:.3f} 秒")
-        assert elapsed <= 2.0, f"{label}の再集計+描画に {elapsed:.3f} 秒かかりました"
+        print(
+            f"ダッシュボード(全内訳軸・{scenario}・{label}): "
+            f"初回表示 {initial_elapsed:.3f} 秒、条件変更 {change_elapsed:.3f} 秒"
+        )
+        assert initial_elapsed <= 2.0, f"{label}の初回表示に {initial_elapsed:.3f} 秒かかりました"
+        assert change_elapsed <= 2.0, (
+            f"{scenario}・{label}の条件変更に {change_elapsed:.3f} 秒かかりました"
+        )
     finally:
         dashboard.shutdown()
         conn.close()

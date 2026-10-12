@@ -204,11 +204,19 @@ class PeriodKind(StrEnum):
     MONTHLY = "monthly"
 
 
-class GroupBy(StrEnum):
-    NONE = "none"
+class GroupAxis(StrEnum):
     CLIENT = "client"
     PURCHASER = "purchaser"
-    CLIENT_PURCHASER = "client_purchaser"
+    CATEGORY = "category"
+    ITEM = "item"
+
+
+@dataclass(frozen=True, slots=True)
+class ItemChoice:
+    id: int
+    code: str
+    name: str
+    is_active: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +227,11 @@ class DashboardRow:
     client_name: str | None
     purchaser_id: int | None
     purchaser_name: str | None
+    category_id: int | None
+    category_name: str | None
+    item_id: int | None
+    item_code: str | None
+    item_name: str | None
     inbound_quantity: int
     outbound_quantity: int
     expenditure: int

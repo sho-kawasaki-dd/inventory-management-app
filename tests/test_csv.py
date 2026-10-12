@@ -12,7 +12,7 @@ import pytest
 from inventory_manager_mini.core.errors import FileOutputError
 from inventory_manager_mini.core.models import (
     DashboardRow,
-    GroupBy,
+    GroupAxis,
     ItemFilter,
     NewItem,
     PeriodKind,
@@ -221,7 +221,7 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
     inventory.receive(item_id, 1, 1, unit_price=100)
     output = tmp_path / "dashboard.csv"
 
-    rows = report.dashboard(2025, PeriodKind.ANNUAL, group_by=GroupBy.CLIENT)
+    rows = report.dashboard(2025, PeriodKind.ANNUAL, group_by=frozenset({GroupAxis.CLIENT}))
     report.export_dashboard_csv(output, rows)
     rows = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
 
@@ -229,6 +229,9 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
         "年度/月",
         "クライアント",
         "発注主体",
+        "カテゴリ",
+        "管理番号",
+        "品名",
         "入庫数",
         "出庫数",
         "支出額",
@@ -236,8 +239,8 @@ def test_dashboard_csv_marks_collapsed_axes_as_all(
         "廃棄数",
         "廃棄額",
     ]
-    assert rows[1][1:3] == ["総務", "(すべて)"]
-    assert rows[1][3] == "1"
+    assert rows[1][1:6] == ["総務", "(すべて)", "(すべて)", "(すべて)", "(すべて)"]
+    assert rows[1][6] == "1"
 
 
 def test_dashboard_csv_exports_filtered_inactive_master_names_safely(
@@ -259,8 +262,8 @@ def test_dashboard_csv_exports_filtered_inactive_master_names_safely(
     report.export_dashboard_csv(output, rows)
     exported = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))
 
-    assert exported[1][1:3] == ["'=顧客", "'+発注主体"]
-    assert exported[1][3:] == ["1", "0", "0", "0", "0", "0"]
+    assert exported[1][1:6] == ["'=顧客", "'+発注主体", "(すべて)", "(すべて)", "(すべて)"]
+    assert exported[1][6:] == ["1", "0", "0", "0", "0", "0"]
 
 
 def test_csv_replace_failure_preserves_existing_file_and_removes_temporary_file(
@@ -300,6 +303,8 @@ def _dashboard_row(
     client: tuple[int, str] | None,
     purchaser: tuple[int, str] | None,
     base: int,
+    category: tuple[int, str] | None = None,
+    item: tuple[int, str, str] | None = None,
 ) -> DashboardRow:
     return DashboardRow(
         period_label=label,
@@ -308,6 +313,11 @@ def _dashboard_row(
         client_name=None if client is None else client[1],
         purchaser_id=None if purchaser is None else purchaser[0],
         purchaser_name=None if purchaser is None else purchaser[1],
+        category_id=None if category is None else category[0],
+        category_name=None if category is None else category[1],
+        item_id=None if item is None else item[0],
+        item_code=None if item is None else item[1],
+        item_name=None if item is None else item[2],
         inbound_quantity=base + 1,
         outbound_quantity=base + 2,
         expenditure=base + 3,
@@ -328,6 +338,7 @@ def test_dashboard_csv_writes_given_rows_as_is_without_reaggregating(
         _dashboard_row("2025年4月", (2, "経理"), None, 20),
         _dashboard_row("2025年5月", None, (1, "本部"), 30),
         _dashboard_row("2025年6月", (1, "総務"), (2, "部門"), 40),
+        _dashboard_row("2025年7月", None, None, 50, (2, "=備品 > 文具"), (7, "ST-0001", "@品名")),
     ]
     output = tmp_path / "as-is.csv"
 
@@ -339,11 +350,26 @@ def test_dashboard_csv_writes_given_rows_as_is_without_reaggregating(
     assert content.startswith(b"\xef\xbb\xbf")
     assert "\n" not in text.replace("\r\n", "")
     assert all(line.startswith('"') and line.endswith('"') for line in text.split("\r\n") if line)
+    all_ = "(すべて)"
     assert exported[1:] == [
-        ["2025年度", "(すべて)", "(すべて)", "11", "12", "13", "14", "15", "16"],
-        ["2025年4月", "経理", "(すべて)", "21", "22", "23", "24", "25", "26"],
-        ["2025年5月", "(すべて)", "本部", "31", "32", "33", "34", "35", "36"],
-        ["2025年6月", "総務", "部門", "41", "42", "43", "44", "45", "46"],
+        ["2025年度", all_, all_, all_, all_, all_, "11", "12", "13", "14", "15", "16"],
+        ["2025年4月", "経理", all_, all_, all_, all_, "21", "22", "23", "24", "25", "26"],
+        ["2025年5月", all_, "本部", all_, all_, all_, "31", "32", "33", "34", "35", "36"],
+        ["2025年6月", "総務", "部門", all_, all_, all_, "41", "42", "43", "44", "45", "46"],
+        [
+            "2025年7月",
+            all_,
+            all_,
+            "'=備品 > 文具",
+            "ST-0001",
+            "'@品名",
+            "51",
+            "52",
+            "53",
+            "54",
+            "55",
+            "56",
+        ],
     ]
 
 
@@ -363,14 +389,14 @@ def test_dashboard_csv_with_no_rows_contains_only_the_header(
 @pytest.mark.parametrize(
     ("client_id", "purchaser_id", "group_by", "expected"),
     [
-        (None, None, GroupBy.NONE, ["(すべて)", "(すべて)"]),
-        (None, None, GroupBy.PURCHASER, ["(すべて)", "本部"]),
-        (None, None, GroupBy.CLIENT, ["総務", "(すべて)"]),
-        (1, None, GroupBy.NONE, ["総務", "(すべて)"]),
-        (None, 1, GroupBy.NONE, ["(すべて)", "本部"]),
-        (1, None, GroupBy.PURCHASER, ["総務", "本部"]),
-        (None, 1, GroupBy.CLIENT, ["総務", "本部"]),
-        (1, 1, GroupBy.CLIENT_PURCHASER, ["総務", "本部"]),
+        (None, None, frozenset[GroupAxis](), ["(すべて)", "(すべて)"]),
+        (None, None, frozenset({GroupAxis.PURCHASER}), ["(すべて)", "本部"]),
+        (None, None, frozenset({GroupAxis.CLIENT}), ["総務", "(すべて)"]),
+        (1, None, frozenset[GroupAxis](), ["総務", "(すべて)"]),
+        (None, 1, frozenset[GroupAxis](), ["(すべて)", "本部"]),
+        (1, None, frozenset({GroupAxis.PURCHASER}), ["総務", "本部"]),
+        (None, 1, frozenset({GroupAxis.CLIENT}), ["総務", "本部"]),
+        (1, 1, frozenset({GroupAxis.CLIENT, GroupAxis.PURCHASER}), ["総務", "本部"]),
     ],
 )
 def test_dashboard_csv_shows_names_for_filtered_axes_and_all_for_unfiltered_collapsed_axes(
@@ -380,7 +406,7 @@ def test_dashboard_csv_shows_names_for_filtered_axes_and_all_for_unfiltered_coll
     fixed_clock: FixedClock,
     client_id: int | None,
     purchaser_id: int | None,
-    group_by: GroupBy,
+    group_by: frozenset[GroupAxis],
     expected: list[str],
 ) -> None:
     report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
@@ -394,7 +420,7 @@ def test_dashboard_csv_shows_names_for_filtered_axes_and_all_for_unfiltered_coll
     output = tmp_path / "filtered.csv"
 
     rows = report.dashboard_result(
-        2025, PeriodKind.ANNUAL, client_id, purchaser_id, group_by
+        2025, PeriodKind.ANNUAL, client_id, purchaser_id, group_by=group_by
     ).breakdown
     report.export_dashboard_csv(output, rows)
     exported = list(csv.reader(output.open(encoding="utf-8-sig", newline="")))

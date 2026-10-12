@@ -33,6 +33,7 @@ from inventory_manager_mini.core.models import (
     Client,
     FifoEstimate,
     Item,
+    ItemChoice,
     ItemFilter,
     ItemRow,
     ItemUpdate,
@@ -288,6 +289,9 @@ class InventoryService:
 
     def list_low_stock(self) -> list[ItemRow]:
         return self.items.list_low_stock()
+
+    def list_item_choices(self) -> list[ItemChoice]:
+        return self.items.list_choices()
 
     def get_purchase_info(self, item_id: int) -> PurchaseInfo:
         return self.items.get_purchase_info(item_id)

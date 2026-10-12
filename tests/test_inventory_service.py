@@ -250,6 +250,22 @@ def test_low_stock_listing_tracks_boundaries_and_item_reactivation(
     assert zero_threshold.id in {row.id for row in inventory.list_low_stock()}
 
 
+def test_list_item_choices_is_lightweight_ordered_and_includes_inactive(
+    inventory: InventoryService,
+) -> None:
+    first = inventory.create_item(_new_item(name="先に作成"))
+    second = inventory.create_item(_new_item(name="後に作成"))
+    inventory.deactivate_item(first.id)
+
+    choices = inventory.list_item_choices()
+
+    assert [(c.id, c.code, c.name, c.is_active) for c in choices] == [
+        (first.id, first.code, "先に作成", False),
+        (second.id, second.code, "後に作成", True),
+    ]
+    assert [c.code for c in choices] == sorted(c.code for c in choices)
+
+
 def test_reversing_receipt_does_not_restore_reference_price(inventory: InventoryService) -> None:
     item = inventory.create_item(_new_item(initial_quantity=2, initial_staff_id=1))
     receipt = inventory.receive(item.id, 1, 3, unit_price=250, update_reference_price=True)

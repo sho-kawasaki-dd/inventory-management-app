@@ -17,6 +17,7 @@ from inventory_manager_mini.core.models import (
     Category,
     Client,
     Item,
+    ItemChoice,
     ItemFilter,
     ItemRow,
     ItemUpdate,
@@ -366,6 +367,20 @@ class ItemRepository:
 
     def list_low_stock(self) -> list[ItemRow]:
         return self.list(ItemFilter(low_stock_only=True))
+
+    def list_choices(self) -> list[ItemChoice]:
+        rows = self.conn.execute(
+            "SELECT id, code, name, is_active FROM items ORDER BY code, id"
+        ).fetchall()
+        return [
+            ItemChoice(
+                id=int(row["id"]),
+                code=str(row["code"]),
+                name=str(row["name"]),
+                is_active=_bool(int(row["is_active"])),
+            )
+            for row in rows
+        ]
 
     def get_purchase_info(self, item_id: int) -> PurchaseInfo:
         row = self.conn.execute(
