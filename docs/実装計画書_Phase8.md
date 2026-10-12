@@ -138,14 +138,14 @@
 
 #### B. PyInstaller spec
 
-- [ ] `packaging/inventory-manager-mini.spec` を作成する(パスは `SPECPATH` 基準)
-  - [ ] エントリは `src/inventory_manager_mini/__main__.py`
-  - [ ] `collect_data_files('inventory_manager_mini.db')` と `copy_metadata('inventory-manager-mini')`
-  - [ ] hiddenimports: `PySide6.QtCharts`・`PySide6.QtPrintSupport`・`collect_submodules('inventory_manager_mini')`
-  - [ ] `console=False`・`upx=False`・`name='inventory-manager-mini'`
+- [x] `packaging/inventory-manager-mini.spec` を作成する(パスは `SPECPATH` 基準)
+  - [x] エントリは `src/inventory_manager_mini/__main__.py`
+  - [x] `collect_data_files('inventory_manager_mini.db')` と `copy_metadata('inventory-manager-mini')`
+  - [x] hiddenimports: `PySide6.QtCharts`・`PySide6.QtPrintSupport`・`collect_submodules('inventory_manager_mini')`
+  - [x] `console=False`・`upx=False`・`name='inventory-manager-mini'`
   - [ ] 通常実行・凍結版の法的通知 UI が参照する資源を同梱する。onedir の `_internal` 構造は維持し、exe と同じ階層に置く `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/` はビルド後に D のスクリプトでコピーする
-  - [ ] `packaging/app.ico` が存在する場合のみ `icon` を指定する
-- [ ] 試験ビルドと同等の onedir 構成が `dist/staging/<ビルドID>/inventory-manager-mini/` に得られることをローカルで確認する
+  - [x] `packaging/app.ico` が存在する場合のみ `icon` を指定する
+- [x] 試験ビルドと同等の onedir 構成が `dist/staging/<ビルドID>/inventory-manager-mini/` に得られることをローカルで確認する
 
 #### C. Inno Setup スクリプト
 
