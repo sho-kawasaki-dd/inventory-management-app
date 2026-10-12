@@ -185,21 +185,23 @@
 
 #### E. 検査スクリプトとテスト
 
-- [ ] `scripts/check_release_version.py`: `--tag` と `--version` を排他的な入力モードとする。タグは `^v([0-9]+\.[0-9]+\.[0-9]+)(-rc[1-9][0-9]*)?$`、ローカル版数は `^[0-9]+\.[0-9]+\.[0-9]+$`、`--suffix` は空または `^-rc[1-9][0-9]*$` とする。接尾辞はローカルモードだけで指定し、`tomllib` で読んだ `project.version` と基本版数を照合する
-- [ ] 版数検査の成功時は標準出力に JSON(`version`・`suffix`・真偽値の `is_prerelease`)を返し、失敗時は標準エラーに理由を表示して非ゼロ終了する。CI は JSON を解析し、`$env:GITHUB_OUTPUT` に UTF-8 で step outputs を書く。真偽値は `true`/`false` の文字列にし、式では文字列比較で判定する
-- [ ] `scripts/check_bundle.py`: 引数の onedir 出力に対し、次のファイルが存在し空でないことを検査する。欠落を全件列挙して非 0 で終了する
-  - [ ] `inventory-manager-mini.exe`
-  - [ ] `PySide6/QtCharts.pyd`・`PySide6/Qt6Charts.dll`
-  - [ ] `PySide6/QtPrintSupport.pyd`・`PySide6/Qt6PrintSupport.dll`
-  - [ ] `PySide6/plugins/platforms/qwindows.dll`
-  - [ ] `inventory_manager_mini/db/schema.sql`・`schema_v3.sql`
-  - [ ] `inventory_manager_mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致)
-  - [ ] exe と同じ階層の `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/GPL-3.0.txt` と棚卸しで必要と判定した各本文、および UI が参照する資源
-  - [ ] ライブラリ・SQL・dist-info は `_internal`、利用者向け文書は exe と同じ階層を基準に検査する。配置は実ビルドで確定する
-- [ ] `tests/test_check_release_version.py`: 正式/rc タグ、`v` なしのローカル版数と空/rc 接尾辞の合格、版数不一致・タグの `v` なし・ローカル版数の `v` あり・桁不足・接尾辞違い・rc0・入力モード競合の不合格、および JSON 出力を検証する(`tmp_path` の `pyproject.toml` を使う)
-- [ ] `tests/test_check_bundle.py`: `tmp_path` に疑似 onedir を作り、全件そろう場合の合格、1 件ずつ欠落・空ファイル・版数不一致の dist-info での不合格、通知/本文の欠落、および欠落の全件列挙を検証する
-- [ ] `scripts/` のモジュールをテストから読み込む方法は既存の `tests/test_dummy_data.py` に合わせる
-- [ ] 依存ルールのテスト(`tests/test_dependency_rules.py`)に影響しないこと(`scripts/` は `src/` から参照されない)を確認する
+- [x] `scripts/check_release_version.py`: `--tag` と `--version` を排他的な入力モードとする。タグは `^v([0-9]+\.[0-9]+\.[0-9]+)(-rc[1-9][0-9]*)?$`、ローカル版数は `^[0-9]+\.[0-9]+\.[0-9]+$`、`--suffix` は空または `^-rc[1-9][0-9]*$` とする。接尾辞はローカルモードだけで指定し、`tomllib` で読んだ `project.version` と基本版数を照合する
+- [x] 版数検査の成功時は標準出力に JSON(`version`・`suffix`・真偽値の `is_prerelease`)を返し、失敗時は標準エラーに理由を表示して非ゼロ終了する
+- [ ] CI は JSON を解析し、`$env:GITHUB_OUTPUT` に UTF-8 で step outputs を書く。真偽値は `true`/`false` の文字列にし、式では文字列比較で判定する(8b H)
+- [x] `scripts/check_bundle.py`: 引数の onedir 出力に対し、次のファイルが存在し空でないことを検査する。欠落を全件列挙して非 0 で終了する
+  - [x] `inventory-manager-mini.exe`
+  - [x] `PySide6/QtCharts.pyd`・`PySide6/Qt6Charts.dll`
+  - [x] `PySide6/QtPrintSupport.pyd`・`PySide6/Qt6PrintSupport.dll`
+  - [x] `PySide6/plugins/platforms/qwindows.dll`
+  - [x] `inventory_manager_mini/db/schema.sql`・`schema_v3.sql`
+  - [x] `inventory-manager-mini-<版数>.dist-info/METADATA`(版数が `pyproject.toml` と一致)
+  - [x] exe と同じ階層の `LICENSE`・`DISTRIBUTION_LICENSE.txt`・`THIRD_PARTY_NOTICES.txt`・`SOURCE_CODE.txt`・`licenses/GPL-3.0.txt` と `packaging/licenses/` の各本文、および UI が参照する資源
+  - [x] ライブラリ・SQL・dist-info は `_internal`、利用者向け文書は exe と同じ階層を基準に検査する
+- [ ] 実ビルドで配置を確定し、必要なら検査パスを調整する(G)
+- [x] `tests/test_check_release_version.py`: 正式/rc タグ、`v` なしのローカル版数と空/rc 接尾辞の合格、版数不一致・タグの `v` なし・ローカル版数の `v` あり・桁不足・接尾辞違い・rc0・入力モード競合の不合格、および JSON 出力を検証する(`tmp_path` の `pyproject.toml` を使う)
+- [x] `tests/test_check_bundle.py`: `tmp_path` に疑似 onedir を作り、全件そろう場合の合格、1 件ずつ欠落・空ファイル・版数不一致の dist-info での不合格、通知/本文の欠落、および欠落の全件列挙を検証する
+- [x] `scripts/` のモジュールをテストから読み込む方法は既存の `tests/test_dummy_data.py` に合わせる
+- [x] 依存ルールのテスト(`tests/test_dependency_rules.py`)に影響しないこと(`scripts/` は `src/` から参照されない)を確認する
 
 #### F. README・文書
 
