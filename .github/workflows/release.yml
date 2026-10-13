@@ -12,6 +12,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  PYTHONUTF8: "1"
+
 jobs:
   verify:
     name: verify

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import sys
@@ -93,7 +94,16 @@ def fetch_sources(directory: Path = DEFAULT_DIRECTORY, *, opener: Opener = _open
     return paths
 
 
+def _configure_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_streams()
     parser = argparse.ArgumentParser(
         description="依存ソースを manifest.json に従って取得し、SHA256 を検証します"
     )

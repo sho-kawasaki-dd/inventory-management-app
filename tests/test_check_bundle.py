@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,3 +163,58 @@ def test_cli_accepts_complete_bundle(tmp_path: Path, capsys) -> None:
 
     assert main([str(bundle_dir)], project_file=_project_file(tmp_path)) == 0
     assert "合格" in capsys.readouterr().out
+
+
+def test_cli_handles_non_utf8_stream_encoding(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    _make_bundle(bundle_dir)
+    project_file = _project_file(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, scripts.check_bundle as cb; "
+                "from pathlib import Path; "
+                "sys.exit(cb.main([sys.argv[1]], project_file=Path(sys.argv[2])))"
+            ),
+            str(bundle_dir),
+            str(project_file),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "同梱検査に合格しました" in result.stdout
+
+
+def test_cli_failure_reports_in_non_utf8_stream_encoding(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "empty-bundle"
+    bundle_dir.mkdir()
+    project_file = _project_file(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, scripts.check_bundle as cb; "
+                "from pathlib import Path; "
+                "sys.exit(cb.main([sys.argv[1]], project_file=Path(sys.argv[2])))"
+            ),
+            str(bundle_dir),
+            str(project_file),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "同梱検査に失敗しました" in result.stderr

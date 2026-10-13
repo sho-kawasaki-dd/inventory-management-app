@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import BinaryIO
 
@@ -103,6 +106,30 @@ def test_rejects_missing_manifest(tmp_path: Path) -> None:
 def test_cli_reports_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--directory", str(tmp_path)]) == 1
     assert "失敗" in capsys.readouterr().err
+
+
+def test_cli_handles_non_utf8_stream_encoding(tmp_path: Path) -> None:
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "cp1252"
+    env.pop("PYTHONUTF8", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.fetch_dependency_sources",
+            "--directory",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "失敗" in result.stderr
 
 
 def test_repository_manifest_is_well_formed() -> None:

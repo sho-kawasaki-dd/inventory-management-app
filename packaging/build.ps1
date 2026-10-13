@@ -11,6 +11,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:ExpectedInnoSetupVersion = '6.7.3'
 $script:ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$env:PYTHONUTF8 = '1'
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {
+}
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function Invoke-CheckedExternal {
     param(

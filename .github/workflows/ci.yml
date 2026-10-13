@@ -25,6 +25,7 @@ jobs:
           - ubuntu-latest
     env:
       QT_QPA_PLATFORM: ${{ matrix.os == 'ubuntu-latest' && 'offscreen' || '' }}
+      PYTHONUTF8: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
