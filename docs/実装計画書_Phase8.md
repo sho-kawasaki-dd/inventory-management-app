@@ -271,11 +271,11 @@
 ### 3.4 リリース検証(8b マージ後)
 
 - [x] `v0.1.0-rc1` を `main` のコミットに作成して push する(push 前に利用者へ確認する)。確認済み: `77d45aacb74322609b1d61288989413654845a64` に注釈付きタグを作成し、origin へ push
-- [ ] `verify`・`build`・`release` が成功し、下書きの pre-release にインストーラー・対応ソース・構成一覧・各 `.sha256` が添付される。版数・接尾辞・rc 判定と構成一覧のコミット SHA がタグに対応することを確認する
+- [x] `verify`・`build`・`release` が成功し、下書きの pre-release にインストーラー・対応ソース・構成一覧・各 `.sha256` が添付される。版数・接尾辞・rc 判定と構成一覧のコミット SHA がタグに対応することを確認する。`v0.1.0-rc5` の run `38334491932` は全 job 成功。タグ・manifest のコミットは `e2c6a16e89578e6cdded956cfe2098ff37981ed8`。build/release job で成果物 3 点と SHA256 3 点の構成・ハッシュを検証し、Draft/pre-release 状態も確認。匿名ブラウザーでは draft の添付物一覧を直接表示できないため、ダウンロード後の独立照合は次項で実施する
 - [ ] ダウンロードした各成果物の SHA256 が添付ファイルと一致する。対応ソースの内容・依存の版対応・ビルド手順を確認する。rc を検証者へ渡す際も対応ソースの取得方法を添える
 - [ ] 版数不一致のタグ(例: `v0.1.1-rc1`)がワークフローで失敗することを確認する(確認後にタグ・下書きを削除。削除は利用者の確認を得て行う)
 - [ ] G の同版数再インストールと検証専用旧版からの異版数更新を、今回の rc インストーラーでも実施する
-- [ ] rc1 の失敗を修正して `main` へ取り込み、成功した rc インストーラーで上書き更新を確認する。アプリ表示版数はどちらも `0.1.0` のままとし、構成一覧と変更された同梱ファイルのハッシュで置換を確認する。初回は `Install pinned Inno Setup` で失敗し、固定版の旧ダウンロード URL が 404 だったため、公式 GitHub Release asset へ修正した。その後、run `38330264289` は Windows 出力の UTF-8 問題、`v0.1.0-rc4` の run `38333001393` は依存ソース未取得で build に失敗。UTF-8 問題は PR #41 で修正済み。依存ソース取得を build 前に実行する修正を追加し、ローカルテスト済み。修正の main 取り込み後、新しい rc タグで再検証する
+- [ ] 成功した 2 つの rc インストーラー間で上書き更新を確認する。アプリ表示版数はどちらも `0.1.0` のままとし、構成一覧と変更された同梱ファイルのハッシュで置換を確認する。初回は `Install pinned Inno Setup` で失敗し、固定版の旧ダウンロード URL が 404 だったため、公式 GitHub Release asset へ修正した。run `38330264289` は Windows 出力の UTF-8 問題、`v0.1.0-rc4` の run `38333001393` は依存ソース未取得で build に失敗。UTF-8 問題は PR #41、依存ソース取得漏れは PR #43 で修正し、`v0.1.0-rc5` の run `38334491932` は成功した。rc1 と rc4 はインストーラーを生成していないため、rc5 を上書き元にできる次の成功 rc が必要
 - [ ] 配布チェックリスト(5 章)を実施し、結果を本書に記録する
 
 ### 3.5 正式リリース
@@ -302,7 +302,7 @@
 | 外部コマンド失敗時の中断・古い成果物の非配布 | 確認済み | 提供ソース展開先の一時コピーで、版数不一致・spec を失敗させる PyInstaller・許可外の Qt DLL による同梱検査・[Files] に存在しないファイルを指定した ISCC・依存ソースの SHA256 不一致の各ケースが非ゼロ終了し、`dist/releases/` に新しいディレクトが作られなかった(ISCC に未知セクションを追記するだけでは失敗せず、成果物が確定されたため別ケースに変更)。正常終了時の出力パスのみが確定先となる |
 | 起動中の更新/削除(各モード・別ユーザー・サイレント・検出失敗) | 未実施 | |
 | 同版数再インストール・異版数更新・rc 異ビルド置換 | 未実施 | 成功した rc 成果物が得られてから異ビルド置換を実施 |
-| rc タグでのワークフロー結果 | 再検証中 | run `38323979508`(`v0.1.0-rc1`): `verify` 成功、`build` は固定版 Inno Setup の旧 URL 404 で失敗。公式 Release asset URL は HTTP 200 で取得でき、SHA256 が公式値 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732` と一致。run `38330264289`: Windows 出力 UTF-8 問題。run `38333001393`(`v0.1.0-rc4`、commit `b01ec0785aef31ffe3b0b090bcfb3c465a3eec6f`): `verify` 成功後、`build.ps1:153` で `qtbase-everywhere-src-6.11.2.tar.xz` の欠落により失敗。workflow が依存ソース取得スクリプトを実行していなかった。build 前に取得・SHA256 検証する修正をローカル追加し、対象テストは成功。PR 取り込み後、新しい rc タグで再実行が必要 |
+| rc タグでのワークフロー結果 | rc5 成功 | run `38323979508`(`v0.1.0-rc1`): `verify` 成功、`build` は固定版 Inno Setup の旧 URL 404 で失敗。公式 Release asset URL は HTTP 200 で取得でき、SHA256 が公式値 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732` と一致。run `38330264289`: Windows 出力 UTF-8 問題。run `38333001393`(`v0.1.0-rc4`、commit `b01ec0785aef31ffe3b0b090bcfb3c465a3eec6f`): `verify` 成功後、依存ソース未取得で失敗。run `38334491932`(`v0.1.0-rc5`、commit `e2c6a16e89578e6cdded956cfe2098ff37981ed8`): `verify`・`build`・`release` 全成功(5 分 27 秒)。run artifact `inventory-manager-mini-v0.1.0-rc5` は 101 MB、SHA256 `0d5e3a55d748e3d44c828ee05b18a3bd0633b5eb6c584c5bd52df17ee662b3bc`。build/release job で配布物と各 SHA256 を照合し、Draft/pre-release 状態を検証した。Node.js 20 deprecation は upload/download-artifact v4 の warning で、runner 上では Node 24 に強制されており、job の失敗ではない。Draft の添付物の独立ダウンロード・SHA256 照合は未実施 |
 | Inno Setup の CI 版数検証 | 修正・再実行待ち | run `38328272533` の `build` は、導入した `ISCC.exe` の `ProductVersion` が `0.0.0.0` のため失敗。`build.ps1` と同様に、実際の導入先と一致するインストール登録の `DisplayVersion` を `6.7.3` と照合するよう修正。登録欠落・版数不一致・別の導入先・ISCC 欠落では出力パスを公開しない。Windows 上の Release 全工程は main 取り込み後に再検証する |
 | Windows CI での標準出力文字エンコーディング | 修正・再実行待ち | run `38330264289` の `build` は、PowerShell の `Invoke-CheckedExternal` 経由で実行された `scripts/check_bundle.py` が Windows のリダイレクト時既定 codepage (`cp1252`) で標準出力に日本語を出力したため `UnicodeEncodeError` で失敗。`packaging/build.ps1` で `$env:PYTHONUTF8 = '1'` およびコンソール出力エンコーディングを UTF-8 に設定し、GitHub Actions ワークフロー (`release.yml`, `ci.yml`) に `PYTHONUTF8: "1"` を指定。さらに検査スクリプト (`check_bundle.py`, `check_release_version.py`, `fetch_dependency_sources.py`) の `main()` で `sys.stdout`/`sys.stderr` を UTF-8 に再設定する多重防御を施して修正 |
 
