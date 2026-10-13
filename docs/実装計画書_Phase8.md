@@ -302,6 +302,7 @@
 | 起動中の更新/削除(各モード・別ユーザー・サイレント・検出失敗) | 未実施 | |
 | 同版数再インストール・異版数更新・rc 異ビルド置換 | 未実施 | rc2 未作成時は異ビルド置換だけ対象外 |
 | rc タグでのワークフロー結果 | rc1 失敗 | run `38323979508`(`v0.1.0-rc1`、commit `77d45aacb74322609b1d61288989413654845a64`): `verify` 成功、`build` は `Install pinned Inno Setup` で失敗、`release` はスキップ。CI の旧 URL は 404。公式 Release asset URL は HTTP 200 で取得でき、SHA256 が公式値 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732` と一致。workflow 修正後、main へ取り込み rc2 で再実行が必要。Actions のログ詳細は未認証のため取得できず |
+| Inno Setup の CI 版数検証 | 修正・再実行待ち | run `38328272533` の `build` は、導入した `ISCC.exe` の `ProductVersion` が `0.0.0.0` のため失敗。`build.ps1` と同様に、実際の導入先と一致するインストール登録の `DisplayVersion` を `6.7.3` と照合するよう修正。登録欠落・版数不一致・別の導入先・ISCC 欠落では出力パスを公開しない。Windows 上の Release 全工程は main 取り込み後に再検証する |
 
 ## 5. 配布チェックリスト(手動)
 

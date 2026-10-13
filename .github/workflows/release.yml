@@ -133,9 +133,18 @@ jobs:
           if (-not (Test-Path -LiteralPath $isccPath -PathType Leaf)) {
             throw "固定版 Inno Setup の ISCC.exe がありません: $isccPath"
           }
-          $productVersion = (Get-Item -LiteralPath $isccPath).VersionInfo.ProductVersion
-          if ($productVersion -notmatch '(?<!\d)6\.7\.3(?!\d)') {
-            throw "Inno Setup 6.7.3 ではありません: $productVersion"
+          $uninstallPaths = @(
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $installations = @(Get-ItemProperty -Path $uninstallPaths -ErrorAction SilentlyContinue | Where-Object {
+            $_.InstallLocation -and
+            [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\') -ieq $installDirectory.TrimEnd('\')
+          })
+          if ($installations.Count -ne 1 -or $installations[0].DisplayVersion -cne '6.7.3') {
+            throw "導入先の Inno Setup 6.7.3 の登録情報を確認できません: $installDirectory"
           }
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "iscc_path=$isccPath`n", [Text.UTF8Encoding]::new($false))
 
