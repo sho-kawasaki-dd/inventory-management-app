@@ -121,6 +121,12 @@ jobs:
           uv sync --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Fetch dependency sources
+        shell: pwsh
+        run: |
+          uv run python scripts/fetch_dependency_sources.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Install pinned Inno Setup
         id: inno-setup
         shell: pwsh

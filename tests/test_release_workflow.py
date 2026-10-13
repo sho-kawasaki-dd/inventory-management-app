@@ -13,6 +13,17 @@ WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "rele
 POWERSHELL = shutil.which("pwsh")
 
 
+def test_release_workflow_fetches_dependency_sources_before_build() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    fetch_step = workflow.index("- name: Fetch dependency sources")
+    build_step = workflow.index("- name: Build installer and source artifacts")
+
+    assert fetch_step < build_step
+    fetch_block = workflow[fetch_step:build_step]
+    assert "uv run python scripts/fetch_dependency_sources.py" in fetch_block
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in fetch_block
+
+
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell が必要です")
 @pytest.mark.parametrize(
     ("registrations", "compiler_exists", "succeeds"),
