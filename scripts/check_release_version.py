@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -59,7 +60,16 @@ def _release_info(
     }
 
 
+def _configure_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None, *, project_file: Path | None = None) -> int:
+    _configure_streams()
     parser = argparse.ArgumentParser(description="リリース版数と pyproject.toml を照合します")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--tag")

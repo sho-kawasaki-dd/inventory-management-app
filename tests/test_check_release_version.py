@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -62,3 +65,26 @@ def test_tag_and_version_modes_are_mutually_exclusive(tmp_path) -> None:
         main(["--tag", "v1.2.3", "--version", "1.2.3"], project_file=_project_file(tmp_path))
 
     assert error.value.code != 0
+
+
+def test_cli_handles_non_utf8_stream_encoding(tmp_path) -> None:
+    project_file = _project_file(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, scripts.check_release_version as crv; "
+                "from pathlib import Path; "
+                "sys.exit(crv.main(['--tag', 'v1.2.4'], project_file=Path(sys.argv[1])))"
+            ),
+            str(project_file),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "版数が一致しません" in result.stderr

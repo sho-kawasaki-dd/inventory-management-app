@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 import tomllib
 from email.parser import Parser
@@ -137,7 +138,16 @@ def check_bundle(bundle_dir: Path, *, project_file: Path | None = None) -> list[
     return problems
 
 
+def _configure_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None, *, project_file: Path | None = None) -> int:
+    _configure_streams()
     parser = argparse.ArgumentParser(
         description="PyInstaller onedir の必須同梱ファイルを検査します"
     )
