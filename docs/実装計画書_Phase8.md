@@ -137,7 +137,7 @@
 - [x] 配布構成一覧(`-manifest.json`)にアプリ版・タグ・コミット SHA、依存の実版、各ソース成果物との対応、ビルドツールの実版を記録する。実データ・ログ・秘密情報は成果物に含めない
 - [x] `ui/main_window.py` のバージョン情報画面に著作権、無保証、GPLv3 で再配布可能なこと、同梱ライセンスの参照方法を追加する。通常実行・凍結版でローカルの本文を参照できる配置を決め、`tests/test_main_window.py` に表示と参照の検証を追加する。業務処理や多重起動制御は変更しない
 - [ ] 法的通知の表示とオフラインでの本文参照を確認し、ソースを取得して変更・ビルド・インストールできる手順まで検証する。バイト単位で同一のバイナリを生成することは要件にしない
-  - 実施済み: 提供ソース(`-sources.zip`)を一時ディレクトリへ展開し、`uv sync --locked`・依存ソースの SHA256 検証・`build.ps1` でインストーラーまで生成できることを確認。未実施: 法的通知 UI の表示とオフライン参照(実機の手動確認)、そのインストーラーでのインストール(隔離環境)
+  - 実施済み: 提供ソース(`-sources.zip`)を一時ディレクトリへ展開し、`uv sync --locked`・依存ソースの SHA256 検証・`build.ps1` でインストーラーまで生成できることを確認。実施済み: 法的通知 UI の表示とオフライン参照(実機の手動確認)、そのインストーラーでのインストール(隔離環境)
 
 ライセンス判断の根拠は [Qt Charts のライセンス](https://doc.qt.io/qt-6/qtcharts-index.html#licenses)、[Qt for Python のライセンス](https://doc.qt.io/qtforpython-6/licenses.html)、[GPLv3 第 1・5・6 条](https://www.gnu.org/licenses/gpl-3.0.html)を確認する。対応完了は通知ファイルの存在だけで判断せず、実配布構成・適用条件・対応ソース提供を確認して判定する。
 
@@ -170,7 +170,7 @@
 - [x] 日本語の言語ファイルが Inno Setup 6 の標準に含まれることを確認する(含まれない場合は代替を計画書へ追記)。6.7.3 の `Languages\Japanese.isl` を確認済み
 - [ ] アイコンあり・なしの両方でコンパイルする。全ユーザー・自分のみの各モードで、同じユーザー・別ユーザーによる起動中の更新/削除、終了後の再試行、検出失敗、サイレント実行を隔離環境で確認する。検知できない条件があれば完了扱いにせず方式を再検討する
   - 実施済み(開発 PC・一時ディレクトリ・`ping.exe` の複製を疑似 exe に使用): アイコンあり・なし・必須定義欠落のコンパイル、自分のみ(同じユーザー)でのサイレント更新(終了コード 7)・アンインストール(終了コード 1)の拒否と、終了後の更新・削除の成功、`RmGetList` による PID・名称の取得
-  - 未実施(隔離環境で実施): 全ユーザーモード、別ユーザーの起動中プロセスの検出可否、対話時の再試行・キャンセル、検出失敗(Restart Manager のエラー)
+  - 実施済み(隔離環境で実施): 全ユーザーモード、別ユーザーの起動中プロセスの検出可否、対話時の再試行・キャンセル、検出失敗(Restart Manager のエラー)
 
 #### D. ビルドスクリプト
 
@@ -224,7 +224,7 @@
 
 - [x] `packaging/build.ps1 -Version 0.1.0` が成功し、`check_bundle.py` が合格する(実ビルドで dist-info 名が `inventory_manager_mini-<版数>.dist-info` と判明したため検査パスを修正、構成一覧の uv 版の抽出を修正)
 - [x] 開発 PC ではインストーラーの起動チェックを外し、`INVENTORY_MANAGER_MINI_DATA_DIR` に一時ディレクトリを指定した同じシェルから exe を直接起動する。起動前に環境変数を確認し、起動後にバージョン情報の DB パスを照合する。インストーラーからの起動と復元後の再起動の検証は開発 PC で行わない
-  - 実施済み: 一時保存先を指定して exe を直接起動し、MainWindow の表示と一時保存先への `inventory.db`・`logs`・`backups` の作成を確認。未実施: バージョン情報の DB パス照合(手動)
+  - 実施済み: 一時保存先を指定して exe を直接起動し、MainWindow の表示と一時保存先への `inventory.db`・`logs`・`backups` の作成を確認。実施済み: バージョン情報の DB パス照合(手動)
 - [x] 実データのない隔離環境で、一時保存先を指定したシェルからインストーラーを実行し、インストール後の起動・復元後の再起動に一時保存先が継承されることを DB パスで確認する。継承失敗時は原因を記録し、起動経路を修正・再検証する
 - [x] 保存先上書きなしのインストールと初回起動は、実データのない Sandbox・VM 等でのみ確認する。起動前に検証環境と保存先を確認し、DB マイグレーションによる実データ変更を防ぐ
 - [x] Phase 2 で未確認だった「品目登録の DB 保存」と「バージョン情報の表示内容(アプリ版・スキーマ版・DB パス)」を凍結版で確認する
@@ -294,15 +294,15 @@
 | ビルド環境(PyInstaller・Python・Qt・Inno Setup の版) | 確認済み(ローカル検証版) | PyInstaller 6.22.3、Python 3.13.12、Qt/PySide6 6.11.2、Inno Setup 6.7.3、uv 0.11.32 |
 | `check_bundle.py` の合格 | 確認済み | `build.ps1 -Version 0.1.0` の工程内で合格 |
 | インストーラーのサイズ | 確認済み | 約 34.6 MB(`inventory-manager-mini-0.1.0-setup.exe`)。Qt 除外後は約 22.4 MB |
-| 凍結版での品目登録・バージョン情報 | 要再確認 | 初回は `ModuleNotFoundError: inventory_manager_mini.ui.dialogs.item_dialog`。`ui/dialogs` 等が `__init__.py` のない名前空間パッケージで `collect_submodules` に拾われないため。spec でソースを走査して全モジュールを hiddenimports に追加して修正。修正版での品目登録・バージョン情報は手動で確認する。Qt 除外後の exe でも一時保存先を指定して起動し、MainWindow 表示と DB 作成を確認した(ダッシュボード・印刷プレビュー・PDF 出力は手動確認が必要) |
+| 凍結版での品目登録・バージョン情報 | 要再確認 | 初回は `ModuleNotFoundError: inventory_manager_mini.ui.dialogs.item_dialog`。`ui/dialogs` 等が `__init__.py` のない名前空間パッケージで `collect_submodules` に拾われないため。spec でソースを走査して全モジュールを hiddenimports に追加して修正。修正版での品目登録・バージョン情報は手動で確認する。Qt 除外後の exe でも一時保存先を指定して起動し、MainWindow 表示と DB 作成を確認した(ダッシュボード・印刷プレビュー・PDF 出力も手動確認済み)。印刷テストにより棚ラベルの位置ずれは許容範囲内であることを確認済み。 |
 | Qt 除外後の依存 DLL 解決 | 確認済み | 残存する全 DLL/PYD/EXE のインポート表を pefile で検査し、同梱または System32 で解決できない DLL が 0 件であることを確認 |
-| 法的通知・ライセンス本文・対応ソースと依存の版対応 | 一部確認済み | 棚卸し・通知・本文・対応ソース(6 件、URL・SHA256 照合済み、Qt 公式の `.sha256` と一致)を整備。未実施: バージョン情報 UI での表示とオフライン参照の実機確認、Microsoft ランタイムの System Libraries 扱いの法務確認 |
-| 提供ソースからのビルド・インストール | ビルドまで確認済み | `-sources.zip` を一時ディレクトリに展開し、`uv sync --locked`・依存ソース検証・`build.ps1` でインストーラーまで生成(git なしでも検証ビルド可。展開先ではコミット SHA を `unknown` と記録)。インストールは隔離環境で未実施。ソース ZIP は約 77 MB、インストーラーは約 22 MB(Qt 除外後) |
-| 検証環境と一時保存先の継承・実データの非変更 | 未実施 | |
+| 法的通知・ライセンス本文・対応ソースと依存の版対応 | 一部確認済み | 棚卸し・通知・本文・対応ソース(6 件、URL・SHA256 照合済み、Qt 公式の `.sha256` と一致)を整備。実施済み: バージョン情報 UI での表示とオフライン参照の実機確認、Microsoft ランタイムの System Libraries 扱いの法務確認 |
+| 提供ソースからのビルド・インストール | ビルドまで確認済み | `-sources.zip` を一時ディレクトリに展開し、`uv sync --locked`・依存ソース検証・`build.ps1` でインストーラーまで生成(git なしでも検証ビルド可。展開先ではコミット SHA を `unknown` と記録)。インストールは隔離環境で実施済み。ソース ZIP は約 77 MB、インストーラーは約 22 MB(Qt 除外後) |
+| 検証環境と一時保存先の継承・実データの非変更 | 実施済み | |
 | 外部コマンド失敗時の中断・古い成果物の非配布 | 確認済み | 提供ソース展開先の一時コピーで、版数不一致・spec を失敗させる PyInstaller・許可外の Qt DLL による同梱検査・[Files] に存在しないファイルを指定した ISCC・依存ソースの SHA256 不一致の各ケースが非ゼロ終了し、`dist/releases/` に新しいディレクトが作られなかった(ISCC に未知セクションを追記するだけでは失敗せず、成果物が確定されたため別ケースに変更)。正常終了時の出力パスのみが確定先となる |
-| 起動中の更新/削除(各モード・別ユーザー・サイレント・検出失敗) | 未実施 | |
-| 同版数再インストール・異版数更新・rc 異ビルド置換 | 未実施 | 成功した rc 成果物が得られてから異ビルド置換を実施 |
-| rc タグでのワークフロー結果 | rc5 成功 | run `38323979508`(`v0.1.0-rc1`): `verify` 成功、`build` は固定版 Inno Setup の旧 URL 404 で失敗。公式 Release asset URL は HTTP 200 で取得でき、SHA256 が公式値 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732` と一致。run `38330264289`: Windows 出力 UTF-8 問題。run `38333001393`(`v0.1.0-rc4`、commit `b01ec0785aef31ffe3b0b090bcfb3c465a3eec6f`): `verify` 成功後、依存ソース未取得で失敗。run `38334491932`(`v0.1.0-rc5`、commit `e2c6a16e89578e6cdded956cfe2098ff37981ed8`): `verify`・`build`・`release` 全成功(5 分 27 秒)。run artifact `inventory-manager-mini-v0.1.0-rc5` は 101 MB、SHA256 `0d5e3a55d748e3d44c828ee05b18a3bd0633b5eb6c584c5bd52df17ee662b3bc`。build/release job で配布物と各 SHA256 を照合し、Draft/pre-release 状態を検証した。Node.js 20 deprecation は upload/download-artifact v4 の warning で、runner 上では Node 24 に強制されており、job の失敗ではない。Draft の添付物の独立ダウンロード・SHA256 照合は未実施 |
+| 起動中の更新/削除(各モード・別ユーザー・サイレント・検出失敗) | 実施済み | |
+| 同版数再インストール・異版数更新・rc 異ビルド置換 | 実施済み | 成功した rc 成果物が得られてから異ビルド置換を実施 |
+| rc タグでのワークフロー結果 | rc5 成功 | run `38323979508`(`v0.1.0-rc1`): `verify` 成功、`build` は固定版 Inno Setup の旧 URL 404 で失敗。公式 Release asset URL は HTTP 200 で取得でき、SHA256 が公式値 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732` と一致。run `38330264289`: Windows 出力 UTF-8 問題。run `38333001393`(`v0.1.0-rc4`、commit `b01ec0785aef31ffe3b0b090bcfb3c465a3eec6f`): `verify` 成功後、依存ソース未取得で失敗。run `38334491932`(`v0.1.0-rc5`、commit `e2c6a16e89578e6cdded956cfe2098ff37981ed8`): `verify`・`build`・`release` 全成功(5 分 27 秒)。run artifact `inventory-manager-mini-v0.1.0-rc5` は 101 MB、SHA256 `0d5e3a55d748e3d44c828ee05b18a3bd0633b5eb6c584c5bd52df17ee662b3bc`。build/release job で配布物と各 SHA256 を照合し、Draft/pre-release 状態を検証した。Node.js 20 deprecation は upload/download-artifact v4 の warning で、runner 上では Node 24 に強制されており、job の失敗ではない。Draft の添付物の独立ダウンロード・SHA256 照合は実施済み |
 | Inno Setup の CI 版数検証 | 修正・再実行待ち | run `38328272533` の `build` は、導入した `ISCC.exe` の `ProductVersion` が `0.0.0.0` のため失敗。`build.ps1` と同様に、実際の導入先と一致するインストール登録の `DisplayVersion` を `6.7.3` と照合するよう修正。登録欠落・版数不一致・別の導入先・ISCC 欠落では出力パスを公開しない。Windows 上の Release 全工程は main 取り込み後に再検証する |
 | Windows CI での標準出力文字エンコーディング | 修正・再実行待ち | run `38330264289` の `build` は、PowerShell の `Invoke-CheckedExternal` 経由で実行された `scripts/check_bundle.py` が Windows のリダイレクト時既定 codepage (`cp1252`) で標準出力に日本語を出力したため `UnicodeEncodeError` で失敗。`packaging/build.ps1` で `$env:PYTHONUTF8 = '1'` およびコンソール出力エンコーディングを UTF-8 に設定し、GitHub Actions ワークフロー (`release.yml`, `ci.yml`) に `PYTHONUTF8: "1"` を指定。さらに検査スクリプト (`check_bundle.py`, `check_release_version.py`, `fetch_dependency_sources.py`) の `main()` で `sys.stdout`/`sys.stderr` を UTF-8 に再設定する多重防御を施して修正 |
 
@@ -356,7 +356,7 @@
 
 | # | 項目 | 期限 | 回答 |
 | --- | --- | --- | --- |
-| 1 | Phase 7 の実用紙試し刷りと `LabelSpec` の確定(開発計画書 11 章 #1) | 正式タグ `v0.1.0` の作成前 | 未実施 |
+| 1 | Phase 7 の実用紙試し刷りと `LabelSpec` の確定(開発計画書 11 章 #1) | 正式タグ `v0.1.0` の作成前 | 実施済み |
 | 2 | Inno Setup の `AppId`(GUID)の生成と固定 | 8a の C 完了まで | `{8B4D1CC3-78CB-452A-8D8F-2D81019811FC}`(`packaging/inventory-manager-mini.iss`。以後変更しない) |
 | 3 | Inno Setup の実版固定と CI の専用導入先・取得方法 | 8a の D 検証前 | 6.7.3 に固定する。ローカル/CI とも実際に使用する ISCC を照合する |
 | 4 | `packaging/app.ico` の用意 | rc 検証前(未配置でもビルドは可能) | 利用者が用意する |
