@@ -12,12 +12,17 @@ from pathlib import Path
 
 from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
+    DEFAULT_HISTORY_PAGE_SIZE,
+    HISTORY_PAGE_SIZES,
     MAX_AGGREGATE_VALUE,
     REASON_LABELS,
     Category,
     DashboardResult,
     DashboardRow,
     GroupAxis,
+    HistoryPage,
+    HistoryPeriod,
+    HistoryPeriodKind,
     ItemFilter,
     PeriodKind,
     Reason,
@@ -56,6 +61,9 @@ class _Selection:
     category_paths: dict[int, str]
 
 
+_ALL_HISTORY_PERIOD = HistoryPeriod()
+
+
 def _category_paths(categories: Sequence[Category]) -> dict[int, str]:
     by_id = {category.id: category for category in categories}
     paths: dict[int, str] = {}
@@ -73,6 +81,35 @@ def fiscal_year_of(local_day: date, start_month: int) -> int:
     if type(start_month) is not int or not 1 <= start_month <= 12:
         raise ValueError("年度開始月は 1〜12 の整数で指定してください")
     return local_day.year if local_day.month >= start_month else local_day.year - 1
+
+
+def _history_utc_range(
+    period: HistoryPeriod, start_month: int, tz: tzinfo | None
+) -> tuple[str | None, str | None]:
+    if period.kind is HistoryPeriodKind.ALL:
+        if period.fiscal_year is not None or period.month is not None:
+            raise ValueError("全期間では年度と月を指定できません")
+        return None, None
+    if type(period.fiscal_year) is not int:
+        raise ValueError("年度は整数で指定してください")
+    if period.kind is HistoryPeriodKind.ANNUAL:
+        if period.month is not None:
+            raise ValueError("年次では月を指定できません")
+        fiscal_start = date(period.fiscal_year, start_month, 1)
+        fiscal_end = date(period.fiscal_year + 1, start_month, 1)
+        return local_range_to_utc(fiscal_start, fiscal_end, tz)
+    if period.kind is not HistoryPeriodKind.MONTHLY:
+        raise ValueError("期間区分が不正です")
+    if type(period.month) is not int or not 1 <= period.month <= 12:
+        raise ValueError("月は 1〜12 の整数で指定してください")
+    actual_year = period.fiscal_year if period.month >= start_month else period.fiscal_year + 1
+    month_start = date(actual_year, period.month, 1)
+    month_end = (
+        date(actual_year + 1, 1, 1)
+        if period.month == 12
+        else date(actual_year, period.month + 1, 1)
+    )
+    return local_range_to_utc(month_start, month_end, tz)
 
 
 def escape_csv_cell(value: str) -> str:
@@ -129,6 +166,21 @@ class ReportService:
     def current_fiscal_year(self) -> int:
         start_month = self.settings.get_fiscal_year_start_month()
         return fiscal_year_of(local_today(self.clock(), self.tz), start_month)
+
+    def fiscal_year_months(self, fiscal_year: int) -> list[tuple[int, str]]:
+        if type(fiscal_year) is not int:
+            raise ValueError("年度は整数で指定してください")
+        start_month = self.settings.get_fiscal_year_start_month()
+        months: list[tuple[int, str]] = []
+        for offset in range(12):
+            absolute_month = start_month - 1 + offset
+            year = fiscal_year + absolute_month // 12
+            month = absolute_month % 12 + 1
+            months.append((month, f"{year}年{month}月"))
+        return months
+
+    def current_local_month(self) -> int:
+        return local_today(self.clock(), self.tz).month
 
     def available_fiscal_years(self) -> list[int]:
         start_month = self.settings.get_fiscal_year_start_month()
@@ -486,12 +538,77 @@ class ReportService:
         ]
         _write_csv(path, header, rows)
 
-    def export_history_csv(self, path: Path, item_id: int | None = None) -> None:
-        history = (
-            self.inventory.list_all_history()
-            if item_id is None
-            else self.inventory.list_history(item_id)
+    def list_history_page(
+        self,
+        item_id: int,
+        *,
+        period: HistoryPeriod = _ALL_HISTORY_PERIOD,
+        page: int = 1,
+        page_size: int = DEFAULT_HISTORY_PAGE_SIZE,
+        select_movement_id: int | None = None,
+    ) -> HistoryPage:
+        if type(item_id) is not int or item_id < 1:
+            raise ValueError("品目 ID は正の整数で指定してください")
+        if type(page) is not int or page < 1:
+            raise ValueError("ページ番号は 1 以上の整数で指定してください")
+        if type(page_size) is not int or page_size not in HISTORY_PAGE_SIZES:
+            raise ValueError("表示件数は 300 または 500 で指定してください")
+        if select_movement_id is not None and (
+            type(select_movement_id) is not int or select_movement_id < 1
+        ):
+            raise ValueError("履歴 ID は正の整数で指定してください")
+
+        movements = self.inventory.movements
+        with read_transaction(self.conn):
+            start_month = self.settings.get_fiscal_year_start_month()
+            start_utc, end_utc = _history_utc_range(period, start_month, self.tz)
+            total_count = movements.count_filtered(
+                item_id=item_id, start_utc=start_utc, end_utc=end_utc
+            )
+            total_pages = (total_count + page_size - 1) // page_size
+            current_page = page
+            if select_movement_id is not None:
+                index = movements.index_in_filtered(
+                    select_movement_id, item_id=item_id, start_utc=start_utc, end_utc=end_utc
+                )
+                if index is not None:
+                    current_page = index // page_size + 1
+            current_page = min(current_page, max(total_pages, 1))
+            rows = movements.list_page(
+                item_id=item_id,
+                start_utc=start_utc,
+                end_utc=end_utc,
+                limit=page_size,
+                offset=(current_page - 1) * page_size,
+            )
+        return HistoryPage(
+            rows=tuple(rows),
+            total_count=total_count,
+            page=current_page,
+            page_size=page_size,
+            total_pages=total_pages,
         )
+
+    def export_history_csv(
+        self,
+        path: Path,
+        item_id: int | None = None,
+        *,
+        client_id: int | None = None,
+        period: HistoryPeriod = _ALL_HISTORY_PERIOD,
+    ) -> None:
+        if item_id is not None and (type(item_id) is not int or item_id < 1):
+            raise ValueError("品目 ID は正の整数で指定してください")
+        if client_id is not None and (type(client_id) is not int or client_id < 1):
+            raise ValueError("クライアント ID は正の整数で指定してください")
+        with read_transaction(self.conn):
+            start_month = self.settings.get_fiscal_year_start_month()
+            start_utc, end_utc = _history_utc_range(period, start_month, self.tz)
+            if client_id is not None and self.inventory.masters.get_client(client_id) is None:
+                raise ValidationError("クライアントが見つかりません")
+            history = self.inventory.movements.list_filtered(
+                item_id=item_id, client_id=client_id, start_utc=start_utc, end_utc=end_utc
+            )
         header = (
             "日時",
             "管理番号",

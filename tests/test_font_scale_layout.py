@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox, QPush
 from inventory_manager_mini.core.models import Category, NewItem
 from inventory_manager_mini.core.services import PreparedRestore
 from inventory_manager_mini.ui.context import AppContext
+from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
+from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.dialogs.master_dialog import MasterDialog, MasterTab
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
@@ -137,6 +139,44 @@ def test_reversal_dialog_fits_work_area(
     qtbot.addWidget(dialog)
     dialog.used_for_label.setText("長い使用先" * 100)
     dialog.error_label.setText("長いエラー" * 100)
+
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    assert_fits_work_area(dialog)
+    assert_buttons_reachable(dialog, *_ok_cancel(dialog.button_box))
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_history_dialog_fits_work_area(
+    qtbot, dialog_context: AppContext, restore_app_font: QFont, scale: int
+) -> None:
+    item = _create_item(dialog_context)
+    apply_display_settings(DisplaySettings(None, scale))
+    dialog = HistoryDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    assert_fits_work_area(dialog)
+    assert_buttons_reachable(
+        dialog,
+        dialog.prev_page_button,
+        dialog.next_page_button,
+        dialog.export_button,
+        dialog.reverse_button,
+        dialog.close_button,
+    )
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_history_export_dialog_fits_work_area(
+    qtbot, dialog_context: AppContext, restore_app_font: QFont, scale: int
+) -> None:
+    apply_display_settings(DisplaySettings(None, scale))
+    dialog = HistoryExportDialog(dialog_context)
+    qtbot.addWidget(dialog)
 
     dialog.show()
     qtbot.waitExposed(dialog)

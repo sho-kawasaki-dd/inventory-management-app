@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import csv
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from io import StringIO
 from itertools import combinations
+from pathlib import Path
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,12 +19,20 @@ from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import (
     DashboardRow,
     GroupAxis,
+    HistoryPeriod,
+    HistoryPeriodKind,
     ItemUpdate,
     NewItem,
     PeriodKind,
 )
 from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
-from inventory_manager_mini.core.services import InventoryService, SettingsService
+from inventory_manager_mini.core.services import (
+    InventoryService,
+    MasterService,
+    SettingsService,
+)
+from inventory_manager_mini.core.timeutil import format_local
+from inventory_manager_mini.db.connection import transaction
 from inventory_manager_mini.db.integrity import compute_aggregates
 from tests.conftest import FixedClock, unchecked_constraints
 
@@ -1277,3 +1289,593 @@ def test_dashboard_result_limits_are_checked_on_totals_with_new_axes(
         axis_env.report.dashboard_result(
             2025, PeriodKind.ANNUAL, category_id=2, group_by=frozenset({GroupAxis.ITEM})
         )
+
+
+@pytest.mark.parametrize(
+    ("period", "start_month", "expected"),
+    [
+        (HistoryPeriod(), 4, (None, None)),
+        (
+            HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025),
+            4,
+            ("2025-03-31 15:00:00", "2026-03-31 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025),
+            1,
+            ("2024-12-31 15:00:00", "2025-12-31 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=1),
+            4,
+            ("2025-12-31 15:00:00", "2026-01-31 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=4),
+            4,
+            ("2025-03-31 15:00:00", "2025-04-30 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=12),
+            4,
+            ("2025-11-30 15:00:00", "2025-12-31 15:00:00"),
+        ),
+    ],
+)
+def test_history_utc_range_follows_fiscal_start_and_local_calendar(
+    period: HistoryPeriod, start_month: int, expected: tuple[str | None, str | None]
+) -> None:
+    assert reports._history_utc_range(period, start_month, ZoneInfo("Asia/Tokyo")) == expected
+
+
+def test_history_utc_range_uses_dst_offsets_of_the_local_zone() -> None:
+    period = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2026, month=3)
+
+    assert reports._history_utc_range(period, 1, ZoneInfo("America/New_York")) == (
+        "2026-03-01 05:00:00",
+        "2026-04-01 04:00:00",
+    )
+
+
+@pytest.mark.parametrize(
+    "period",
+    [
+        HistoryPeriod(HistoryPeriodKind.ALL, fiscal_year=2025),
+        HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025, month=1),
+        HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=True),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=0),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=13),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=True),
+    ],
+)
+def test_history_utc_range_rejects_inconsistent_period(period: HistoryPeriod) -> None:
+    with pytest.raises(ValueError):
+        reports._history_utc_range(period, 4, ZoneInfo("Asia/Tokyo"))
+
+
+def test_fiscal_year_months_and_current_local_month_follow_settings_and_zone(
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+
+    months = report.fiscal_year_months(2025)
+    assert len(months) == 12
+    assert months[0] == (4, "2025年4月")
+    assert months[9] == (1, "2026年1月")
+    assert months[-1] == (3, "2026年3月")
+
+    SettingsService(seeded_conn).set_fiscal_year_start_month(1)
+    assert report.fiscal_year_months(2025)[0] == (1, "2025年1月")
+    with pytest.raises(ValueError):
+        report.fiscal_year_months(True)
+
+    fixed_clock.current = datetime(2026, 1, 31, 14, 59, tzinfo=UTC)
+    assert report.current_local_month() == 1
+    fixed_clock.current = datetime(2026, 1, 31, 15, 0, tzinfo=UTC)
+    assert report.current_local_month() == 2
+
+
+def _history_item(inventory: InventoryService, name: str) -> int:
+    return _create_item(inventory, name=name, quantity=0)
+
+
+def test_history_page_splits_rows_newest_first_and_clamps_pages(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "大量履歴")
+    for index in range(650):
+        inventory.receive(item_id, 1, 1, unit_price=10)
+        if index % 2:
+            fixed_clock.advance(seconds=1)
+
+    first = report.list_history_page(item_id)
+    assert (first.total_count, first.total_pages, first.page, first.page_size) == (650, 3, 1, 300)
+    assert len(first.rows) == 300
+    first_ids = [row.id for row in first.rows]
+    assert first_ids == sorted(first_ids, reverse=True)
+
+    last = report.list_history_page(item_id, page=3)
+    assert (last.page, len(last.rows)) == (3, 50)
+    clamped = report.list_history_page(item_id, page=9)
+    assert (clamped.page, len(clamped.rows)) == (3, 50)
+
+    large = report.list_history_page(item_id, page=2, page_size=500)
+    assert (large.total_pages, large.page, len(large.rows)) == (2, 2, 150)
+
+
+def test_history_page_selects_page_containing_movement_and_ignores_unknown_ids(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "選択履歴")
+    other_id = _history_item(inventory, "別品目")
+    other_movement = inventory.receive(other_id, 1, 1, unit_price=10)
+    oldest = inventory.receive(item_id, 1, 1, unit_price=10)
+    for _ in range(649):
+        inventory.receive(item_id, 1, 1, unit_price=10)
+
+    selected = report.list_history_page(item_id, select_movement_id=oldest.id)
+    assert selected.page == 3
+    assert oldest.id in {row.id for row in selected.rows}
+    assert report.list_history_page(item_id, page=2, select_movement_id=999999).page == 2
+    assert report.list_history_page(item_id, page=2, select_movement_id=other_movement.id).page == 2
+
+
+def test_history_page_is_empty_for_item_without_history_or_unknown_item(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "空履歴")
+
+    for target in (item_id, 999):
+        page = report.list_history_page(target, page=4)
+        assert page.rows == ()
+        assert (page.total_count, page.total_pages, page.page) == (0, 0, 1)
+
+
+def test_history_page_rejects_invalid_arguments(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "検証履歴")
+
+    with pytest.raises(ValueError):
+        report.list_history_page(True)
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id, page=0)
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id, page_size=301)
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id, select_movement_id=0)
+
+
+def test_history_page_period_filter_keeps_reversals_in_original_period(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "期間履歴")
+    # 2025-03-31 23:59 JST（2024 年度）
+    fixed_clock.current = datetime(2025, 3, 31, 14, 59, tzinfo=UTC)
+    received = inventory.receive(item_id, 1, 1, unit_price=10)
+    issued = inventory.issue(item_id, 1, 1, "2024 年度の出庫")
+    # 2025-04-01 09:00 JST（2025 年度）に取り消す
+    fixed_clock.current = datetime(2025, 4, 1, 0, 0, tzinfo=UTC)
+    reversal = inventory.reverse(issued.id, 1)
+    fixed_clock.current = datetime(2025, 5, 10, 3, 0, tzinfo=UTC)
+    later = inventory.receive(item_id, 1, 1, unit_price=10)
+
+    fiscal_2024 = report.list_history_page(
+        item_id, period=HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2024)
+    )
+    fiscal_2025 = report.list_history_page(
+        item_id, period=HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025)
+    )
+    april_2025 = report.list_history_page(
+        item_id, period=HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=4)
+    )
+    all_rows = report.list_history_page(item_id)
+
+    assert {row.id for row in fiscal_2024.rows} == {received.id, issued.id, reversal.id}
+    assert {row.id for row in fiscal_2025.rows} == {later.id}
+    assert april_2025.total_count == 0
+    assert all_rows.total_count == 4
+    assert fiscal_2024.total_count + fiscal_2025.total_count == all_rows.total_count
+
+
+def test_history_page_monthly_period_keeps_reversal_in_original_month(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "月次取り消し")
+    fixed_clock.current = datetime(2025, 3, 31, 14, 59, tzinfo=UTC)
+    received = inventory.receive(item_id, 1, 1, unit_price=10)
+    issued = inventory.issue(item_id, 1, 1, "3 月の出庫")
+    fixed_clock.current = datetime(2025, 4, 1, 0, 0, tzinfo=UTC)
+    reversal = inventory.reverse(issued.id, 1)
+    fixed_clock.current = datetime(2025, 4, 20, 3, 0, tzinfo=UTC)
+    later = inventory.receive(item_id, 1, 1, unit_price=10)
+
+    march = report.list_history_page(
+        item_id, period=HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2024, month=3)
+    )
+    april = report.list_history_page(
+        item_id, period=HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=4)
+    )
+
+    assert {row.id for row in march.rows} == {received.id, issued.id, reversal.id}
+    assert {row.id for row in april.rows} == {later.id}
+    shown_reversal = next(row for row in march.rows if row.id == reversal.id)
+    assert shown_reversal.moved_at == "2025-04-01 00:00:00"
+
+
+def _insert_history(conn: sqlite3.Connection, item_id: int, moved_ats: Sequence[str]) -> list[int]:
+    """指定日時(UTC)の入庫履歴を直接投入し、投入順(昇順)の ID を返す。"""
+    with transaction(conn):
+        conn.executemany(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, moved_at) "
+            "SELECT id, client_id, purchaser_id, 1, 'in', 1, 1, ? FROM items WHERE id = ?",
+            [(moved_at, item_id) for moved_at in moved_ats],
+        )
+    rows = conn.execute(
+        "SELECT id FROM stock_movements WHERE item_id = ? ORDER BY id DESC LIMIT ?",
+        (item_id, len(moved_ats)),
+    ).fetchall()
+    return [row[0] for row in reversed(rows)]
+
+
+@pytest.mark.parametrize(
+    ("count", "page_size", "total_pages", "last_page_rows"),
+    [
+        (1, 300, 1, 1),
+        (300, 300, 1, 300),
+        (301, 300, 2, 1),
+        (600, 300, 2, 300),
+        (500, 500, 1, 500),
+        (501, 500, 2, 1),
+        (1000, 500, 2, 500),
+    ],
+)
+def test_history_page_count_boundaries(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    count: int,
+    page_size: int,
+    total_pages: int,
+    last_page_rows: int,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "境界件数")
+    _insert_history(seeded_conn, item_id, ["2025-06-01 00:00:00"] * count)
+
+    last = report.list_history_page(item_id, page=total_pages, page_size=page_size)
+    beyond = report.list_history_page(item_id, page=total_pages + 1, page_size=page_size)
+
+    assert (last.total_count, last.total_pages, last.page) == (count, total_pages, total_pages)
+    assert len(last.rows) == last_page_rows
+    assert (beyond.page, len(beyond.rows)) == (total_pages, last_page_rows)
+
+
+@pytest.mark.parametrize("page_size", [300, 500])
+def test_history_pages_partition_all_rows_newest_first_without_overlap(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    page_size: int,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "全ページ")
+    # 5 件ずつ同一秒になる単調増加の日時(同秒は ID 降順で並ぶ)
+    moved_ats = [f"2025-06-01 {index // 300:02d}:{index // 5 % 60:02d}:00" for index in range(650)]
+    ids = _insert_history(seeded_conn, item_id, moved_ats)
+
+    first = report.list_history_page(item_id, page_size=page_size)
+    paged_ids = [
+        row.id
+        for number in range(1, first.total_pages + 1)
+        for row in report.list_history_page(item_id, page=number, page_size=page_size).rows
+    ]
+
+    assert paged_ids == sorted(ids, reverse=True)
+
+
+@pytest.mark.parametrize(
+    ("page_size", "descending_index", "expected_page"),
+    [
+        (300, 0, 1),
+        (300, 299, 1),
+        (300, 300, 2),
+        (300, 599, 2),
+        (300, 600, 3),
+        (500, 499, 1),
+        (500, 500, 2),
+    ],
+)
+def test_history_page_selects_page_at_page_boundaries(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    page_size: int,
+    descending_index: int,
+    expected_page: int,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "選択境界")
+    ids = _insert_history(seeded_conn, item_id, ["2025-06-01 00:00:00"] * 650)
+    target = ids[::-1][descending_index]
+    start_page = 2 if expected_page == 1 else 1
+
+    page = report.list_history_page(
+        item_id, page=start_page, page_size=page_size, select_movement_id=target
+    )
+
+    assert page.page == expected_page
+    assert target in {row.id for row in page.rows}
+
+
+def test_history_page_selection_outside_period_uses_requested_page(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "期間外選択")
+    previous_year = _insert_history(seeded_conn, item_id, ["2025-03-15 00:00:00"] * 5)
+    current_year = _insert_history(seeded_conn, item_id, ["2025-06-01 00:00:00"] * 650)
+    period = HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025)
+
+    inside = report.list_history_page(item_id, period=period, select_movement_id=current_year[0])
+    outside = report.list_history_page(
+        item_id, period=period, page=2, select_movement_id=previous_year[0]
+    )
+    clamped = report.list_history_page(
+        item_id, period=period, page=9, select_movement_id=previous_year[0]
+    )
+    all_period = report.list_history_page(item_id, page=2, select_movement_id=previous_year[0])
+
+    assert (inside.page, inside.total_count) == (3, 650)
+    assert outside.page == 2
+    assert clamped.page == 3
+    assert all_period.page == 3
+
+
+@pytest.mark.parametrize("item_id", [0, -1, True])
+def test_history_page_rejects_non_positive_and_bool_item_id(
+    seeded_conn: sqlite3.Connection, fixed_clock: FixedClock, item_id: int
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"page": True},
+        {"page": -1},
+        {"page_size": True},
+        {"page_size": cast("int", 300.0)},
+        {"select_movement_id": True},
+        {"select_movement_id": -1},
+        {"period": HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025)},
+        {"period": HistoryPeriod(HistoryPeriodKind.ANNUAL)},
+    ],
+)
+def test_history_page_rejects_invalid_argument_types_and_periods(
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    kwargs: dict[str, Any],
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "引数検証")
+
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id, **kwargs)
+
+
+def test_history_queries_leave_no_open_transaction_after_errors(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "例外後")
+    invalid_period = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=13)
+
+    with pytest.raises(ValueError):
+        report.list_history_page(item_id, period=invalid_period)
+    assert not seeded_conn.in_transaction
+    with pytest.raises(ValueError):
+        report.export_history_csv(tmp_path / "invalid.csv", period=invalid_period)
+    assert not seeded_conn.in_transaction
+    with pytest.raises(ValidationError):
+        report.export_history_csv(tmp_path / "missing.csv", client_id=999)
+    assert not seeded_conn.in_transaction
+
+    inventory.receive(item_id, 1, 1, unit_price=10)
+    assert report.list_history_page(item_id).total_count == 1
+
+
+@pytest.mark.parametrize(
+    ("period", "start_month", "expected"),
+    [
+        (
+            HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025),
+            12,
+            ("2025-11-30 15:00:00", "2026-11-30 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=12),
+            12,
+            ("2025-11-30 15:00:00", "2025-12-31 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=1),
+            12,
+            ("2025-12-31 15:00:00", "2026-01-31 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=11),
+            12,
+            ("2026-10-31 15:00:00", "2026-11-30 15:00:00"),
+        ),
+        (
+            HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=12),
+            1,
+            ("2025-11-30 15:00:00", "2025-12-31 15:00:00"),
+        ),
+    ],
+)
+def test_history_utc_range_for_december_and_january_fiscal_starts(
+    period: HistoryPeriod, start_month: int, expected: tuple[str, str]
+) -> None:
+    assert reports._history_utc_range(period, start_month, ZoneInfo("Asia/Tokyo")) == expected
+
+
+@pytest.mark.parametrize(
+    "period",
+    [
+        HistoryPeriod(HistoryPeriodKind.ANNUAL),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, month=4),
+        HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=cast("int", 2025.0)),
+        HistoryPeriod(cast("HistoryPeriodKind", "bogus"), fiscal_year=2025, month=4),
+    ],
+)
+def test_history_utc_range_rejects_missing_non_int_year_and_unknown_kind(
+    period: HistoryPeriod,
+) -> None:
+    with pytest.raises(ValueError):
+        reports._history_utc_range(period, 4, ZoneInfo("Asia/Tokyo"))
+
+
+@pytest.mark.parametrize(
+    ("start_month", "first"), [(1, (1, "2025年1月")), (12, (12, "2025年12月"))]
+)
+def test_fiscal_year_months_lists_twelve_consecutive_months(
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+    start_month: int,
+    first: tuple[int, str],
+) -> None:
+    SettingsService(seeded_conn).set_fiscal_year_start_month(start_month)
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+
+    months = report.fiscal_year_months(2025)
+
+    assert months[0] == first
+    assert [month for month, _ in months] == [
+        (start_month - 1 + offset) % 12 + 1 for offset in range(12)
+    ]
+    expected_labels = [
+        f"{2025 + (start_month - 1 + offset) // 12}年{(start_month - 1 + offset) % 12 + 1}月"
+        for offset in range(12)
+    ]
+    assert [label for _, label in months] == expected_labels
+
+
+_JANUARY_START_ROWS = (
+    "2024-12-31 14:59:59",  # JST 2024-12-31 23:59:59
+    "2024-12-31 15:00:00",  # JST 2025-01-01 00:00:00
+    "2025-12-31 14:59:59",  # JST 2025-12-31 23:59:59
+    "2025-12-31 15:00:00",  # JST 2026-01-01 00:00:00
+)
+_DECEMBER_START_ROWS = (
+    "2025-11-30 14:59:59",  # JST 2025-11-30 23:59:59
+    "2025-11-30 15:00:00",  # JST 2025-12-01 00:00:00
+    "2025-12-31 14:59:59",  # JST 2025-12-31 23:59:59
+    "2025-12-31 15:00:00",  # JST 2026-01-01 00:00:00
+    "2026-01-31 14:59:59",  # JST 2026-01-31 23:59:59
+    "2026-01-31 15:00:00",  # JST 2026-02-01 00:00:00
+    "2026-11-30 14:59:59",  # JST 2026-11-30 23:59:59
+    "2026-11-30 15:00:00",  # JST 2026-12-01 00:00:00
+)
+
+
+@pytest.mark.parametrize(
+    ("start_month", "moved_ats", "period", "expected_indexes"),
+    [
+        (1, _JANUARY_START_ROWS, HistoryPeriod(HistoryPeriodKind.ANNUAL, 2024), (0,)),
+        (1, _JANUARY_START_ROWS, HistoryPeriod(HistoryPeriodKind.ANNUAL, 2025), (1, 2)),
+        (1, _JANUARY_START_ROWS, HistoryPeriod(HistoryPeriodKind.ANNUAL, 2026), (3,)),
+        (1, _JANUARY_START_ROWS, HistoryPeriod(HistoryPeriodKind.MONTHLY, 2025, 1), (1,)),
+        (1, _JANUARY_START_ROWS, HistoryPeriod(HistoryPeriodKind.MONTHLY, 2025, 12), (2,)),
+        (12, _DECEMBER_START_ROWS, HistoryPeriod(HistoryPeriodKind.ANNUAL, 2024), (0,)),
+        (
+            12,
+            _DECEMBER_START_ROWS,
+            HistoryPeriod(HistoryPeriodKind.ANNUAL, 2025),
+            (1, 2, 3, 4, 5, 6),
+        ),
+        (12, _DECEMBER_START_ROWS, HistoryPeriod(HistoryPeriodKind.ANNUAL, 2026), (7,)),
+        (12, _DECEMBER_START_ROWS, HistoryPeriod(HistoryPeriodKind.MONTHLY, 2025, 12), (1, 2)),
+        (12, _DECEMBER_START_ROWS, HistoryPeriod(HistoryPeriodKind.MONTHLY, 2025, 1), (3, 4)),
+    ],
+)
+def test_history_page_and_csv_follow_fiscal_start_month_at_half_open_boundaries(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+    start_month: int,
+    moved_ats: tuple[str, ...],
+    period: HistoryPeriod,
+    expected_indexes: tuple[int, ...],
+) -> None:
+    tz = ZoneInfo("Asia/Tokyo")
+    SettingsService(seeded_conn).set_fiscal_year_start_month(start_month)
+    report = ReportService(seeded_conn, tz=tz, clock=fixed_clock)
+    item_id = _history_item(inventory, "開始月境界")
+    ids = _insert_history(seeded_conn, item_id, moved_ats)
+    output = tmp_path / "boundary.csv"
+
+    page = report.list_history_page(item_id, period=period)
+    report.export_history_csv(output, item_id, period=period)
+    csv_rows = list(csv.reader(StringIO(output.read_text(encoding="utf-8-sig"), newline="")))[1:]
+
+    assert {row.id for row in page.rows} == {ids[index] for index in expected_indexes}
+    assert page.total_count == len(expected_indexes)
+    assert [row[0] for row in csv_rows] == [
+        format_local(moved_ats[index], tz) for index in expected_indexes
+    ]
+
+
+def test_history_csv_client_filter_uses_recorded_client_including_deactivated(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = _history_item(inventory, "移管品")
+    inventory.receive(item_id, 1, 1, unit_price=10)
+    _change_item_owners(inventory, item_id, client_id=2, purchaser_id=1)
+    inventory.receive(item_id, 1, 1, unit_price=10)
+    MasterService(seeded_conn).deactivate_client(1)
+    output = tmp_path / "recorded-client.csv"
+
+    def clients_for(client_id: int) -> list[str]:
+        report.export_history_csv(output, client_id=client_id)
+        rows = list(csv.reader(StringIO(output.read_text(encoding="utf-8-sig"), newline="")))
+        return [row[7] for row in rows[1:]]
+
+    assert clients_for(1) == ["総務"]
+    assert clients_for(2) == ["経理"]

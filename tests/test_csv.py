@@ -5,14 +5,17 @@ import sqlite3
 from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from inventory_manager_mini.core.errors import FileOutputError
+from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
     DashboardRow,
     GroupAxis,
+    HistoryPeriod,
+    HistoryPeriodKind,
     ItemFilter,
     NewItem,
     PeriodKind,
@@ -208,6 +211,192 @@ def test_history_csv_preserves_zero_cost_as_numeric_zero(
 
     assert received.cost_amount is None
     assert costs == ["", "0", "0"]
+
+
+def test_filtered_history_csv_combines_client_and_period_filters(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    client_one_item = _item(inventory)
+    client_two_item = inventory.create_item(
+        NewItem(
+            client_id=2,
+            purchaser_id=1,
+            name="経理品",
+            category_id=2,
+            initial_quantity=1,
+            initial_staff_id=1,
+        )
+    ).id
+    inventory.issue(client_two_item, 1, 1, "経理利用")
+    fixed_clock.advance(days=40)
+    inventory.issue(client_one_item, 1, 1, "2月利用")
+    output = tmp_path / "filtered-history.csv"
+
+    def read_rows() -> list[list[str]]:
+        return list(csv.reader(StringIO(output.read_text(encoding="utf-8-sig"), newline="")))[1:]
+
+    report.export_history_csv(output)
+    assert len(read_rows()) == len(inventory.list_all_history())
+
+    report.export_history_csv(output, client_id=2)
+    client_two_rows = read_rows()
+    assert [row[2] for row in client_two_rows] == ["経理品", "経理品"]
+    assert {row[7] for row in client_two_rows} == {"経理"}
+
+    february = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=2)
+    report.export_history_csv(output, client_id=1, period=february)
+    february_rows = read_rows()
+    assert [row[3] for row in february_rows] == ["出庫"]
+    assert february_rows[0][10] == "2月利用"
+
+    report.export_history_csv(output, client_id=2, period=february)
+    assert read_rows() == []
+
+    report.export_history_csv(output, client_id=3)
+    assert read_rows() == []
+
+    missing = tmp_path / "missing-client.csv"
+    with pytest.raises(ValidationError, match="クライアントが見つかりません"):
+        report.export_history_csv(missing, client_id=999)
+    assert not missing.exists()
+
+    invalid = tmp_path / "invalid-period.csv"
+    with pytest.raises(ValueError):
+        report.export_history_csv(
+            invalid,
+            period=HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=13),
+        )
+    assert not invalid.exists()
+
+
+def _read_history_rows(path: Path) -> list[list[str]]:
+    return list(csv.reader(StringIO(path.read_text(encoding="utf-8-sig"), newline="")))
+
+
+def test_history_csv_for_unknown_item_contains_only_header(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    output = tmp_path / "unknown-item.csv"
+
+    report.export_history_csv(output, item_id=9999)
+    rows = _read_history_rows(output)
+
+    assert len(rows) == 1
+    assert rows[0][0] == "日時"
+
+
+def test_history_csv_is_ascending_and_combines_item_client_and_period(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    first_item = inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="品目A", category_id=2)
+    ).id
+    second_item = inventory.create_item(
+        NewItem(client_id=2, purchaser_id=1, name="品目B", category_id=2)
+    ).id
+    inventory.receive(first_item, 1, 1, unit_price=10)
+    inventory.receive(second_item, 1, 1, unit_price=10)
+    inventory.receive(first_item, 1, 2, unit_price=10)
+    fixed_clock.advance(days=40)
+    inventory.receive(first_item, 1, 3, unit_price=10)
+    output = tmp_path / "combined.csv"
+    january = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=1)
+
+    report.export_history_csv(output, first_item)
+    all_rows = _read_history_rows(output)[1:]
+    report.export_history_csv(output, first_item, client_id=1, period=january)
+    january_rows = _read_history_rows(output)[1:]
+    report.export_history_csv(output, first_item, client_id=2, period=january)
+    other_client_rows = _read_history_rows(output)[1:]
+
+    times = [row[0] for row in all_rows]
+    assert times == sorted(times)
+    assert [row[4] for row in all_rows] == ["1", "2", "3"]
+    assert [row[4] for row in january_rows] == ["1", "2"]
+    assert {row[2] for row in january_rows} == {"品目A"}
+    assert other_client_rows == []
+
+
+def test_history_csv_period_keeps_reversal_with_original_period_and_execution_time(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    item_id = inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="年度またぎ", category_id=2)
+    ).id
+    fixed_clock.current = datetime(2025, 3, 31, 14, 59, tzinfo=UTC)
+    inventory.receive(item_id, 1, 1, unit_price=10)
+    issued = inventory.issue(item_id, 1, 1, "前年度の出庫")
+    fixed_clock.current = datetime(2025, 4, 1, 0, 0, tzinfo=UTC)
+    inventory.reverse(issued.id, 1)
+    fixed_clock.current = datetime(2025, 5, 10, 3, 0, tzinfo=UTC)
+    inventory.receive(item_id, 1, 1, unit_price=10)
+    output = tmp_path / "reversal-period.csv"
+
+    for previous_year in (
+        HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2024),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2024, month=3),
+    ):
+        report.export_history_csv(output, item_id, period=previous_year)
+        rows = _read_history_rows(output)[1:]
+        assert [row[3] for row in rows] == ["入庫", "出庫", "出庫"]
+        assert [row[4] for row in rows] == ["1", "-1", "1"]
+        assert rows[1][12] == "○"
+        assert rows[2][0] == "2025-04-01 09:00:00"
+        assert rows[2][11] == str(issued.id)
+
+    for current_year in (
+        HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=2025),
+        HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=5),
+    ):
+        report.export_history_csv(output, item_id, period=current_year)
+        rows = _read_history_rows(output)[1:]
+        assert [row[3] for row in rows] == ["入庫"]
+        assert rows[0][0] == "2025-05-10 12:00:00"
+        assert rows[0][11] == ""
+
+    april = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=4)
+    report.export_history_csv(output, item_id, period=april)
+    assert _read_history_rows(output)[1:] == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"item_id": 0},
+        {"item_id": -1},
+        {"item_id": True},
+        {"client_id": 0},
+        {"client_id": -1},
+        {"client_id": True},
+    ],
+)
+def test_history_csv_rejects_non_positive_and_bool_ids(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    fixed_clock: FixedClock,
+    kwargs: dict[str, Any],
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    output = tmp_path / "invalid-id.csv"
+
+    with pytest.raises(ValueError):
+        report.export_history_csv(output, **kwargs)
+    assert not output.exists()
 
 
 def test_dashboard_csv_marks_collapsed_axes_as_all(

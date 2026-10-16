@@ -23,6 +23,7 @@ from inventory_manager_mini.core.models import (
     ItemChoice,
     ItemFilter,
     ItemUpdate,
+    MovementRow,
     Reason,
     StockMovement,
 )
@@ -459,6 +460,123 @@ def test_allocation_repository_lists_lots_and_tracks_remaining_quantity(
     assert allocations.lot_remaining(lot.id) == 1
     assert movements.latest_moved_at(1) == "2026-01-02 00:00:00"
     assert movements.latest_moved_at(999) is None
+
+
+MARCH_START = "2026-03-01 00:00:00"
+APRIL_START = "2026-04-01 00:00:00"
+MAY_START = "2026-05-01 00:00:00"
+
+
+def _ids(rows: list[MovementRow]) -> list[int]:
+    return [row.id for row in rows]
+
+
+def test_movement_repository_list_filtered_combines_item_client_and_utc_range(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    _insert_item(repository_conn, item_id=2, code="TL-0001", category_id=3)
+    _insert_movement(repository_conn, movement_id=1, moved_at="2026-03-31 23:59:59")
+    _insert_movement(repository_conn, movement_id=2, moved_at=APRIL_START)
+    _insert_movement(repository_conn, movement_id=3, client_id=2, moved_at="2026-04-01 12:00:00")
+    _insert_movement(repository_conn, movement_id=4, item_id=2, moved_at="2026-04-02 00:00:00")
+    _insert_movement(repository_conn, movement_id=5, moved_at=MAY_START)
+    repo = MovementRepository(repository_conn)
+
+    assert _ids(repo.list_filtered()) == [1, 2, 3, 4, 5]
+    assert _ids(repo.list_filtered(item_id=1)) == [1, 2, 3, 5]
+    assert _ids(repo.list_filtered(item_id=1, client_id=1)) == [1, 2, 5]
+    assert _ids(repo.list_filtered(start_utc=APRIL_START, end_utc=MAY_START)) == [2, 3, 4]
+    assert _ids(
+        repo.list_filtered(item_id=1, client_id=1, start_utc=APRIL_START, end_utc=MAY_START)
+    ) == [2]
+    assert _ids(repo.list_filtered(start_utc=APRIL_START)) == [2, 3, 4, 5]
+    assert _ids(repo.list_filtered(end_utc=APRIL_START)) == [1]
+    assert _ids(repo.list_by_item(1)) == [1, 2, 3, 5]
+    assert _ids(repo.list_all()) == [1, 2, 3, 4, 5]
+    assert repo.count_filtered() == 5
+    assert repo.count_filtered(item_id=1) == 4
+    assert repo.count_filtered(client_id=2) == 1
+    assert repo.count_filtered(start_utc=APRIL_START, end_utc=MAY_START) == 3
+
+
+def test_movement_repository_period_judges_reversal_rows_by_original_moved_at(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    _insert_item(repository_conn, item_id=1)
+    _insert_movement(repository_conn, movement_id=1, moved_at="2026-03-15 00:00:00")
+    _insert_movement(
+        repository_conn,
+        movement_id=2,
+        delta=-3,
+        reversal_of=1,
+        moved_at="2026-04-10 00:00:00",
+    )
+    _insert_movement(repository_conn, movement_id=3, moved_at="2026-04-05 00:00:00")
+    _insert_movement(
+        repository_conn,
+        movement_id=4,
+        delta=-3,
+        reversal_of=3,
+        moved_at="2026-06-01 00:00:00",
+    )
+    repo = MovementRepository(repository_conn)
+
+    assert _ids(repo.list_filtered(item_id=1, start_utc=MARCH_START, end_utc=APRIL_START)) == [1, 2]
+    assert _ids(repo.list_filtered(item_id=1, start_utc=APRIL_START, end_utc=MAY_START)) == [3, 4]
+    assert repo.count_filtered(item_id=1, start_utc=APRIL_START, end_utc=MAY_START) == 2
+
+
+def _insert_page_fixture(repository_conn: sqlite3.Connection) -> MovementRepository:
+    _insert_item(repository_conn, item_id=1)
+    for movement_id, moved_at in [
+        (1, "2026-01-01 00:00:00"),
+        (2, "2026-01-02 00:00:00"),
+        (3, "2026-01-02 00:00:00"),
+        (4, "2026-01-03 00:00:00"),
+        (5, "2026-01-03 00:00:00"),
+    ]:
+        _insert_movement(repository_conn, movement_id=movement_id, moved_at=moved_at)
+    return MovementRepository(repository_conn)
+
+
+def test_movement_repository_list_page_is_descending_with_id_tiebreak(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = _insert_page_fixture(repository_conn)
+
+    assert _ids(repo.list_page(limit=2, offset=0)) == [5, 4]
+    assert _ids(repo.list_page(item_id=1, limit=2, offset=2)) == [3, 2]
+    assert _ids(repo.list_page(item_id=1, limit=2, offset=4)) == [1]
+    assert repo.list_page(item_id=1, limit=2, offset=5) == []
+    assert _ids(
+        repo.list_page(
+            start_utc="2026-01-02 00:00:00", end_utc="2026-01-03 00:00:00", limit=10, offset=0
+        )
+    ) == [3, 2]
+    assert repo.count_filtered(item_id=1) == 5
+
+
+def test_movement_repository_index_in_filtered_follows_page_order(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = _insert_page_fixture(repository_conn)
+
+    assert [repo.index_in_filtered(movement_id) for movement_id in (5, 4, 3, 2, 1)] == [
+        0,
+        1,
+        2,
+        3,
+        4,
+    ]
+    start_utc = "2026-01-02 00:00:00"
+    end_utc = "2026-01-03 00:00:00"
+    assert repo.index_in_filtered(3, start_utc=start_utc, end_utc=end_utc) == 0
+    assert repo.index_in_filtered(2, start_utc=start_utc, end_utc=end_utc) == 1
+    assert repo.index_in_filtered(1, start_utc=start_utc, end_utc=end_utc) is None
+    assert repo.index_in_filtered(4, start_utc=start_utc, end_utc=end_utc) is None
+    assert repo.index_in_filtered(3, client_id=2) is None
+    assert repo.index_in_filtered(999) is None
 
 
 def _insert_lot_row(

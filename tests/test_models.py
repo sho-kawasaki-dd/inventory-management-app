@@ -4,6 +4,8 @@ from typing import Any
 import pytest
 
 from inventory_manager_mini.core.models import (
+    DEFAULT_HISTORY_PAGE_SIZE,
+    HISTORY_PAGE_SIZES,
     MAX_AGGREGATE_VALUE,
     MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
@@ -15,6 +17,9 @@ from inventory_manager_mini.core.models import (
     DashboardRow,
     FifoEstimate,
     GroupAxis,
+    HistoryPage,
+    HistoryPeriod,
+    HistoryPeriodKind,
     Item,
     ItemChoice,
     ItemFilter,
@@ -58,6 +63,8 @@ def _field_names(model: type[Any]) -> set[str]:
         ItemFilter,
         DashboardRow,
         ItemChoice,
+        HistoryPeriod,
+        HistoryPage,
     ],
 )
 def test_models_are_frozen_and_slotted(model: type[Any]) -> None:
@@ -195,3 +202,32 @@ def test_model_instances_are_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         client.name = "経理"  # type: ignore[misc]
+
+
+def test_history_page_size_constants() -> None:
+    assert HISTORY_PAGE_SIZES == (300, 500)
+    assert DEFAULT_HISTORY_PAGE_SIZE == 300
+    assert DEFAULT_HISTORY_PAGE_SIZE in HISTORY_PAGE_SIZES
+
+
+def test_history_period_kind_values() -> None:
+    assert [kind.value for kind in HistoryPeriodKind] == ["all", "annual", "monthly"]
+
+
+def test_history_period_defaults_to_all_periods() -> None:
+    period = HistoryPeriod()
+
+    assert period.kind is HistoryPeriodKind.ALL
+    assert period.fiscal_year is None
+    assert period.month is None
+
+
+def test_history_models_match_their_roles() -> None:
+    assert _field_names(HistoryPeriod) == {"kind", "fiscal_year", "month"}
+    assert _field_names(HistoryPage) == {
+        "rows",
+        "total_count",
+        "page",
+        "page_size",
+        "total_pages",
+    }

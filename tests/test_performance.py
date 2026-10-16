@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 import queue
 import shutil
@@ -18,10 +19,21 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
-from inventory_manager_mini.core.models import GroupAxis, ItemFilter, PeriodKind, Reason
-from inventory_manager_mini.core.reports import ReportService
+from inventory_manager_mini.core.models import (
+    GroupAxis,
+    HistoryPeriod,
+    HistoryPeriodKind,
+    ItemFilter,
+    PeriodKind,
+    Reason,
+)
+from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
 from inventory_manager_mini.core.services import BackupService, InventoryService
-from inventory_manager_mini.core.timeutil import local_timestamp_for_filename, utc_now_str
+from inventory_manager_mini.core.timeutil import (
+    local_date,
+    local_timestamp_for_filename,
+    utc_now_str,
+)
 from inventory_manager_mini.db import migrations
 from inventory_manager_mini.db.connection import connect, transaction
 from inventory_manager_mini.db.integrity import compute_aggregates
@@ -482,6 +494,166 @@ def test_dashboard_refresh_and_render_with_large_history(
         )
     finally:
         dashboard.shutdown()
+        conn.close()
+
+
+def _append_history_rows(conn: sqlite3.Connection, item_id: int, count: int) -> None:
+    client_id, purchaser_id = conn.execute(
+        "SELECT client_id, purchaser_id FROM items WHERE id = ?", (item_id,)
+    ).fetchone()
+    moved_at = utc_now_str()
+    with transaction(conn):
+        conn.executemany(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, moved_at) VALUES (?, ?, ?, 1, 'in', 1, 1, ?)",
+            [(item_id, client_id, purchaser_id, moved_at)] * count,
+        )
+        conn.execute("UPDATE items SET quantity = quantity + ? WHERE id = ?", (count, item_id))
+        conn.execute(
+            "UPDATE total_aggregates SET inbound_quantity = inbound_quantity + ? WHERE id = 1",
+            (count,),
+        )
+
+
+def _append_reversal_rows(conn: sqlite3.Connection, item_id: int, count: int) -> None:
+    """直近に追加した未取り消しの入庫行を新しい順に count 件取り消す行を追加する。"""
+    client_id, purchaser_id = conn.execute(
+        "SELECT client_id, purchaser_id FROM items WHERE id = ?", (item_id,)
+    ).fetchone()
+    original_ids = [
+        row[0]
+        for row in conn.execute(
+            "SELECT id FROM stock_movements "
+            "WHERE item_id = ? AND reason = 'in' AND reversal_of IS NULL "
+            "ORDER BY id DESC LIMIT ?",
+            (item_id, count),
+        )
+    ]
+    moved_at = utc_now_str()
+    with transaction(conn):
+        conn.executemany(
+            "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, "
+            "reason, delta, unit_price, reversal_of, moved_at) "
+            "VALUES (?, ?, ?, 1, 'in', -1, 1, ?, ?)",
+            [(item_id, client_id, purchaser_id, original, moved_at) for original in original_ids],
+        )
+        conn.execute("UPDATE items SET quantity = quantity - ? WHERE id = ?", (count, item_id))
+        conn.execute(
+            "UPDATE total_aggregates SET inbound_quantity = inbound_quantity - ? WHERE id = 1",
+            (count,),
+        )
+
+
+def _expected_history_count(
+    conn: sqlite3.Connection,
+    reports: ReportService,
+    fiscal_year: int,
+    *,
+    item_id: int | None = None,
+    client_id: int | None = None,
+) -> int:
+    """SQL の期間絞り込みとは独立に、Python 側で年度判定して件数を数える。"""
+    start_month = reports.settings.get_fiscal_year_start_month()
+    rows = conn.execute(
+        "SELECT COALESCE(o.moved_at, m.moved_at) FROM stock_movements m "
+        "LEFT JOIN stock_movements o ON o.id = m.reversal_of "
+        "WHERE (? IS NULL OR m.item_id = ?) AND (? IS NULL OR m.client_id = ?)",
+        (item_id, item_id, client_id, client_id),
+    )
+    return sum(
+        fiscal_year_of(local_date(str(row[0]), reports.tz), start_month) == fiscal_year
+        for row in rows
+    )
+
+
+@pytest.mark.parametrize("page_size", [300, 500])
+def test_history_page_with_period_filter_on_large_item_history(
+    performance_db: Path, tmp_path: Path, page_size: int
+) -> None:
+    db_path = _copy_performance_database(
+        performance_db, tmp_path / f"history-page-{page_size}" / "inventory.db"
+    )
+    conn = connect(db_path)
+    try:
+        first_new_id = conn.execute("SELECT MAX(id) FROM stock_movements").fetchone()[0] + 1
+        _append_history_rows(conn, 1, 1000)
+        _append_reversal_rows(conn, 1, 500)
+        reports = ReportService(conn)
+        fiscal_year = reports.current_fiscal_year()
+        period = HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=fiscal_year)
+
+        started_at = time.perf_counter()
+        first = reports.list_history_page(1, period=period, page_size=page_size)
+        first_elapsed = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
+        last = reports.list_history_page(
+            1, period=period, page=first.total_pages, page_size=page_size
+        )
+        last_elapsed = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
+        selected = reports.list_history_page(
+            1, period=period, page_size=page_size, select_movement_id=first_new_id
+        )
+        selected_elapsed = time.perf_counter() - started_at
+
+        expected_count = _expected_history_count(conn, reports, fiscal_year, item_id=1)
+        assert first.total_count == expected_count
+        assert first.total_count >= 1500
+        assert len(first.rows) == page_size
+        assert last.page == first.total_pages
+        assert len(last.rows) == first.total_count - (first.total_pages - 1) * page_size
+        assert first_new_id in {row.id for row in selected.rows}
+        print(
+            f"品目の履歴 {first.total_count:,} 件（取り消し 500 件を含む、{page_size} 件表示）: "
+            f"先頭ページ {first_elapsed:.3f} 秒、最終ページ {last_elapsed:.3f} 秒、"
+            f"行選択ページ {selected_elapsed:.3f} 秒"
+        )
+        assert first_elapsed <= 0.3, f"先頭ページの取得に {first_elapsed:.3f} 秒かかりました"
+        assert last_elapsed <= 0.3, f"最終ページの取得に {last_elapsed:.3f} 秒かかりました"
+        assert selected_elapsed <= 0.3, (
+            f"行選択を伴うページ取得に {selected_elapsed:.3f} 秒かかりました"
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("client_filtered", [False, True], ids=["全品目", "クライアント絞込"])
+def test_filtered_history_csv_export_with_large_history(
+    performance_db: Path, tmp_path: Path, client_filtered: bool
+) -> None:
+    db_path = _copy_performance_database(
+        performance_db, tmp_path / f"filtered-csv-{client_filtered}" / "inventory.db"
+    )
+    conn = connect(db_path)
+    try:
+        _append_history_rows(conn, 1, 1000)
+        _append_reversal_rows(conn, 1, 500)
+        reports = ReportService(conn)
+        fiscal_year = reports.current_fiscal_year()
+        period = HistoryPeriod(HistoryPeriodKind.ANNUAL, fiscal_year=fiscal_year)
+        client_id = (
+            conn.execute("SELECT client_id FROM items WHERE id = 1").fetchone()[0]
+            if client_filtered
+            else None
+        )
+        output_dir = tmp_path / "csv"
+        output_dir.mkdir()
+        output = output_dir / "filtered-history.csv"
+
+        started_at = time.perf_counter()
+        reports.export_history_csv(output, client_id=client_id, period=period)
+        elapsed = time.perf_counter() - started_at
+
+        with output.open(encoding="utf-8-sig", newline="") as stream:
+            exported_count = sum(1 for _ in csv.reader(stream)) - 1
+        expected_count = _expected_history_count(conn, reports, fiscal_year, client_id=client_id)
+        assert exported_count == expected_count
+        assert exported_count >= 1500
+        print(f"期間指定の履歴 CSV（{exported_count:,} 行）: {elapsed:.3f} 秒")
+        assert elapsed <= 5.0, f"期間指定の履歴 CSV 出力に {elapsed:.3f} 秒かかりました"
+    finally:
         conn.close()
 
 
