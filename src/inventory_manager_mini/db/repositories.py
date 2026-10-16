@@ -423,6 +423,40 @@ class ItemRepository:
         )
 
 
+def _movement_filter(
+    *,
+    item_id: int | None,
+    client_id: int | None,
+    start_utc: str | None,
+    end_utc: str | None,
+) -> tuple[str, list[str], list[object]]:
+    join = ""
+    conditions: list[str] = []
+    parameters: list[object] = []
+    if item_id is not None:
+        conditions.append("m.item_id = ?")
+        parameters.append(item_id)
+    if client_id is not None:
+        conditions.append("m.client_id = ?")
+        parameters.append(client_id)
+    if start_utc is not None or end_utc is not None:
+        # 取り消し行は元の行の日時で期間判定する
+        join = "LEFT JOIN stock_movements o ON o.id = m.reversal_of"
+        if start_utc is not None:
+            conditions.append("COALESCE(o.moved_at, m.moved_at) >= ?")
+            parameters.append(start_utc)
+        if end_utc is not None:
+            conditions.append("COALESCE(o.moved_at, m.moved_at) < ?")
+            parameters.append(end_utc)
+    return join, conditions, parameters
+
+
+def _where_clause(conditions: Sequence[str]) -> str:
+    if not conditions:
+        return ""
+    return " WHERE " + " AND ".join(conditions)
+
+
 class MovementRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -503,10 +537,89 @@ class MovementRepository:
         return None if row is None else str(row["moved_at"])
 
     def list_by_item(self, item_id: int) -> list[MovementRow]:
-        return self._list("WHERE m.item_id = ?", (item_id,))
+        return self.list_filtered(item_id=item_id)
 
     def list_all(self) -> list[MovementRow]:
-        return self._list("", ())
+        return self.list_filtered()
+
+    def list_filtered(
+        self,
+        *,
+        item_id: int | None = None,
+        client_id: int | None = None,
+        start_utc: str | None = None,
+        end_utc: str | None = None,
+    ) -> list[MovementRow]:
+        join, conditions, parameters = _movement_filter(
+            item_id=item_id, client_id=client_id, start_utc=start_utc, end_utc=end_utc
+        )
+        return self._list(join, conditions, parameters, "ORDER BY m.moved_at, m.id")
+
+    def count_filtered(
+        self,
+        *,
+        item_id: int | None = None,
+        client_id: int | None = None,
+        start_utc: str | None = None,
+        end_utc: str | None = None,
+    ) -> int:
+        join, conditions, parameters = _movement_filter(
+            item_id=item_id, client_id=client_id, start_utc=start_utc, end_utc=end_utc
+        )
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS total FROM stock_movements m {join}{_where_clause(conditions)}",
+            parameters,
+        ).fetchone()
+        return int(row["total"])
+
+    def list_page(
+        self,
+        *,
+        item_id: int | None = None,
+        client_id: int | None = None,
+        start_utc: str | None = None,
+        end_utc: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[MovementRow]:
+        join, conditions, parameters = _movement_filter(
+            item_id=item_id, client_id=client_id, start_utc=start_utc, end_utc=end_utc
+        )
+        return self._list(
+            join,
+            conditions,
+            [*parameters, limit, offset],
+            "ORDER BY m.moved_at DESC, m.id DESC LIMIT ? OFFSET ?",
+        )
+
+    def index_in_filtered(
+        self,
+        movement_id: int,
+        *,
+        item_id: int | None = None,
+        client_id: int | None = None,
+        start_utc: str | None = None,
+        end_utc: str | None = None,
+    ) -> int | None:
+        join, conditions, parameters = _movement_filter(
+            item_id=item_id, client_id=client_id, start_utc=start_utc, end_utc=end_utc
+        )
+        target_where = _where_clause([*conditions, "m.id = ?"])
+        target = self.conn.execute(
+            f"SELECT m.id, m.moved_at FROM stock_movements m {join}{target_where}",
+            [*parameters, movement_id],
+        ).fetchone()
+        if target is None:
+            return None
+        moved_at = str(target["moved_at"])
+        newer_where = _where_clause(
+            [*conditions, "(m.moved_at > ? OR (m.moved_at = ? AND m.id > ?))"]
+        )
+        newer = self.conn.execute(
+            f"SELECT COUNT(*) AS total FROM stock_movements m {join}{newer_where}",
+            [*parameters, moved_at, moved_at, int(target["id"])],
+        ).fetchone()
+        return int(newer["total"])
 
     def find_invalid_reversals(self) -> list[int]:
         rows = self.conn.execute(
@@ -523,7 +636,13 @@ class MovementRepository:
         ).fetchall()
         return [int(row["id"]) for row in rows]
 
-    def _list(self, where: str, parameters: Sequence[object]) -> list[MovementRow]:
+    def _list(
+        self,
+        join: str,
+        conditions: Sequence[str],
+        parameters: Sequence[object],
+        tail: str,
+    ) -> list[MovementRow]:
         rows = self.conn.execute(
             f"""SELECT {_qualified_columns(_MOVEMENT_COLUMNS, "m")},
                 i.code, i.name AS item_name, c.name AS client_name,
@@ -534,7 +653,8 @@ class MovementRepository:
             JOIN clients c ON c.id = m.client_id
             JOIN purchasers p ON p.id = m.purchaser_id
             JOIN staff s ON s.id = m.staff_id
-            {where} ORDER BY m.moved_at, m.id""",
+            {join}
+            {_where_clause(conditions)} {tail}""",
             parameters,
         ).fetchall()
         result: list[MovementRow] = []
