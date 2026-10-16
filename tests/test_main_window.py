@@ -26,13 +26,21 @@ from PySide6.QtWidgets import (
 
 from inventory_manager_mini.core import services
 from inventory_manager_mini.core.errors import InvalidBackupError, RestoreError
-from inventory_manager_mini.core.models import REASON_LABELS, ItemRow, NewItem, Reason
+from inventory_manager_mini.core.models import (
+    REASON_LABELS,
+    HistoryPeriod,
+    HistoryPeriodKind,
+    ItemRow,
+    NewItem,
+    Reason,
+)
 from inventory_manager_mini.core.services import InventoryService, MasterService, SettingsService
 from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from inventory_manager_mini.ui import main_window as main_window_module
 from inventory_manager_mini.ui.csv_export import _choose_export_path
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
+from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.display_settings import DisplaySettings
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
@@ -1114,6 +1122,34 @@ def _patch_save_dialog(monkeypatch, selected: Path | None) -> list[str]:
     return default_names
 
 
+def _patch_history_export_dialog(
+    monkeypatch,
+    *,
+    accept: bool = True,
+    client_id: int | None = None,
+    kind: HistoryPeriodKind = HistoryPeriodKind.ALL,
+    fiscal_year: int | None = None,
+    month: int | None = None,
+) -> list[HistoryExportDialog]:
+    dialogs: list[HistoryExportDialog] = []
+
+    def fake_exec(dialog: HistoryExportDialog) -> int:
+        dialogs.append(dialog)
+        if not accept:
+            return QDialog.DialogCode.Rejected
+        selector = dialog.period_selector
+        if fiscal_year is not None:
+            selector.year_combo.setCurrentIndex(selector.year_combo.findData(fiscal_year))
+        if month is not None:
+            selector.month_combo.setCurrentIndex(selector.month_combo.findData(month))
+        selector.period_kind_combo.setCurrentIndex(selector.period_kind_combo.findData(kind))
+        dialog.client_combo.setCurrentIndex(dialog.client_combo.findData(client_id))
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(HistoryExportDialog, "exec", fake_exec)
+    return dialogs
+
+
 def _read_csv(path: Path) -> list[list[str]]:
     with path.open(encoding="utf-8-sig", newline="") as stream:
         return list(csv.reader(stream))
@@ -1197,6 +1233,7 @@ def test_csv_export_default_names_use_label_and_local_timestamp(
 ) -> None:
     window, _first, _second = window_with_items
     default_names = _patch_save_dialog(monkeypatch, None)
+    _patch_history_export_dialog(monkeypatch)
 
     window.export_items_action.trigger()
     window.export_history_action.trigger()
@@ -1212,6 +1249,7 @@ def test_history_csv_exports_all_items(window_with_items, monkeypatch, tmp_path:
     window.context.inventory.receive(first.id, 1, 3)
     destination = tmp_path / "history.csv"
     _patch_save_dialog(monkeypatch, destination)
+    _patch_history_export_dialog(monkeypatch)
 
     window.export_history_action.trigger()
 
@@ -1221,14 +1259,96 @@ def test_history_csv_exports_all_items(window_with_items, monkeypatch, tmp_path:
     assert str(destination) in window.statusBar().currentMessage()
 
 
+def test_history_export_dialog_lists_all_and_inactive_clients(
+    window_with_items, monkeypatch
+) -> None:
+    window, _first, _second = window_with_items
+    window.context.master.deactivate_client(2)
+    dialogs = _patch_history_export_dialog(monkeypatch, accept=False)
+
+    window.export_history_action.trigger()
+
+    combo = dialogs[0].client_combo
+    labels = [combo.itemText(index) for index in range(combo.count())]
+    assert sorted(labels[1:]) == sorted(["総務", "経理 (無効)", "廃止クライアント (無効)"])
+    assert labels[0] == "すべて"
+    assert dialogs[0].selected_client_id() is None
+    assert dialogs[0].selected_period() == HistoryPeriod()
+
+
+@pytest.mark.parametrize("deactivate", [False, True])
+def test_history_csv_filters_by_client(
+    window_with_items, monkeypatch, tmp_path: Path, deactivate: bool
+) -> None:
+    window, _first, _second = window_with_items
+    window.context.inventory.receive(_first.id, 1, 3)
+    if deactivate:
+        window.context.master.deactivate_client(2)
+    destination = tmp_path / "history.csv"
+    _patch_save_dialog(monkeypatch, destination)
+    _patch_history_export_dialog(monkeypatch, client_id=2)
+
+    window.export_history_action.trigger()
+
+    rows = _read_csv(destination)
+    assert len(rows) - 1 == 1
+    assert {row[7] for row in rows[1:]} == {"経理"}
+
+
+@pytest.mark.parametrize(
+    ("kind", "fiscal_year", "month", "expected"),
+    [
+        (HistoryPeriodKind.ALL, None, None, 3),
+        (HistoryPeriodKind.ANNUAL, 2025, None, 3),
+        (HistoryPeriodKind.ANNUAL, 2026, None, 0),
+        (HistoryPeriodKind.MONTHLY, 2025, 1, 3),
+        (HistoryPeriodKind.MONTHLY, 2025, 2, 0),
+    ],
+)
+def test_history_csv_filters_by_period(
+    window_with_items,
+    monkeypatch,
+    tmp_path: Path,
+    kind: HistoryPeriodKind,
+    fiscal_year: int | None,
+    month: int | None,
+    expected: int,
+) -> None:
+    window, first, _second = window_with_items
+    window.context.inventory.receive(first.id, 1, 3)
+    destination = tmp_path / "history.csv"
+    _patch_save_dialog(monkeypatch, destination)
+    _patch_history_export_dialog(monkeypatch, kind=kind, fiscal_year=fiscal_year, month=month)
+
+    window.export_history_action.trigger()
+
+    assert len(_read_csv(destination)) - 1 == expected
+
+
 def test_csv_export_cancel_creates_no_file(window_with_items, monkeypatch, tmp_path: Path) -> None:
     window, _first, _second = window_with_items
     _patch_save_dialog(monkeypatch, None)
+    _patch_history_export_dialog(monkeypatch)
 
     window.export_items_action.trigger()
     window.export_history_action.trigger()
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_history_export_dialog_cancel_skips_save_dialog(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, _first, _second = window_with_items
+    default_names = _patch_save_dialog(monkeypatch, tmp_path / "history.csv")
+    _patch_history_export_dialog(monkeypatch, accept=False)
+    message_before = window.statusBar().currentMessage()
+
+    window.export_history_action.trigger()
+
+    assert default_names == []
+    assert list(tmp_path.iterdir()) == []
+    assert window.statusBar().currentMessage() == message_before
 
 
 @pytest.mark.parametrize("answer", [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])

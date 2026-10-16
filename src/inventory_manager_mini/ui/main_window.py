@@ -33,6 +33,7 @@ from inventory_manager_mini.core.services import PreparedRestore, validate_purch
 from inventory_manager_mini.core.timeutil import format_local, utc_now_str
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
+from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
 from inventory_manager_mini.ui.dialogs.settings_dialog import SettingsDialog
 from inventory_manager_mini.ui.display_settings import load_display_settings
 from inventory_manager_mini.ui.error_handling import run_guarded, show_unexpected_error
@@ -601,11 +602,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"在庫一覧を出力しました: {path}")
 
     def _export_all_history_csv(self) -> None:
+        dialog = HistoryExportDialog(self.context, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        client_id = dialog.selected_client_id()
+        period = dialog.selected_period()
         path = export_csv_with_dialog(
             self,
             "履歴(全品目)",
             "履歴",
-            lambda destination: self.context.reports.export_history_csv(destination),
+            lambda destination: self.context.reports.export_history_csv(
+                destination, client_id=client_id, period=period
+            ),
         )
         if path is not None:
             self.statusBar().showMessage(f"履歴を出力しました: {path}")
