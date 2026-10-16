@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from inventory_manager_mini.core.errors import FileOutputError
+from inventory_manager_mini.core.errors import FileOutputError, ValidationError
 from inventory_manager_mini.core.models import (
     DashboardRow,
     GroupAxis,
+    HistoryPeriod,
+    HistoryPeriodKind,
     ItemFilter,
     NewItem,
     PeriodKind,
@@ -208,6 +210,66 @@ def test_history_csv_preserves_zero_cost_as_numeric_zero(
 
     assert received.cost_amount is None
     assert costs == ["", "0", "0"]
+
+
+def test_filtered_history_csv_combines_client_and_period_filters(
+    tmp_path: Path,
+    seeded_conn: sqlite3.Connection,
+    inventory: InventoryService,
+    fixed_clock: FixedClock,
+) -> None:
+    report = ReportService(seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock)
+    client_one_item = _item(inventory)
+    client_two_item = inventory.create_item(
+        NewItem(
+            client_id=2,
+            purchaser_id=1,
+            name="経理品",
+            category_id=2,
+            initial_quantity=1,
+            initial_staff_id=1,
+        )
+    ).id
+    inventory.issue(client_two_item, 1, 1, "経理利用")
+    fixed_clock.advance(days=40)
+    inventory.issue(client_one_item, 1, 1, "2月利用")
+    output = tmp_path / "filtered-history.csv"
+
+    def read_rows() -> list[list[str]]:
+        return list(csv.reader(StringIO(output.read_text(encoding="utf-8-sig"), newline="")))[1:]
+
+    report.export_history_csv(output)
+    assert len(read_rows()) == len(inventory.list_all_history())
+
+    report.export_history_csv(output, client_id=2)
+    client_two_rows = read_rows()
+    assert [row[2] for row in client_two_rows] == ["経理品", "経理品"]
+    assert {row[7] for row in client_two_rows} == {"経理"}
+
+    february = HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=2)
+    report.export_history_csv(output, client_id=1, period=february)
+    february_rows = read_rows()
+    assert [row[3] for row in february_rows] == ["出庫"]
+    assert february_rows[0][10] == "2月利用"
+
+    report.export_history_csv(output, client_id=2, period=february)
+    assert read_rows() == []
+
+    report.export_history_csv(output, client_id=3)
+    assert read_rows() == []
+
+    missing = tmp_path / "missing-client.csv"
+    with pytest.raises(ValidationError, match="クライアントが見つかりません"):
+        report.export_history_csv(missing, client_id=999)
+    assert not missing.exists()
+
+    invalid = tmp_path / "invalid-period.csv"
+    with pytest.raises(ValueError):
+        report.export_history_csv(
+            invalid,
+            period=HistoryPeriod(HistoryPeriodKind.MONTHLY, fiscal_year=2025, month=13),
+        )
+    assert not invalid.exists()
 
 
 def test_dashboard_csv_marks_collapsed_axes_as_all(
