@@ -1,6 +1,8 @@
 import csv
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from PySide6.QtCore import Qt
@@ -8,7 +10,13 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QMessageBox
 
 from inventory_manager_mini.core.errors import ValidationError
-from inventory_manager_mini.core.models import MAX_STOCK_QUANTITY, Allocation, NewItem
+from inventory_manager_mini.core.models import (
+    MAX_STOCK_QUANTITY,
+    Allocation,
+    HistoryPeriodKind,
+    NewItem,
+)
+from inventory_manager_mini.core.reports import ReportService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
@@ -540,3 +548,235 @@ def test_history_csv_failure_shows_error_and_logs(
     levels = [r.levelno for r in caplog.records if r.name == "inventory_manager_mini.ui.csv_export"]
     assert levels == [logging.INFO, logging.ERROR]
     assert dialog.isEnabled()
+
+
+@pytest.fixture
+def paged_context(dialog_context, seeded_conn, fixed_clock) -> AppContext:
+    dialog_context.reports = ReportService(
+        seeded_conn, tz=ZoneInfo("Asia/Tokyo"), clock=fixed_clock
+    )
+    return dialog_context
+
+
+def _select_period_kind(dialog: HistoryDialog, kind: HistoryPeriodKind) -> None:
+    combo = dialog.period_selector.period_kind_combo
+    combo.setCurrentIndex(combo.findData(kind))
+
+
+def _set_page_size(dialog: HistoryDialog, size: int) -> None:
+    dialog.page_size_combo.setCurrentIndex(dialog.page_size_combo.findData(size))
+
+
+def test_history_pagination_shows_pages_and_toggles_buttons(
+    qtbot, paged_context, seeded_conn, bulk_history
+) -> None:
+    item = _create_item(paged_context)
+    bulk_history(seeded_conn, item.id, 650)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert dialog.page_size_combo.currentData() == 300
+    assert dialog.model.rowCount() == 300
+    assert dialog.page_label.text() == "1 / 3 ページ (全 650 件)"
+    assert not dialog.prev_page_button.isEnabled()
+    assert dialog.next_page_button.isEnabled()
+
+    dialog.next_page_button.click()
+    assert dialog.page_label.text() == "2 / 3 ページ (全 650 件)"
+    assert dialog.prev_page_button.isEnabled()
+    assert dialog.next_page_button.isEnabled()
+
+    dialog.next_page_button.click()
+    assert dialog.model.rowCount() == 50
+    assert dialog.page_label.text() == "3 / 3 ページ (全 650 件)"
+    assert dialog.prev_page_button.isEnabled()
+    assert not dialog.next_page_button.isEnabled()
+
+    dialog.prev_page_button.click()
+    assert dialog.page_label.text() == "2 / 3 ページ (全 650 件)"
+
+
+def test_history_page_size_change_returns_to_first_page(
+    qtbot, paged_context, seeded_conn, bulk_history
+) -> None:
+    item = _create_item(paged_context)
+    bulk_history(seeded_conn, item.id, 650)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+    dialog.next_page_button.click()
+    assert dialog.page_label.text().startswith("2 / 3")
+
+    _set_page_size(dialog, 500)
+
+    assert dialog.model.rowCount() == 500
+    assert dialog.page_label.text() == "1 / 2 ページ (全 650 件)"
+    assert not dialog.prev_page_button.isEnabled()
+    dialog.next_page_button.click()
+    assert dialog.model.rowCount() == 150
+    assert not dialog.next_page_button.isEnabled()
+
+
+def test_history_without_rows_disables_page_buttons(qtbot, paged_context) -> None:
+    item = _create_item(paged_context)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert dialog.model.rowCount() == 0
+    assert dialog.page_label.text() == "0 / 0 ページ (全 0 件)"
+    assert not dialog.prev_page_button.isEnabled()
+    assert not dialog.next_page_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+
+
+def test_history_for_missing_item_disables_export_and_paging(
+    qtbot, paged_context, monkeypatch
+) -> None:
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: warnings.append(args))
+    dialog = HistoryDialog(paged_context, 9999)
+    qtbot.addWidget(dialog)
+
+    assert dialog.item_info_label.text() == "品目が見つかりません"
+    assert dialog.model.rowCount() == 0
+    assert not dialog.export_button.isEnabled()
+    assert not dialog.prev_page_button.isEnabled()
+    assert not dialog.next_page_button.isEnabled()
+    assert warnings == []
+
+
+@pytest.mark.parametrize("page_size", [300, 500])
+def test_reversal_reselects_original_moved_to_next_page(
+    qtbot, paged_context, monkeypatch, page_size: int
+) -> None:
+    item = _create_item(paged_context)
+    for _ in range(page_size * 2):
+        paged_context.inventory.receive(item.id, 1, 1)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+    _set_page_size(dialog, page_size)
+    dialog.next_page_button.click()
+    original = dialog.model.row_at(dialog.model.rowCount() - 1)
+    assert dialog.page_label.text().startswith("2 / 2")
+    dialog.table.selectRow(dialog.model.rowCount() - 1)
+
+    def execute_and_save(reversal_dialog: ReversalDialog) -> QDialog.DialogCode:
+        reversal_dialog.staff_combo.setCurrentIndex(1)
+        reversal_dialog._save()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ReversalDialog, "exec", execute_and_save)
+    dialog._open_reversal()
+
+    assert dialog.page_label.text() == f"3 / 3 ページ (全 {page_size * 2 + 1:,} 件)"
+    assert dialog.model.rowCount() == 1
+    assert dialog.model.row_at(dialog.table.currentIndex().row()).id == original.id
+    assert dialog.model.row_at(0).is_reversed
+
+
+def _receive_at(context: AppContext, item_id: int, fixed_clock, moved_at: datetime) -> None:
+    fixed_clock.current = moved_at
+    context.inventory.receive(item_id, 1, 1)
+
+
+def _history_with_periods(context: AppContext, fixed_clock) -> int:
+    item = _create_item(context)
+    for moved_at in (
+        datetime(2024, 5, 10, 3, tzinfo=UTC),
+        datetime(2025, 5, 10, 3, tzinfo=UTC),
+        datetime(2025, 6, 10, 3, tzinfo=UTC),
+        datetime(2026, 2, 10, 3, tzinfo=UTC),
+    ):
+        _receive_at(context, item.id, fixed_clock, moved_at)
+    return item.id
+
+
+def test_history_period_filter_updates_rows_and_controls(qtbot, paged_context, fixed_clock) -> None:
+    item_id = _history_with_periods(paged_context, fixed_clock)
+    dialog = HistoryDialog(paged_context, item_id)
+    qtbot.addWidget(dialog)
+    selector = dialog.period_selector
+    assert dialog.model.rowCount() == 4
+    assert not selector.year_combo.isEnabled()
+    assert not selector.month_combo.isEnabled()
+
+    _select_period_kind(dialog, HistoryPeriodKind.ANNUAL)
+    assert dialog.model.rowCount() == 3
+    assert selector.year_combo.isEnabled()
+    assert not selector.month_combo.isEnabled()
+    assert dialog.page_label.text() == "1 / 1 ページ (全 3 件)"
+
+    _select_period_kind(dialog, HistoryPeriodKind.MONTHLY)
+    selector.month_combo.setCurrentIndex(selector.month_combo.findData(5))
+    assert selector.month_combo.isEnabled()
+    assert dialog.model.rowCount() == 1
+
+    selector.year_combo.setCurrentIndex(selector.year_combo.findData(2024))
+    assert dialog.model.rowCount() == 1
+    assert dialog.model.row_at(0).moved_at == "2024-05-10 03:00:00"
+
+    _select_period_kind(dialog, HistoryPeriodKind.ALL)
+    assert dialog.model.rowCount() == 4
+
+
+def test_history_period_change_resets_to_first_page(
+    qtbot, paged_context, seeded_conn, bulk_history
+) -> None:
+    item = _create_item(paged_context)
+    bulk_history(seeded_conn, item.id, 650)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+    dialog.next_page_button.click()
+
+    _select_period_kind(dialog, HistoryPeriodKind.ANNUAL)
+
+    assert dialog.page_label.text() == "1 / 3 ページ (全 650 件)"
+
+
+def test_year_change_loads_history_page_once(
+    qtbot, paged_context, fixed_clock, monkeypatch
+) -> None:
+    item_id = _history_with_periods(paged_context, fixed_clock)
+    dialog = HistoryDialog(paged_context, item_id)
+    qtbot.addWidget(dialog)
+    _select_period_kind(dialog, HistoryPeriodKind.MONTHLY)
+    calls = []
+    original = paged_context.reports.list_history_page
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(paged_context.reports, "list_history_page", spy)
+    selector = dialog.period_selector
+    selector.year_combo.setCurrentIndex(selector.year_combo.findData(2024))
+
+    assert len(calls) == 1
+
+
+def test_history_csv_exports_all_pages_of_selected_period(
+    qtbot, paged_context, seeded_conn, bulk_history, monkeypatch, tmp_path: Path
+) -> None:
+    item = _create_item(paged_context)
+    bulk_history(seeded_conn, item.id, 5, datetime(2024, 6, 1, tzinfo=UTC))
+    bulk_history(seeded_conn, item.id, 650)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    dialog = HistoryDialog(paged_context, item.id)
+    qtbot.addWidget(dialog)
+    destination = tmp_path / "period.csv"
+    _patch_save_dialog(monkeypatch, destination)
+
+    _select_period_kind(dialog, HistoryPeriodKind.ANNUAL)
+    assert dialog.model.rowCount() == 300
+    dialog.export_button.click()
+    assert len(_read_csv(destination)) - 1 == 650
+
+    dialog.period_selector.year_combo.setCurrentIndex(
+        dialog.period_selector.year_combo.findData(2024)
+    )
+    dialog.export_button.click()
+    assert len(_read_csv(destination)) - 1 == 5
+
+    _select_period_kind(dialog, HistoryPeriodKind.ALL)
+    dialog.export_button.click()
+    assert len(_read_csv(destination)) - 1 == 655

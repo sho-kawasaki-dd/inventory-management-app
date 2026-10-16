@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,7 +19,7 @@ from inventory_manager_mini.core.services import (
     MasterService,
     SettingsService,
 )
-from inventory_manager_mini.db.connection import connect_memory
+from inventory_manager_mini.db.connection import connect_memory, transaction
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from inventory_manager_mini.ui import display_settings
 from inventory_manager_mini.ui.context import AppContext
@@ -184,3 +184,33 @@ def master(seeded_conn: sqlite3.Connection) -> MasterService:
 @pytest.fixture
 def settings(seeded_conn: sqlite3.Connection) -> SettingsService:
     return SettingsService(seeded_conn)
+
+
+@pytest.fixture
+def bulk_history() -> Callable[..., list[int]]:
+    """入庫履歴を直接投入する(items.quantity・集計は更新しない)。表示・絞り込み検証用。"""
+
+    def insert(
+        conn: sqlite3.Connection,
+        item_id: int,
+        count: int,
+        start: datetime = datetime(2025, 6, 1, tzinfo=UTC),
+    ) -> list[int]:
+        moved_ats = [
+            (start + timedelta(seconds=index)).strftime("%Y-%m-%d %H:%M:%S")
+            for index in range(count)
+        ]
+        with transaction(conn):
+            conn.executemany(
+                "INSERT INTO stock_movements (item_id, client_id, purchaser_id, staff_id, "
+                "reason, delta, unit_price, moved_at) "
+                "SELECT id, client_id, purchaser_id, 1, 'in', 1, 1, ? FROM items WHERE id = ?",
+                [(moved_at, item_id) for moved_at in moved_ats],
+            )
+        rows = conn.execute(
+            "SELECT id FROM stock_movements WHERE item_id = ? ORDER BY id DESC LIMIT ?",
+            (item_id, count),
+        ).fetchall()
+        return [row[0] for row in reversed(rows)]
+
+    return insert
