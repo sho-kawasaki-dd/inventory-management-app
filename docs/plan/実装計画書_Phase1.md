@@ -1,7 +1,7 @@
 # Phase 1 実装計画書(スキーマ・リポジトリ・サービス層)
 
 - 作成日: 2026-10-02
-- ステータス: 実装済
+- ステータス: 実装完了(初期 MVP 開発記録・凍結)
 - 作業ブランチ: `feature/phase1-db-foundation`(1a)→ `feature/phase1-services`(1b)→ `feature/phase1-reports-backup`(1c)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(3・4・5・7.2・7.4・8・9 章)
 
@@ -397,7 +397,7 @@
 | 新規 | `src/inventory_manager_mini/db/{connection,migrations,repositories,backup}.py`、`src/inventory_manager_mini/db/schema.sql` |
 | 新規 | `scripts/generate_dummy_data.py` |
 | 新規 | `tests/test_{timeutil,connection,backup,schema_constraints,migrations,repositories,inventory_service,master_service,settings_service,reports,csv,dummy_data}.py` |
-| 更新 | `tests/conftest.py`、`pyproject.toml`、`.github/workflows/ci.yml`、`README.md`、`docs/ローカル在庫管理アプリ開発計画書.md`(3.3) |
+| 更新 | `tests/conftest.py`、`pyproject.toml`、`.github/workflows/ci.yml`、`README.md`、`docs/plan/ローカル在庫管理アプリ開発計画書.md`(3.3) |
 
 ## 5. 完了条件
 

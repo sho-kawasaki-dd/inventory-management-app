@@ -1,7 +1,7 @@
 # Phase 7 実装計画書(印刷)
 
 - 作成日: 2026-10-12
-- ステータス: 実装完了
+- ステータス: 実装完了(初期 MVP 開発記録・凍結)
 - 作業ブランチ: `feature/phase7-labels`(7a)→ `feature/phase7-inventory-sheet`(7b)
 - 基盤とする文書: [ローカル在庫管理アプリ開発計画書](ローカル在庫管理アプリ開発計画書.md)(2.4・3.2・3.6・5.1・5.9・6.2・6.3・6.4・8・9.1・10・11 章)、[実装計画書_Phase5](実装計画書_Phase5.md)、[実装計画書_Phase6](実装計画書_Phase6.md)
 - 改訂履歴: 2026-10-12 初版。一覧の複数選択化、ラベルの並び順(一覧の表示順)、`LabelSpec`・面付け純関数の配置(`ui/printing/layout.py`)、印字位置の補正値(`ui_settings.json`)、在庫表の列と行順、導線、PR 分割(2 PR)を決定
@@ -103,7 +103,7 @@
 
 #### A. 計画書・正本
 
-- [x] 本書(`docs/実装計画書_Phase7.md`)をコミットする(`docs:`)
+- [x] 本書(`docs/plan/実装計画書_Phase7.md`)をコミットする(`docs:`)
 - [x] 7a で変更する仕様を、実装前に開発計画書へ反映し、同じ PR に含める
   - [x] 3.2: `ui/printing/` のモジュール構成(`layout.py`・`fonts.py`・`preview_dialog.py`・`label_renderer.py`・`label_print_dialog.py`・`inventory_sheet_renderer.py`)を追加する。`preview_dialog.py` は 7a で実装して共用し、`inventory_sheet_renderer.py` は 7b と明記する
   - [x] 3.6: ディレクトリ構成の `printing/` 欄を同期する
