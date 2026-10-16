@@ -26,6 +26,9 @@ MAX_UNIT_PRICE = 10_000_000
 MAX_MOVEMENT_AMOUNT = 100_000_000
 MAX_AGGREGATE_VALUE = 1_000_000_000_000
 
+HISTORY_PAGE_SIZES: tuple[int, int] = (300, 500)
+DEFAULT_HISTORY_PAGE_SIZE: int = 300
+
 
 @dataclass(frozen=True, slots=True)
 class Client:
@@ -244,3 +247,25 @@ class DashboardRow:
 class DashboardResult:
     totals: tuple[DashboardRow, ...]
     breakdown: tuple[DashboardRow, ...]
+
+
+class HistoryPeriodKind(StrEnum):
+    ALL = "all"
+    ANNUAL = "annual"
+    MONTHLY = "monthly"
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryPeriod:
+    kind: HistoryPeriodKind = HistoryPeriodKind.ALL
+    fiscal_year: int | None = None
+    month: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryPage:
+    rows: tuple[MovementRow, ...]
+    total_count: int
+    page: int
+    page_size: int
+    total_pages: int
