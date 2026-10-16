@@ -248,7 +248,7 @@ uv run pytest --run-perf tests/test_performance.py
 ```text
 .
 ├── .github/workflows/ci.yml
-├── docs/
+├── docs/plan/
 ├── src/inventory_manager_mini/
 │   ├── core/
 │   ├── db/
@@ -260,5 +260,5 @@ uv run pytest --run-perf tests/test_performance.py
 
 - `main` は常にテスト成功状態を保ち、`feature/<フェーズ>-<内容>` ブランチで作業して PR でマージします。
 - コミットメッセージは Conventional Commits に従います (例: `feat:`、`fix:`、`test:`、`docs:`)。
-- 層の依存方向やデータベース運用などの設計・業務ルールは[開発計画書](docs/ローカル在庫管理アプリ開発計画書.md)を参照してください。
-- Phase 0 の作業項目は[Phase 0 実装計画書](docs/実装計画書_Phase0.md)を参照してください。
+- 層の依存方向やデータベース運用などの設計・業務ルールは[開発計画書](docs/plan/ローカル在庫管理アプリ開発計画書.md)を参照してください。
+- Phase 0 の作業項目は[Phase 0 実装計画書](docs/plan/実装計画書_Phase0.md)を参照してください。
