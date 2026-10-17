@@ -13,6 +13,7 @@ from inventory_manager_mini.core.errors import (
 from inventory_manager_mini.core.models import (
     MAX_AGGREGATE_VALUE,
     MAX_STOCK_QUANTITY,
+    ActiveStocktake,
     Allocation,
     Category,
     Client,
@@ -989,6 +990,74 @@ class MasterRepository:
     def _exists(self, sql: str, parameters: Sequence[object]) -> bool:
         row = self.conn.execute(sql, parameters).fetchone()
         return bool(row[0])
+
+
+class StocktakeRepository:
+    _SELECT = """SELECT s.client_id, c.name AS client_name, s.session_id, s.staff_id,
+        st.name AS staff_name, s.started_at,
+        (SELECT COUNT(*) FROM items AS i
+            WHERE i.client_id = s.client_id AND i.is_active = 1) AS item_count
+        FROM active_stocktakes AS s
+        JOIN clients AS c ON c.id = s.client_id
+        JOIN staff AS st ON st.id = s.staff_id"""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.conn.row_factory = sqlite3.Row
+
+    def get(self, client_id: int) -> ActiveStocktake | None:
+        return self._get("WHERE s.client_id = ?", (client_id,))
+
+    def get_by_session(self, session_id: str) -> ActiveStocktake | None:
+        return self._get("WHERE s.session_id = ?", (session_id,))
+
+    def list_all(self) -> list[ActiveStocktake]:
+        rows = self.conn.execute(f"{self._SELECT} ORDER BY s.started_at, s.client_id").fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def is_client_locked(self, client_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM active_stocktakes WHERE client_id = ?)",
+            (client_id,),
+        ).fetchone()
+        return bool(row[0])
+
+    def is_staff_referenced(self, staff_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM active_stocktakes WHERE staff_id = ?)", (staff_id,)
+        ).fetchone()
+        return bool(row[0])
+
+    def upsert(self, *, client_id: int, session_id: str, staff_id: int, started_at: str) -> None:
+        self.conn.execute(
+            """INSERT INTO active_stocktakes (client_id, session_id, staff_id, started_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(client_id) DO UPDATE SET session_id = excluded.session_id,
+                staff_id = excluded.staff_id, started_at = excluded.started_at""",
+            (client_id, session_id, staff_id, started_at),
+        )
+
+    def delete(self, client_id: int) -> bool:
+        cursor = self.conn.execute(
+            "DELETE FROM active_stocktakes WHERE client_id = ?", (client_id,)
+        )
+        return cursor.rowcount > 0
+
+    def _get(self, condition: str, parameters: tuple[object, ...]) -> ActiveStocktake | None:
+        row = self.conn.execute(f"{self._SELECT} {condition}", parameters).fetchone()
+        return None if row is None else self._from_row(row)
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> ActiveStocktake:
+        return ActiveStocktake(
+            client_id=int(row["client_id"]),
+            client_name=str(row["client_name"]),
+            session_id=str(row["session_id"]),
+            staff_id=int(row["staff_id"]),
+            staff_name=str(row["staff_name"]),
+            started_at=str(row["started_at"]),
+            item_count=int(row["item_count"]),
+        )
 
 
 class SettingsRepository:
