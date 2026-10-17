@@ -207,6 +207,83 @@ def test_simple_master_disables_delete_for_in_use_record(qtbot, dialog_context) 
     assert tab.delete_button.toolTip() == "使用中のため削除できません。無効化してください"
 
 
+def _select_master(tab, entity_id: int) -> None:
+    tab.list_widget.setCurrentItem(
+        next(
+            tab.list_widget.item(index)
+            for index in range(tab.list_widget.count())
+            if tab.list_widget.item(index).data(Qt.ItemDataRole.UserRole) == entity_id
+        )
+    )
+
+
+def test_stocktake_client_disables_deactivate_and_delete_with_reason(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="棚卸対象", category_id=1)
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = MasterDialog(dialog_context, MasterTab.CLIENT)
+    qtbot.addWidget(dialog)
+    tab = dialog.simple_tabs[MasterTab.CLIENT]
+    assert tab.deactivate_button is not None
+
+    _select_master(tab, 1)
+
+    reason = dialog_context.master.stocktake_lock_reason("client", 1)
+    assert reason
+    assert not tab.deactivate_button.isEnabled()
+    assert not tab.delete_button.isEnabled()
+    assert tab.deactivate_button.toolTip() == reason
+    assert tab.delete_button.toolTip() == reason
+    assert tab.rename_button.isEnabled()
+    assert "使用中のため削除できません" not in tab.delete_button.toolTip()
+
+    _select_master(tab, 2)
+
+    assert tab.deactivate_button.isEnabled()
+    assert tab.delete_button.isEnabled()
+    assert tab.deactivate_button.toolTip() == ""
+    assert tab.delete_button.toolTip() == ""
+
+    dialog_context.inventory.cancel_mobile_stocktake(1)
+    _select_master(tab, 2)
+    _select_master(tab, 1)
+
+    assert tab.deactivate_button.isEnabled()
+    assert not tab.delete_button.isEnabled()
+    assert tab.delete_button.toolTip() == "使用中のため削除できません。無効化してください"
+
+
+def test_sheet_creator_staff_cannot_be_deleted_but_can_be_deactivated(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="棚卸対象", category_id=1)
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = MasterDialog(dialog_context, MasterTab.STAFF)
+    qtbot.addWidget(dialog)
+    tab = dialog.simple_tabs[MasterTab.STAFF]
+    assert tab.deactivate_button is not None
+
+    _select_master(tab, 1)
+
+    reason = dialog_context.master.stocktake_lock_reason("staff", 1)
+    assert reason
+    assert not tab.delete_button.isEnabled()
+    assert tab.delete_button.toolTip() == reason
+    assert tab.deactivate_button.isEnabled()
+    assert tab.deactivate_button.toolTip() == ""
+    assert tab.rename_button.isEnabled()
+
+    _select_master(tab, 2)
+
+    assert tab.delete_button.isEnabled()
+    assert tab.delete_button.toolTip() == ""
+
+
 def test_category_controls_create_move_cycle_prefix_and_delete(
     qtbot, dialog_context, monkeypatch
 ) -> None:

@@ -586,6 +586,50 @@ def test_apply_restore_replaces_database_and_keeps_pre_restore_backup(tmp_path: 
     assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
 
 
+def test_backup_and_restore_keep_active_stocktakes_of_source(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "復元品目")
+    source = connect(source_path)
+    try:
+        source.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "b" * 32, 1),
+        )
+        backup_path = BackupService().create_backup(source, tmp_path / "backups")
+    finally:
+        source.close()
+    service = BackupService(clock=lambda: datetime(2026, 10, 3, 3, 4, 5, tzinfo=UTC), tz=UTC)
+
+    with service.prepare_restore(backup_path) as prepared:
+        assert prepared.stocktake_client_names == ("クライアント",)
+        service.apply_restore(prepared, current_path, tmp_path / "pre-restore")
+
+    restored = connect_readonly(current_path)
+    try:
+        rows = restored.execute("SELECT client_id, session_id FROM active_stocktakes").fetchall()
+        assert rows == [(1, "b" * 32)]
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("schema_version", [1, 2, 3, 4])
+def test_prepare_restore_from_older_version_has_no_stocktake_clients(
+    tmp_path: Path, schema_version: int
+) -> None:
+    source_path = tmp_path / f"source-v{schema_version}.db"
+    _create_inventory_database(source_path, "旧版品目", schema_version=schema_version)
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        assert prepared.stocktake_client_names == ()
+        restored = connect_readonly(prepared.path)
+        try:
+            assert restored.execute("SELECT COUNT(*) FROM active_stocktakes").fetchone() == (0,)
+        finally:
+            restored.close()
+
+
 def test_apply_restore_refuses_existing_pre_restore_backup_without_changing_current(
     tmp_path: Path,
 ) -> None:

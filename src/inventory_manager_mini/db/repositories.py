@@ -684,12 +684,13 @@ class AllocationRepository:
         self.conn.row_factory = sqlite3.Row
 
     def list_available_lots(self, item_id: int) -> list[Lot]:
+        # `+lot.reversal_of` は reversal_of の索引による全件走査を避け item_id の索引を使わせる
         rows = self.conn.execute(
             """SELECT lot.id, lot.moved_at, lot.delta - COALESCE(SUM(a.quantity), 0)
                     AS remaining_quantity, lot.unit_price, lot.purchaser_id
             FROM stock_movements AS lot
             LEFT JOIN stock_allocations AS a ON a.lot_id = lot.id
-            WHERE lot.item_id = ? AND lot.reversal_of IS NULL AND lot.delta > 0
+            WHERE lot.item_id = ? AND +lot.reversal_of IS NULL AND lot.delta > 0
                 AND lot.reason IN ('in', 'adjust')
                 AND NOT EXISTS (
                     SELECT 1 FROM stock_movements AS r WHERE r.reversal_of = lot.id

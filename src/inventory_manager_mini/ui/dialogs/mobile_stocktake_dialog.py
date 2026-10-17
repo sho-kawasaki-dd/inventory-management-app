@@ -328,7 +328,7 @@ class MobileStocktakeDialog(QDialog):
         answer = QMessageBox.question(
             self,
             "棚卸の中止",
-            f"{stocktake.client_name}の棚卸を中止します。持ち出したシートの結果は "
+            f"{stocktake.client_name}の棚卸を中止します。持ち出したシートの結果は"
             "取り込めなくなります。よろしいですか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,

@@ -357,6 +357,123 @@ def test_multiple_selection_disables_single_item_actions_and_survives_refresh(
     assert window._selected_item_ids() == [first.id]
 
 
+def _add_item_for_client(window: MainWindow, client_id: int, name: str):
+    return window.context.inventory.create_item(
+        NewItem(
+            client_id=client_id,
+            purchaser_id=1,
+            name=name,
+            category_id=2,
+            initial_quantity=1,
+            initial_staff_id=1,
+        )
+    )
+
+
+def test_stocktake_banner_is_hidden_without_active_stocktake(window_with_items) -> None:
+    window, _first, _second = window_with_items
+    window.show()
+
+    assert window.mobile_stocktake_action.isEnabled()
+    assert not window.stocktake_banner_widget.isVisible()
+
+
+def test_stocktake_banner_shows_single_client_details(window_with_items, tmp_path: Path) -> None:
+    window, _first, _second = window_with_items
+    window.show()
+
+    window.context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    window.context.data_bus.data_changed.emit()
+
+    text = window.stocktake_banner_label.text()
+    assert window.stocktake_banner_widget.isVisible()
+    assert window.stocktake_banner_label.wordWrap()
+    assert "スマホ棚卸手続き中: 総務" in text
+    assert "担当: 担当A" in text
+    assert "開始: " in text
+    assert "ほか" not in text
+
+    window.context.inventory.cancel_mobile_stocktake(1)
+    window.context.data_bus.data_changed.emit()
+
+    assert not window.stocktake_banner_widget.isVisible()
+
+
+def test_stocktake_banner_summarizes_multiple_clients(window_with_items, tmp_path: Path) -> None:
+    window, _first, _second = window_with_items
+    window.show()
+    window.context.master.add_client("開発")
+    _add_item_for_client(window, 2, "経理品目")
+    _add_item_for_client(window, 4, "開発品目")
+
+    for number, client_id in enumerate((1, 2, 4)):
+        window.context.inventory.export_mobile_stocktake_html(
+            tmp_path / f"sheet{number}.html", client_id, 1
+        )
+    window.context.data_bus.data_changed.emit()
+
+    text = window.stocktake_banner_label.text()
+    assert "総務(" in text
+    assert "経理(" in text
+    assert "開発" not in text
+    assert text.endswith("ほか 1 件")
+    assert "担当:" not in text
+
+
+def test_stocktake_banner_button_and_action_open_dialog(
+    window_with_items, monkeypatch, tmp_path: Path
+) -> None:
+    window, _first, _second = window_with_items
+    window.show()
+    window.context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    window.context.data_bus.data_changed.emit()
+    opened: list[object] = []
+    monkeypatch.setattr(
+        "inventory_manager_mini.ui.dialogs.mobile_stocktake_dialog.MobileStocktakeDialog.exec",
+        lambda dialog: opened.append(dialog) or QDialog.DialogCode.Rejected,
+    )
+
+    window.stocktake_banner_button.click()
+    window.mobile_stocktake_action.trigger()
+
+    assert len(opened) == 2
+
+
+def test_locked_client_item_disables_actions_and_restores_tooltips(
+    window_with_items, tmp_path: Path
+) -> None:
+    window, first, _second = window_with_items
+    other = _add_item_for_client(window, 2, "経理品目")
+    window.context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    window.context.data_bus.data_changed.emit()
+    reason = "このクライアントはスマホ棚卸手続き中のため操作できません"
+    guarded = [window.edit_action, window.toggle_active_action, *window.stock_actions.values()]
+
+    _select_item(window, first.id)
+
+    assert all(not action.isEnabled() for action in guarded)
+    assert all(action.toolTip() == reason for action in guarded)
+    assert window.history_action.isEnabled()
+
+    _select_item(window, other.id)
+
+    assert all(action.isEnabled() for action in guarded)
+    assert all(action.toolTip() != reason for action in guarded)
+
+    _select_item(window, first.id)
+    window.table.selectionModel().clearSelection()
+
+    assert all(not action.isEnabled() for action in guarded)
+    assert all(action.toolTip() != reason for action in guarded)
+
+    window.context.inventory.cancel_mobile_stocktake(1)
+    window.context.data_bus.data_changed.emit()
+    _select_item(window, first.id)
+
+    assert all(action.isEnabled() for action in guarded)
+    assert all(action.toolTip() != reason for action in guarded)
+
+
 def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_items) -> None:
     window, first, second = window_with_items
     item_actions = [window.new_action, window.edit_action, window.toggle_active_action]
@@ -1766,6 +1883,74 @@ def test_restore_declined_keeps_database_and_cleans_temporary_files(
     assert window.exit_request is ExitRequest.NORMAL
     assert not (tmp_path / "backups").exists()
     assert not prepared_list[0].path.parent.exists()
+
+
+def test_restore_confirmation_shows_current_and_source_stocktake_clients(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    window = backup_window
+    window.context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    conn = connect(source)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
+            ("c" * 32,),
+        )
+    finally:
+        conn.close()
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
+
+    window.restore_action.trigger()
+
+    text, default = record["questions"][0]
+    assert default == QMessageBox.StandardButton.No
+    assert "現在の棚卸手続き中クライアント: クライアント" in text
+    assert "復元元の棚卸手続き中クライアント: クライアント" in text
+    assert "持ち出し中のシートの結果は取り込めなくなる場合があります" in text
+
+
+@pytest.mark.parametrize("current_locked", [True, False])
+def test_restore_confirmation_shows_none_for_the_side_without_stocktake(
+    backup_window, monkeypatch, tmp_path: Path, current_locked: bool
+) -> None:
+    window = backup_window
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    if current_locked:
+        window.context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    else:
+        conn = connect(source)
+        try:
+            conn.execute(
+                "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
+                ("d" * 32,),
+            )
+        finally:
+            conn.close()
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
+
+    window.restore_action.trigger()
+
+    text = record["questions"][0][0]
+    current_line = "現在の棚卸手続き中クライアント: " + (
+        "クライアント" if current_locked else "なし"
+    )
+    source_line = "復元元の棚卸手続き中クライアント: " + (
+        "なし" if current_locked else "クライアント"
+    )
+    assert current_line in text
+    assert source_line in text
+
+
+def test_restore_confirmation_omits_stocktake_notice_without_stocktakes(
+    backup_window, monkeypatch, tmp_path: Path
+) -> None:
+    source = _make_restore_source(tmp_path / "source.db", "復元元の品目")
+    record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
+
+    backup_window.restore_action.trigger()
+
+    assert "棚卸手続き" not in record["questions"][0][0]
 
 
 def test_restore_cancel_in_file_dialog_does_nothing(

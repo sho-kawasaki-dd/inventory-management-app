@@ -792,7 +792,7 @@ class MainWindow(QMainWindow):
             stocktake_warning = (
                 f"現在の棚卸手続き中クライアント: {current_names}\n"
                 f"復元元の棚卸手続き中クライアント: {restored_names}\n"
-                "復元すると棚卸手続きの状態が置き換わり、持ち出し中のシートの結果は "
+                "復元すると棚卸手続きの状態が置き換わり、持ち出し中のシートの結果は"
                 "取り込めなくなる場合があります。\n\n"
             )
         message = (

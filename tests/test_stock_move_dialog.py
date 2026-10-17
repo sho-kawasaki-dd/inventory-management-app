@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
@@ -129,6 +131,81 @@ def test_stocktake_defaults_to_current_quantity_and_shows_signed_delta(
     assert _ok_button(dialog).isEnabled()
     dialog._save()
     assert dialog_context.inventory.list_history(item.id)[-1].delta == -5
+
+
+_LOCK_MESSAGE = "このクライアントはスマホ棚卸手続き中のため在庫操作できません"
+
+
+@pytest.mark.parametrize("reason", list(Reason))
+def test_locked_client_item_disables_ok_for_every_operation(
+    qtbot, dialog_context, tmp_path: Path, reason: Reason
+) -> None:
+    item = _create_item(dialog_context, quantity=5)
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = StockMoveDialog(dialog_context, reason, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog.used_for_edit.setText("設備A")
+    dialog.unit_price_edit.setText("100")
+
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    dialog.quantity_spin.setValue(2)
+    dialog.staff_combo.setCurrentIndex(2)
+
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+    dialog._save()
+    assert dialog_context.inventory.get_item(item.id).quantity == 5
+
+
+def test_item_selection_switches_lock_message_by_client(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    locked = _create_item(dialog_context, quantity=5)
+    other = dialog_context.inventory.create_item(
+        NewItem(
+            client_id=2,
+            purchaser_id=1,
+            name="別クライアント品目",
+            category_id=1,
+            initial_quantity=5,
+            initial_staff_id=1,
+        )
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = StockMoveDialog(dialog_context, Reason.IN)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+
+    dialog._select_item_by_id(locked.id)
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    dialog._select_item_by_id(other.id)
+    assert _LOCK_MESSAGE not in dialog.error_label.text()
+    assert _ok_button(dialog).isEnabled()
+
+
+def test_stale_lock_is_rejected_by_service_when_saving(
+    qtbot, dialog_context, tmp_path: Path, monkeypatch
+) -> None:
+    item = _create_item(dialog_context, quantity=5)
+    dialog = StockMoveDialog(dialog_context, Reason.IN, item.id)
+    qtbot.addWidget(dialog)
+    dialog.staff_combo.setCurrentIndex(1)
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    warnings: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _p, _t, text: warnings.append(text))
+
+    assert _ok_button(dialog).isEnabled()
+    dialog._save()
+
+    assert len(warnings) == 1
+    assert "スマホ棚卸手続き中" in warnings[0]
+    assert dialog_context.inventory.get_item(item.id).quantity == 5
+    assert dialog.result() != dialog.DialogCode.Accepted
 
 
 def test_reason_switch_updates_visible_fields(qtbot, dialog_context) -> None:

@@ -19,16 +19,20 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPaintEvent
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
+from inventory_manager_mini.core.mobile_stocktake import encode_stocktake_payload
 from inventory_manager_mini.core.models import (
     GroupAxis,
     HistoryPeriod,
     HistoryPeriodKind,
     ItemFilter,
+    MobileStocktakeEntry,
+    MobileStocktakePayload,
+    NewItem,
     PeriodKind,
     Reason,
 )
 from inventory_manager_mini.core.reports import ReportService, fiscal_year_of
-from inventory_manager_mini.core.services import BackupService, InventoryService
+from inventory_manager_mini.core.services import BackupService, InventoryService, MasterService
 from inventory_manager_mini.core.timeutil import (
     local_date,
     local_timestamp_for_filename,
@@ -361,6 +365,66 @@ def test_service_outflow_save_with_many_lots(performance_db: Path, tmp_path: Pat
         assert allocation_count == 1000
         print(f"1 品目・1,000 ロットの出庫保存: {elapsed:.3f} 秒")
         assert elapsed <= 0.5
+    finally:
+        conn.close()
+
+
+def test_mobile_stocktake_export_preview_and_completion_with_five_hundred_items(
+    performance_db: Path, tmp_path: Path
+) -> None:
+    db_path = _copy_performance_database(performance_db, tmp_path / "mobile" / "inventory.db")
+    conn = connect(db_path)
+    try:
+        inventory = InventoryService(conn)
+        client = MasterService(conn).add_client("スマホ棚卸性能計測")
+        purchaser_id = conn.execute("SELECT id FROM purchasers WHERE is_active = 1").fetchone()[0]
+        category_id = conn.execute("SELECT id FROM categories ORDER BY id").fetchone()[0]
+        staff_id = conn.execute("SELECT id FROM staff WHERE is_active = 1").fetchone()[0]
+        items = [
+            inventory.create_item(
+                NewItem(
+                    client_id=client.id,
+                    purchaser_id=purchaser_id,
+                    name=f"棚卸性能品目{number:04d}",
+                    category_id=category_id,
+                    initial_quantity=5,
+                    initial_staff_id=staff_id,
+                    reference_price=100,
+                )
+            )
+            for number in range(500)
+        ]
+
+        started_at = time.perf_counter()
+        sheet = inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", client.id, staff_id)
+        export_elapsed = time.perf_counter() - started_at
+        result = encode_stocktake_payload(
+            MobileStocktakePayload(
+                sheet.session_id,
+                sheet.client_id,
+                tuple(
+                    MobileStocktakeEntry(item.id, 5 + index % 3 - 1, "性能計測")
+                    for index, item in enumerate(items)
+                ),
+            )
+        )
+        started_at = time.perf_counter()
+        preview = inventory.preview_mobile_stocktake(result)
+        preview_elapsed = time.perf_counter() - started_at
+        started_at = time.perf_counter()
+        movements = inventory.complete_mobile_stocktake(result, staff_id)
+        complete_elapsed = time.perf_counter() - started_at
+
+        print(
+            "有効品目 500 件のスマホ棚卸: "
+            f"シート出力 {export_elapsed:.3f} 秒 / プレビュー {preview_elapsed:.3f} 秒 / "
+            f"一括確定 {complete_elapsed:.3f} 秒"
+        )
+        assert len(preview.rows) == len(movements) == 500
+        assert export_elapsed <= 2.0
+        assert preview_elapsed <= 2.0
+        assert complete_elapsed <= 2.0
+        assert inventory.get_active_stocktake(client.id) is None
     finally:
         conn.close()
 

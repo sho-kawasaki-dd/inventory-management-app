@@ -7,7 +7,13 @@ import pytest
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox, QPushButton
 
-from inventory_manager_mini.core.models import Category, NewItem
+from inventory_manager_mini.core.mobile_stocktake import encode_stocktake_payload
+from inventory_manager_mini.core.models import (
+    Category,
+    MobileStocktakeEntry,
+    MobileStocktakePayload,
+    NewItem,
+)
 from inventory_manager_mini.core.services import PreparedRestore
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION
 from inventory_manager_mini.ui.context import AppContext
@@ -132,11 +138,26 @@ def test_master_dialog_all_tabs_fit_together(
 
 @pytest.mark.parametrize("scale", SCALES)
 def test_mobile_stocktake_dialog_tabs_fit_work_area(
-    qtbot, dialog_context: AppContext, restore_app_font: QFont, scale: int
+    qtbot, dialog_context: AppContext, restore_app_font: QFont, tmp_path: Path, scale: int
 ) -> None:
+    items = [_create_item(dialog_context) for _ in range(12)]
+    sheet = dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    result = encode_stocktake_payload(
+        MobileStocktakePayload(
+            sheet.session_id,
+            sheet.client_id,
+            tuple(
+                MobileStocktakeEntry(item.id, 1 + index % 3, "長いメモ" * 20)
+                for index, item in enumerate(items)
+            ),
+        )
+    )
     apply_display_settings(DisplaySettings(None, scale))
     dialog = MobileStocktakeDialog(dialog_context)
     qtbot.addWidget(dialog)
+    dialog.result_edit.setPlainText(result)
+    dialog.preview_button.click()
+    assert dialog.preview_table.rowCount() == len(items)
     dialog.show()
     qtbot.waitExposed(dialog)
 
@@ -245,6 +266,7 @@ def test_category_picker_dialog_fits_work_area(qtbot, restore_app_font: QFont, s
 
 
 @pytest.mark.parametrize("scale", SCALES)
+@pytest.mark.parametrize("with_stocktakes", [False, True])
 def test_restore_confirmation_fits_work_area(
     qtbot,
     dialog_context: AppContext,
@@ -252,13 +274,24 @@ def test_restore_confirmation_fits_work_area(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     scale: int,
+    with_stocktakes: bool,
 ) -> None:
+    if with_stocktakes:
+        _create_item(dialog_context)
+        dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
     apply_display_settings(DisplaySettings(None, scale))
     window = MainWindow(dialog_context)
     qtbot.addWidget(window)
     source = tmp_path / ("長いフォルダ名" * 10) / "inventory_20261011_120000.db"
+    restored_names = tuple(f"復元元の長いクライアント名{number}" * 2 for number in range(3))
     prepared = PreparedRestore(
-        source, 3, 5000, 100000, "2026-10-11 03:00:00", tempfile.TemporaryDirectory()
+        source,
+        3,
+        5000,
+        100000,
+        "2026-10-11 03:00:00",
+        tempfile.TemporaryDirectory(),
+        restored_names if with_stocktakes else (),
     )
     checked: list[str] = []
 
@@ -285,3 +318,5 @@ def test_restore_confirmation_fits_work_area(
         prepared.close()
 
     assert checked
+    assert ("復元元の長いクライアント名0" in checked[0]) is with_stocktakes
+    assert ("現在の棚卸手続き中クライアント: 総務" in checked[0]) is with_stocktakes
