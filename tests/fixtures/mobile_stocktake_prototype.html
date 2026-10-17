@@ -46,6 +46,18 @@
       }
     }
 
+    function updateConfirmButton(item, button) {
+      const actual = state[item.id].actual;
+      button.textContent = state[item.id].confirmed ? "確認済み" : "この実数で確認";
+      button.disabled = !/^\d+$/.test(actual) || Number(actual) > 1000000;
+    }
+
+    function updateResultButtons() {
+      const complete = items.every(item => state[item.id].confirmed);
+      document.querySelector("#show-result").disabled = !complete;
+      document.querySelector("#save-result").disabled = !complete;
+    }
+
     function render() {
       const root = document.querySelector("#items");
       root.replaceChildren();
@@ -64,7 +76,8 @@
         quantity.addEventListener("input", () => {
           state[item.id] = { ...state[item.id], actual: quantity.value, confirmed: false };
           saveState();
-          render();
+          updateConfirmButton(item, confirm);
+          updateResultButtons();
         });
         const note = document.createElement("input");
         note.type = "text";
@@ -73,23 +86,21 @@
         note.addEventListener("input", () => {
           state[item.id] = { ...state[item.id], note: note.value, confirmed: false };
           saveState();
-          render();
+          updateConfirmButton(item, confirm);
+          updateResultButtons();
         });
         const confirm = document.createElement("button");
-        confirm.textContent = state[item.id].confirmed ? "確認済み" : "この実数で確認";
-        confirm.disabled = !/^\d+$/.test(state[item.id].actual)
-          || Number(state[item.id].actual) > 1000000;
         confirm.addEventListener("click", () => {
           state[item.id].confirmed = true;
           saveState();
-          render();
+          updateConfirmButton(item, confirm);
+          updateResultButtons();
         });
+        updateConfirmButton(item, confirm);
         card.append(title, quantity, note, confirm);
         root.append(card);
       }
-      const complete = items.every(item => state[item.id].confirmed);
-      document.querySelector("#show-result").disabled = !complete;
-      document.querySelector("#save-result").disabled = !complete;
+      updateResultButtons();
     }
 
     function crc32(value) {
