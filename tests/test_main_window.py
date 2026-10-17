@@ -17,6 +17,7 @@ from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QMessageBox,
     QToolBar,
@@ -41,6 +42,7 @@ from inventory_manager_mini.ui import main_window as main_window_module
 from inventory_manager_mini.ui.csv_export import _choose_export_path
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
+from inventory_manager_mini.ui.dialogs.restore_confirmation_dialog import RestoreConfirmationDialog
 from inventory_manager_mini.ui.dialogs.stock_move_dialog import StockMoveDialog
 from inventory_manager_mini.ui.display_settings import DisplaySettings
 from inventory_manager_mini.ui.main_window import ExitRequest, MainWindow
@@ -1810,11 +1812,19 @@ def _patch_restore_dialogs(
         lambda *_args, **_kwargs: (str(source) if source is not None else "", ""),
     )
 
-    def question(_parent, _title, text, _buttons, default):
-        record["questions"].append((text, default))
-        return answer
+    def question(dialog: RestoreConfirmationDialog):
+        no_button = dialog.button_box.button(QDialogButtonBox.StandardButton.No)
+        assert no_button.isDefault()
+        record["questions"].append(
+            (dialog.message_edit.toPlainText(), QMessageBox.StandardButton.No)
+        )
+        return (
+            QDialog.DialogCode.Accepted
+            if answer == QMessageBox.StandardButton.Yes
+            else QDialog.DialogCode.Rejected
+        )
 
-    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(RestoreConfirmationDialog, "exec", question)
     for kind in ("information", "warning", "critical"):
         monkeypatch.setattr(
             QMessageBox,

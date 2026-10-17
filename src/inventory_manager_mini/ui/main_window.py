@@ -36,6 +36,7 @@ from inventory_manager_mini.core.timeutil import format_local, utc_now_str
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.csv_export import export_csv_with_dialog
 from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
+from inventory_manager_mini.ui.dialogs.restore_confirmation_dialog import RestoreConfirmationDialog
 from inventory_manager_mini.ui.dialogs.settings_dialog import SettingsDialog
 from inventory_manager_mini.ui.display_settings import load_display_settings
 from inventory_manager_mini.ui.error_handling import run_guarded, show_unexpected_error
@@ -808,14 +809,8 @@ class MainWindow(QMainWindow):
             "完了後にアプリを再起動します。\n\n"
             "復元しますか？"
         )
-        answer = QMessageBox.question(
-            self,
-            "復元の確認",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return answer == QMessageBox.StandardButton.Yes
+        dialog = RestoreConfirmationDialog(message, self)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _apply_restore(self, prepared: PreparedRestore) -> None:
         self._shutdown_dashboard()
