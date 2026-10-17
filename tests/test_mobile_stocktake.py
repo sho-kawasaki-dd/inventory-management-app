@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import zlib
 
 import pytest
@@ -23,6 +24,7 @@ from inventory_manager_mini.core.models import (
     MobileStocktakePayload,
     MobileStocktakeSheet,
 )
+from inventory_manager_mini.core.timeutil import to_local
 
 VALID_SESSION_ID = "0123456789abcdef0123456789abcdef"
 SECOND_SESSION_ID = "fedcba9876543210fedcba9876543210"
@@ -357,6 +359,29 @@ def test_parse_rejects_missing_end_or_checksum_mismatch_or_bad_base64_or_json() 
             "client_id": 1,
             "entries": [{"item_id": 1, "actual_quantity": 1, "note": 123}],
         },
+        {
+            "session_id": VALID_SESSION_ID,
+            "client_id": 1,
+            "entries": [{"item_id": 1, "actual_quantity": 0}],
+        },
+        {
+            "v": 1,
+            "session_id": 123,
+            "client_id": 1,
+            "entries": [{"item_id": 1, "actual_quantity": 0}],
+        },
+        {
+            "v": 1,
+            "session_id": VALID_SESSION_ID,
+            "client_id": "1",
+            "entries": [{"item_id": 1, "actual_quantity": 0}],
+        },
+        {
+            "v": 1,
+            "session_id": VALID_SESSION_ID,
+            "client_id": 1,
+            "entries": [{"actual_quantity": 0}],
+        },
     ],
 )
 def test_parse_rejects_invalid_payload_fields(invalid_obj: object) -> None:
@@ -481,3 +506,83 @@ def test_render_stocktake_html_escapes_script_and_contains_required_elements() -
     )
     custom_html = render_stocktake_html(custom_sheet)
     assert "custom-time" in custom_html
+
+
+def test_parse_rejects_repeated_end_marker_and_end_before_prefix() -> None:
+    code = encode_stocktake_payload(_sample_payload())
+
+    with pytest.raises(ValidationError, match="途中で欠けているか改変されています"):
+        parse_stocktake_payload(f"{code}:END")
+    with pytest.raises(ValidationError, match="途中で欠けているか改変されています"):
+        parse_stocktake_payload(f"前文:END\n{code}")
+
+
+def test_parse_json_note_boundary_matches_python_strip_semantics() -> None:
+    def raw(note: str) -> str:
+        return json.dumps(
+            {
+                "v": 1,
+                "session_id": VALID_SESSION_ID,
+                "client_id": 1,
+                "entries": [{"item_id": 1, "actual_quantity": 0, "note": note}],
+            },
+            ensure_ascii=False,
+        )
+
+    body = "😀" * MAX_NOTE_LENGTH
+    parsed = parse_stocktake_payload(raw(f"\u3000 \x85\x1f{body}\t "))
+    assert parsed.entries[0].note == body
+
+    # U+FEFF は str.strip() の対象外のため本文として数える(スマホ側も同じ扱い)
+    with pytest.raises(ValidationError, match="500 文字以内"):
+        parse_stocktake_payload(raw(f"{body}\ufeff"))
+    assert parse_stocktake_payload(raw("\u3000\x85\x1f\t ")).entries[0].note is None
+
+
+def test_render_embeds_sheet_data_that_round_trips_through_json() -> None:
+    sheet = _sample_sheet()
+    rendered = render_stocktake_html(sheet)
+
+    match = re.search(r"const SHEET = (\{.*\});\n", rendered)
+    assert match is not None
+    embedded = json.loads(match.group(1))
+
+    assert embedded["session_id"] == sheet.session_id
+    assert embedded["client_id"] == sheet.client_id
+    assert embedded["client_name"] == sheet.client_name
+    assert embedded["staff_name"] == sheet.staff_name
+    assert embedded["max_quantity"] == MAX_STOCK_QUANTITY
+    assert embedded["max_note_length"] == MAX_NOTE_LENGTH
+    assert [item["item_id"] for item in embedded["items"]] == [101, 102]
+    assert embedded["items"][0]["name"] == sheet.items[0].name
+    assert embedded["items"][0]["location_name"] == "第1倉庫 <A棚>"
+    assert embedded["items"][1]["manufacturer_part_number"] is None
+    assert embedded["items"][1]["book_quantity"] == 12
+
+
+def test_render_shows_started_at_in_local_time_and_builds_filename_timestamp() -> None:
+    sheet = _sample_sheet()
+    embedded = json.loads(
+        re.search(r"const SHEET = (\{.*\});\n", render_stocktake_html(sheet)).group(1)  # type: ignore[union-attr]
+    )
+
+    local = to_local(sheet.started_at)
+    assert embedded["started_at"] == sheet.started_at
+    assert embedded["started_at_display"] == local.strftime("%Y-%m-%d %H:%M:%S")
+    assert embedded["filename_timestamp"] == local.strftime("%Y%m%d_%H%M%S")
+    assert re.fullmatch(r"\d{8}_\d{6}", embedded["filename_timestamp"])
+
+    fallback = MobileStocktakeSheet(
+        session_id=VALID_SESSION_ID,
+        client_id=1,
+        client_name="B社",
+        staff_id=1,
+        staff_name="佐藤",
+        started_at="custom-time",
+        items=sheet.items,
+    )
+    fallback_embedded = json.loads(
+        re.search(r"const SHEET = (\{.*\});\n", render_stocktake_html(fallback)).group(1)  # type: ignore[union-attr]
+    )
+    assert fallback_embedded["started_at_display"] == "custom-time"
+    assert fallback_embedded["filename_timestamp"] == "customtime"

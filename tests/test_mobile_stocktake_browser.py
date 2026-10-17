@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import zlib
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from inventory_manager_mini.core.models import (
     MobileStocktakePayload,
     MobileStocktakeSheet,
 )
+from inventory_manager_mini.core.timeutil import to_local
 
 PROTOTYPE_HTML = Path(__file__).parent / "fixtures" / "mobile_stocktake_prototype.html"
 SESSION_ID = "0123456789abcdef0123456789abcdef"
@@ -243,6 +245,11 @@ def test_generated_html_round_trip_with_special_chars_and_boundaries(tmp_path: P
         download = download_info.value
         assert download.suggested_filename.startswith("棚卸結果_")
         assert download.suggested_filename.endswith(".json")
+        expected_stamp = to_local(sheet.started_at).strftime("%Y%m%d_%H%M%S")
+        assert re.fullmatch(
+            rf"棚卸結果_A社.*テスト.*_{expected_stamp}\.json", download.suggested_filename
+        )
+        assert not any(char in download.suggested_filename for char in '<>"/\\|?*')
         downloaded_text = Path(download.path()).read_text(encoding="utf-8")
         assert parse_stocktake_payload(downloaded_text) == expected_payload
         assert not page_errors
@@ -491,5 +498,184 @@ def test_generated_html_500_items_layout_across_viewports(tmp_path: Path) -> Non
             _assert_reachable_without_header_overlap(page, "#show-result", height)
             context.close()
 
+        assert not page_errors
+        browser.close()
+
+
+def _write_small_sheet(tmp_path: Path) -> Path:
+    sheet = MobileStocktakeSheet(
+        session_id=SESSION_ID,
+        client_id=2,
+        client_name="B社",
+        staff_id=1,
+        staff_name="鈴木",
+        started_at="2026-10-17 02:00:00",
+        items=(
+            MobileStocktakeItem(
+                item_id=201,
+                code="B-001",
+                name="品目1",
+                manufacturer_part_number=None,
+                location_name="倉庫1",
+                book_quantity=10,
+                unit="個",
+            ),
+            MobileStocktakeItem(
+                item_id=202,
+                code="B-002",
+                name="品目2",
+                manufacturer_part_number=None,
+                location_name="倉庫1",
+                book_quantity=20,
+                unit="個",
+            ),
+        ),
+    )
+    html_path = tmp_path / "small_sheet.html"
+    html_path.write_text(render_stocktake_html(sheet), encoding="utf-8")
+    return html_path
+
+
+def test_generated_html_copy_success_and_missing_clipboard(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_context().new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+
+        page.locator('[data-item-id="201"]').get_by_label("B-001 実数").fill("7")
+        page.locator('[data-item-id="201"]').get_by_label("B-001 メモ").fill("コピー確認")
+        page.locator('[data-item-id="201"]').get_by_role("button", name="この実数で確認").click()
+        page.locator('[data-item-id="202"]').get_by_role(
+            "button", name="✓ 帳簿通り (20 個) で OK"
+        ).click()
+        copy_btn = page.get_by_role("button", name="📋 結果テキストをコピー(IMM1:...)")
+        result_box = page.get_by_label("結果テキスト")
+
+        page.evaluate(
+            """() => {
+                window.__copied = null;
+                Object.defineProperty(navigator, 'clipboard', {
+                    value: {
+                        writeText: text => { window.__copied = text; return Promise.resolve(); }
+                    },
+                    configurable: true
+                });
+            }"""
+        )
+        copy_btn.click()
+        page.wait_for_function("() => window.__copied !== null")
+        copied = page.evaluate("() => window.__copied")
+        assert parse_stocktake_payload(copied) == MobileStocktakePayload(
+            session_id=SESSION_ID,
+            client_id=2,
+            entries=(
+                MobileStocktakeEntry(item_id=201, actual_quantity=7, note="コピー確認"),
+                MobileStocktakeEntry(item_id=202, actual_quantity=20, note=None),
+            ),
+        )
+        page.wait_for_function(
+            "() => document.getElementById('result-feedback')"
+            ".textContent.includes('コピーしました')"
+        )
+        assert result_box.is_hidden()
+
+        # navigator.clipboard が使えない環境(安全でないコンテキスト等)
+        page.evaluate(
+            "() => Object.defineProperty(navigator, 'clipboard', "
+            "{ value: undefined, configurable: true })"
+        )
+        copy_btn.click()
+        assert result_box.is_visible()
+        assert "直接コピーできない" in page.locator("#result-feedback").inner_text()
+        assert parse_stocktake_payload(result_box.input_value()).entries[0].actual_quantity == 7
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    storage_key = f"imm_stocktake_{SESSION_ID}"
+    valid_items: dict[str, dict[str, object]] = {
+        "201": {"actual": "7", "note": "", "confirmed": True},
+        "202": {"actual": "20", "note": "", "confirmed": True},
+    }
+
+    def wrapped(**overrides: object) -> str:
+        data: dict[str, object] = {"v": 1, "session_id": SESSION_ID, "items": valid_items}
+        data.update(overrides)
+        return json.dumps(data)
+
+    invalid_values = {
+        "broken_json": "{not json",
+        "array": "[]",
+        "version": wrapped(v=2),
+        "session": wrapped(session_id="f" * 32),
+        "items_not_object": wrapped(items=[]),
+        "missing_item": wrapped(items={"201": valid_items["201"]}),
+        "extra_item": wrapped(items={**valid_items, "203": valid_items["201"]}),
+        "confirmed_not_bool": wrapped(
+            items={**valid_items, "201": {"actual": "7", "note": "", "confirmed": "true"}}
+        ),
+        "actual_not_string": wrapped(
+            items={**valid_items, "201": {"actual": 7, "note": "", "confirmed": True}}
+        ),
+        "negative_actual": wrapped(
+            items={**valid_items, "201": {"actual": "-1", "note": "", "confirmed": True}}
+        ),
+        "note_too_long": wrapped(
+            items={
+                **valid_items,
+                "201": {"actual": "7", "note": "😀" * (MAX_NOTE_LENGTH + 1), "confirmed": True},
+            }
+        ),
+    }
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context()
+        page = context.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        copy_btn = page.get_by_role("button", name="📋 結果テキストをコピー(IMM1:...)")
+        card = page.locator('[data-item-id="201"]')
+
+        for name, raw in invalid_values.items():
+            page.goto(html_path.as_uri())
+            page.evaluate("([key, value]) => localStorage.setItem(key, value)", [storage_key, raw])
+            page.reload()
+            assert page.locator("#restore-warning").is_visible(), name
+            assert copy_btn.is_disabled(), name
+            assert card.get_by_label("B-001 実数").input_value() == "10", name
+            assert card.get_by_label("B-001 メモ").input_value() == "", name
+
+        # 正常な保存値は確認状態・数量・メモ(前後の Unicode 空白を含む)のまま復元される
+        restored_note = "  \u3000復元メモ \t"
+        page.evaluate(
+            "([key, value]) => localStorage.setItem(key, value)",
+            [
+                storage_key,
+                wrapped(
+                    items={
+                        **valid_items,
+                        "201": {"actual": "7", "note": restored_note, "confirmed": True},
+                    }
+                ),
+            ],
+        )
+        page.reload()
+        assert page.locator("#restore-warning").is_hidden()
+        assert copy_btn.is_enabled()
+        assert card.get_by_label("B-001 実数").input_value() == "7"
+        assert card.get_by_label("B-001 メモ").input_value() == restored_note
+        page.get_by_role("button", name="結果テキストを表示").click()
+        parsed = parse_stocktake_payload(page.get_by_label("結果テキスト").input_value())
+        assert [(entry.actual_quantity, entry.note) for entry in parsed.entries] == [
+            (7, "復元メモ"),
+            (20, None),
+        ]
         assert not page_errors
         browser.close()
