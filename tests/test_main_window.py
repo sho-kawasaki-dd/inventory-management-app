@@ -377,16 +377,18 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
         window.stock_actions[Reason.DISPOSE],
     ]
     assert toolbar_actions[8].isSeparator()
-    assert toolbar_actions[9] is window.history_action
-    assert toolbar_actions[10] is window.purchase_page_action
-    assert toolbar_actions[11].isSeparator()
-    assert window.toolbar.widgetForAction(toolbar_actions[12]) is window.csv_export_button
+    assert toolbar_actions[9] is window.mobile_stocktake_action
+    assert toolbar_actions[10].isSeparator()
+    assert toolbar_actions[11] is window.history_action
+    assert toolbar_actions[12] is window.purchase_page_action
+    assert toolbar_actions[13].isSeparator()
+    assert window.toolbar.widgetForAction(toolbar_actions[14]) is window.csv_export_button
     assert window.csv_export_button.text() == "CSV 出力"
     assert window.csv_export_menu.actions() == [
         window.export_items_action,
         window.export_history_action,
     ]
-    assert window.toolbar.widgetForAction(toolbar_actions[13]) is window.print_button
+    assert window.toolbar.widgetForAction(toolbar_actions[15]) is window.print_button
     assert window.print_button.text() == "印刷"
     assert window.print_button.popupMode() == QToolButton.ToolButtonPopupMode.InstantPopup
     assert window.print_toolbar_menu.actions() == [
@@ -419,7 +421,9 @@ def test_item_actions_are_shared_by_menu_toolbar_and_context_menu(window_with_it
     assert item_menu.actions()[4:6] == [window.purchase_page_action, window.history_action]
     assert window.purchase_page_action.text() == "販売ページを開く"
     stock_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "在庫")
-    assert stock_menu.actions() == stock_actions
+    assert stock_menu.actions()[: len(stock_actions)] == stock_actions
+    assert stock_menu.actions()[len(stock_actions)].isSeparator()
+    assert stock_menu.actions()[len(stock_actions) + 1] is window.mobile_stocktake_action
     assert [action.text() for action in stock_actions] == [
         REASON_LABELS[reason] for reason in Reason
     ]

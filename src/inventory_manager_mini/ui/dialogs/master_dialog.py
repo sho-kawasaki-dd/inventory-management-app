@@ -226,14 +226,34 @@ class SimpleMasterTab(QWidget):
         selected = self._selected()
         enabled = selected is not None
         self.rename_button.setEnabled(enabled)
+        lock_reason = None
+        lock_kind = {
+            MasterTab.CLIENT: "client",
+            MasterTab.STAFF: "staff",
+        }.get(self.tab)
+        if selected is not None and lock_kind is not None:
+            succeeded, reason = run_guarded(
+                self,
+                lambda: self.context.master.stocktake_lock_reason(lock_kind, selected[0]),
+            )
+            if succeeded:
+                lock_reason = reason
         if self.deactivate_button is not None and self.reactivate_button is not None:
-            self.deactivate_button.setEnabled(enabled and bool(selected and selected[2]))
+            is_locked_client = self.tab is MasterTab.CLIENT and lock_reason is not None
+            self.deactivate_button.setEnabled(
+                enabled and bool(selected and selected[2]) and not is_locked_client
+            )
+            self.deactivate_button.setToolTip(
+                lock_reason if is_locked_client and lock_reason is not None else ""
+            )
             self.reactivate_button.setEnabled(enabled and bool(selected and not selected[2]))
         can_delete = False
         if selected is not None:
-            can_delete = self._can_delete(selected[0])
+            can_delete = lock_reason is None and self._can_delete(selected[0])
         self.delete_button.setEnabled(can_delete)
-        self.delete_button.setToolTip("" if can_delete or selected is None else _INACTIVE_TOOLTIP)
+        self.delete_button.setToolTip(
+            lock_reason or ("" if can_delete or selected is None else _INACTIVE_TOOLTIP)
+        )
 
     def _can_delete(self, entity_id: int) -> bool:
         succeeded, can_delete = run_guarded(self, lambda: self.operations.can_delete(entity_id))

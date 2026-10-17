@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPushButton,
     QTableView,
     QToolBar,
     QToolButton,
@@ -83,6 +85,8 @@ class MainWindow(QMainWindow):
         ) = None
         self.exit_request = ExitRequest.NORMAL
         self._dashboard_window: DashboardWindow | None = None
+        self._active_stocktakes = []
+        self._locked_client_ids: set[int] = set()
         self.setWindowTitle("Inventory Manager mini")
         self.resize(1000, 650)
         self.setMinimumSize(800, 600)
@@ -133,6 +137,20 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.inactive_checkbox, 3, 1)
         layout.addLayout(filters)
 
+        self.stocktake_banner_widget = QWidget(self)
+        banner_layout = QHBoxLayout(self.stocktake_banner_widget)
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+        self.stocktake_banner_label = QLabel(self.stocktake_banner_widget)
+        self.stocktake_banner_label.setWordWrap(True)
+        banner_layout.addWidget(self.stocktake_banner_label, 1)
+        self.stocktake_banner_button = QPushButton(
+            "スマホ棚卸を開く…", self.stocktake_banner_widget
+        )
+        self.stocktake_banner_button.clicked.connect(self._open_mobile_stocktake)
+        banner_layout.addWidget(self.stocktake_banner_button)
+        self.stocktake_banner_widget.setVisible(False)
+        layout.addWidget(self.stocktake_banner_widget)
+
         self.item_model = ItemTableModel(self)
         self.sort_model = ItemSortProxyModel(self)
         self.sort_model.setSourceModel(self.item_model)
@@ -177,6 +195,8 @@ class MainWindow(QMainWindow):
         self.return_dispose_button.setMenu(self.return_dispose_menu)
         self.toolbar.addWidget(self.return_dispose_button)
         self.toolbar.addAction(self.stock_actions[Reason.ADJUST])
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.mobile_stocktake_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.history_action)
         self.toolbar.addAction(self.purchase_page_action)
@@ -279,6 +299,11 @@ class MainWindow(QMainWindow):
             )
             self.stock_actions[reason] = action
             self.stock_menu.addAction(action)
+        self.stock_menu.addSeparator()
+        self.mobile_stocktake_action = QAction("スマホ棚卸…", self)
+        self.mobile_stocktake_action.triggered.connect(self._open_mobile_stocktake)
+        self.mobile_stocktake_action.setEnabled(True)
+        self.stock_menu.addAction(self.mobile_stocktake_action)
 
         master_menu = self.menuBar().addMenu("マスタ")
         master_tabs = (
@@ -316,10 +341,39 @@ class MainWindow(QMainWindow):
 
     def refresh(self) -> None:
         selected_item_ids = self._selected_item_ids()
+        succeeded, stocktakes = run_guarded(self, self.context.inventory.list_active_stocktakes)
+        if succeeded and stocktakes is not None:
+            self._active_stocktakes = stocktakes
+            self._locked_client_ids = {stocktake.client_id for stocktake in stocktakes}
+            self._update_stocktake_banner()
         self._refresh_master_choices()
         self.refresh_items(selected_item_ids=selected_item_ids)
         self.alert_panel.refresh()
         self._update_selection_actions()
+
+    def _update_stocktake_banner(self) -> None:
+        stocktakes = self._active_stocktakes
+        if not stocktakes:
+            self.stocktake_banner_widget.setVisible(False)
+            return
+        if len(stocktakes) == 1:
+            stocktake = stocktakes[0]
+            started_at = format_local(stocktake.started_at)[:16]
+            text = (
+                f"📱 スマホ棚卸手続き中: {stocktake.client_name} "
+                f"(開始: {started_at} / 担当: {stocktake.staff_name}) — "
+                "対象クライアントの在庫操作・品目編集はロックされています"
+            )
+        else:
+            first_two = "、".join(
+                f"{entry.client_name}({format_local(entry.started_at)[5:16]})"
+                for entry in stocktakes[:2]
+            )
+            remaining = len(stocktakes) - 2
+            suffix = f" ほか {remaining} 件" if remaining else ""
+            text = f"📱 スマホ棚卸手続き中: {first_two}{suffix}"
+        self.stocktake_banner_label.setText(text)
+        self.stocktake_banner_widget.setVisible(True)
 
     def _refresh_master_choices(self) -> None:
         succeeded, choices = run_guarded(
@@ -445,15 +499,20 @@ class MainWindow(QMainWindow):
         row = None if selected_id is None else self.item_model.row_of(selected_id)
         item = None if row is None else self.item_model.row_at(row)
         has_selection = item is not None
-        self.edit_action.setEnabled(has_selection)
-        self.toggle_active_action.setEnabled(has_selection)
+        is_locked = item is not None and item.client_id in self._locked_client_ids
+        lock_reason = "このクライアントはスマホ棚卸手続き中のため操作できません"
+        self.edit_action.setEnabled(has_selection and not is_locked)
+        self.toggle_active_action.setEnabled(has_selection and not is_locked)
+        self.edit_action.setToolTip(lock_reason if is_locked else "")
+        self.toggle_active_action.setToolTip(lock_reason if is_locked else "")
         self.history_action.setEnabled(has_selection)
         self.purchase_page_action.setEnabled(
             item is not None and bool(item.purchase_url and item.purchase_url.strip())
         )
         can_move_stock = item is not None and item.is_active
         for action in self.stock_actions.values():
-            action.setEnabled(can_move_stock)
+            action.setEnabled(can_move_stock and not is_locked)
+            action.setToolTip(lock_reason if is_locked else "")
         print_labels_action = getattr(self, "print_labels_action", None)
         if print_labels_action is not None:
             print_labels_action.setEnabled(bool(selected_item_ids))
@@ -476,6 +535,13 @@ class MainWindow(QMainWindow):
             "inventory_manager_mini.ui.dialogs.stock_move_dialog"
         ).StockMoveDialog
         dialog = StockMoveDialog(self.context, reason, item_id=item_id, parent=self)
+        dialog.exec()
+
+    def _open_mobile_stocktake(self) -> None:
+        MobileStocktakeDialog = import_module(
+            "inventory_manager_mini.ui.dialogs.mobile_stocktake_dialog"
+        ).MobileStocktakeDialog
+        dialog = MobileStocktakeDialog(self.context, parent=self)
         dialog.exec()
 
     def _open_history(self) -> None:
@@ -712,12 +778,30 @@ class MainWindow(QMainWindow):
         last_moved_at = (
             "なし" if prepared.last_moved_at is None else format_local(prepared.last_moved_at)
         )
+        succeeded, current_stocktakes = run_guarded(
+            self, self.context.inventory.list_active_stocktakes
+        )
+        if not succeeded or current_stocktakes is None:
+            return False
+        stocktake_warning = ""
+        if current_stocktakes or prepared.stocktake_client_names:
+            current_names = (
+                "、".join(stocktake.client_name for stocktake in current_stocktakes) or "なし"
+            )
+            restored_names = "、".join(prepared.stocktake_client_names) or "なし"
+            stocktake_warning = (
+                f"現在の棚卸手続き中クライアント: {current_names}\n"
+                f"復元元の棚卸手続き中クライアント: {restored_names}\n"
+                "復元すると棚卸手続きの状態が置き換わり、持ち出し中のシートの結果は "
+                "取り込めなくなる場合があります。\n\n"
+            )
         message = (
             f"復元元: {source}\n"
             f"元の版数: {version_text}\n"
             f"品目数: {prepared.item_count:,} 件\n"
             f"履歴数: {prepared.movement_count:,} 件\n"
             f"最終履歴日時: {last_moved_at}\n\n"
+            f"{stocktake_warning}"
             "現在のデータは復元元の内容で置き換えられます。\n"
             "復元前に現在のデータを自動バックアップします"
             f"(保存先: {self.context.paths.backup_dir})。\n"

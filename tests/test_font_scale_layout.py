@@ -15,6 +15,7 @@ from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
 from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
 from inventory_manager_mini.ui.dialogs.master_dialog import MasterDialog, MasterTab
+from inventory_manager_mini.ui.dialogs.mobile_stocktake_dialog import MobileStocktakeDialog
 from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.display_settings import DisplaySettings, apply_display_settings
 from inventory_manager_mini.ui.main_window import MainWindow
@@ -127,6 +128,46 @@ def test_master_dialog_all_tabs_fit_together(
         assert widget is not None
         assert_fits_work_area(dialog)
         assert_buttons_reachable(dialog, *widget.findChildren(QPushButton))
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_mobile_stocktake_dialog_tabs_fit_work_area(
+    qtbot, dialog_context: AppContext, restore_app_font: QFont, scale: int
+) -> None:
+    apply_display_settings(DisplaySettings(None, scale))
+    dialog = MobileStocktakeDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    for index in range(dialog.tabs.count()):
+        dialog.tabs.setCurrentIndex(index)
+        widget = dialog.tabs.currentWidget()
+        assert widget is not None
+        assert_fits_work_area(dialog)
+        assert_buttons_reachable(dialog, *widget.findChildren(QPushButton))
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_main_window_stocktake_banner_fits_work_area(
+    qtbot,
+    dialog_context: AppContext,
+    restore_app_font: QFont,
+    tmp_path: Path,
+    scale: int,
+) -> None:
+    _create_item(dialog_context)
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    apply_display_settings(DisplaySettings(None, scale))
+    window = MainWindow(dialog_context)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+
+    assert window.stocktake_banner_widget.isVisible()
+    assert "総務" in window.stocktake_banner_label.text()
+    assert_fits_work_area(window)
+    assert_buttons_reachable(window, window.stocktake_banner_button)
 
 
 @pytest.mark.parametrize("scale", SCALES)

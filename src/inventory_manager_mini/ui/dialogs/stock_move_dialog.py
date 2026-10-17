@@ -50,10 +50,12 @@ class StockMoveDialog(QDialog):
         self._candidate_items: list[ItemRow] = []
         self._unavailable = False
         self._stocktake_quantity_invalid = False
+        self._locked_client_ids: set[int] = set()
         self.setWindowTitle("在庫操作")
 
         self._build_ui(reason)
         self._load_staff()
+        self._load_stocktake_locks()
         self._load_items()
         if item_id is not None:
             self._select_item_by_id(item_id)
@@ -149,6 +151,13 @@ class StockMoveDialog(QDialog):
             return
         for member in staff:
             self.staff_combo.addItem(member.name, member.id)
+
+    def _load_stocktake_locks(self) -> None:
+        succeeded, stocktakes = run_guarded(self, self.context.inventory.list_active_stocktakes)
+        if not succeeded or stocktakes is None:
+            self._unavailable = True
+            return
+        self._locked_client_ids = {stocktake.client_id for stocktake in stocktakes}
 
     def _load_items(self) -> None:
         selected_id = None if self._selected_item is None else self._selected_item.id
@@ -249,6 +258,8 @@ class StockMoveDialog(QDialog):
         if item is None:
             messages.append("品目を選択してください")
         else:
+            if item.client_id in self._locked_client_ids:
+                messages.append("このクライアントはスマホ棚卸手続き中のため在庫操作できません")
             delta = quantity if reason is Reason.IN else -quantity
             if reason is Reason.ADJUST:
                 delta = quantity - item.quantity
