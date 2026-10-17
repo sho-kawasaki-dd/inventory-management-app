@@ -11,6 +11,7 @@ from inventory_manager_mini.core.models import (
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
     REASON_LABELS,
+    ActiveStocktake,
     Allocation,
     Category,
     Client,
@@ -27,6 +28,12 @@ from inventory_manager_mini.core.models import (
     ItemUpdate,
     Location,
     Lot,
+    MobileStocktakeEntry,
+    MobileStocktakeItem,
+    MobileStocktakePayload,
+    MobileStocktakePreview,
+    MobileStocktakePreviewRow,
+    MobileStocktakeSheet,
     MovementRow,
     NewItem,
     PeriodKind,
@@ -65,6 +72,13 @@ def _field_names(model: type[Any]) -> set[str]:
         ItemChoice,
         HistoryPeriod,
         HistoryPage,
+        ActiveStocktake,
+        MobileStocktakeItem,
+        MobileStocktakeSheet,
+        MobileStocktakeEntry,
+        MobileStocktakePayload,
+        MobileStocktakePreviewRow,
+        MobileStocktakePreview,
     ],
 )
 def test_models_are_frozen_and_slotted(model: type[Any]) -> None:
@@ -231,3 +245,66 @@ def test_history_models_match_their_roles() -> None:
         "page_size",
         "total_pages",
     }
+
+
+def test_mobile_stocktake_models_match_the_data_contract() -> None:
+    assert _field_names(ActiveStocktake) == {
+        "client_id",
+        "client_name",
+        "session_id",
+        "staff_id",
+        "staff_name",
+        "started_at",
+        "item_count",
+    }
+    assert _field_names(MobileStocktakeItem) == {
+        "item_id",
+        "code",
+        "name",
+        "manufacturer_part_number",
+        "location_name",
+        "book_quantity",
+        "unit",
+    }
+    assert _field_names(MobileStocktakeSheet) == {
+        "session_id",
+        "client_id",
+        "client_name",
+        "staff_id",
+        "staff_name",
+        "started_at",
+        "items",
+    }
+    assert _field_names(MobileStocktakeEntry) == {
+        "item_id",
+        "actual_quantity",
+        "note",
+    }
+    assert _field_names(MobileStocktakePayload) == {
+        "session_id",
+        "client_id",
+        "entries",
+    }
+    assert _field_names(MobileStocktakePreviewRow) == {
+        "item_id",
+        "code",
+        "name",
+        "location_name",
+        "book_quantity",
+        "actual_quantity",
+        "delta",
+        "note",
+    }
+    assert _field_names(MobileStocktakePreview) == {
+        "session_id",
+        "client_id",
+        "client_name",
+        "staff_id",
+        "staff_name",
+        "started_at",
+        "rows",
+        "unchanged_count",
+        "increased_count",
+        "decreased_count",
+    }
+    assert MobileStocktakeEntry(item_id=1, actual_quantity=2).note is None

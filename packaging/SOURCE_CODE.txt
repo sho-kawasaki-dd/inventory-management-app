@@ -35,10 +35,13 @@ Inventory Manager mini - 対応ソースの取得案内
 
 1) -sources.zip を展開し、展開先で次を実行します(ネットワークは依存の取得にのみ使用)。
      uv sync --locked
+  uv run playwright install chromium
+   Linux でブラウザテストを実行する場合は、OS のシステム依存関係も含めて準備します。
+  uv run playwright install --with-deps chromium
 2) 依存ソースを同梱版の SHA256 と照合します(Release の -sources.zip には取得済みですが、再取得も可能です)。
      uv run python scripts/fetch_dependency_sources.py
-3) 変更を加える場合はソースを編集し、必要ならテストを実行します。
-     uv run pytest
+3) 変更を加える場合はソースを編集し、テストを実行します。
+  uv run pytest --cov
 4) 配布ファイルを作成します。版数は pyproject.toml の project.version と一致させます。
      powershell -File packaging/build.ps1 -Version <版数> [-Suffix -rc<N>]
    成功すると dist/releases/<ビルドID>/ にインストーラー・ソース・構成一覧・.sha256 が作成されます。

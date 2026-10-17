@@ -23,12 +23,15 @@ uv sync
 
 ```sh
 uv sync --locked
+uv run playwright install chromium
 uv run ruff check
 uv run ruff format --check
 uv run pyright
 uv run pytest --cov
 uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
 ```
+
+Linux CI では Chromium とシステム依存関係を `uv run playwright install --with-deps chromium` で準備します。
 
 ## アプリの起動
 
@@ -67,7 +70,7 @@ GitHub Release からインストーラーと同じ版の `.sha256` ファイル
 起動前にハッシュを照合してください。
 
 ```powershell
-$installer = '.\inventory-manager-mini-0.2.0-setup.exe'
+$installer = '.\inventory-manager-mini-0.3.0-setup.exe'
 $expected = ((Get-Content "$installer.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
 $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'SHA256 が一致しません。インストーラーを実行しないでください。' }
@@ -123,16 +126,16 @@ Windows x64、Python 3.13、uv、および Inno Setup 6.7.3 が必要です。�
 ```powershell
 uv sync --locked
 uv run python scripts/fetch_dependency_sources.py
-.\packaging\build.ps1 -Version 0.2.0
+.\packaging\build.ps1 -Version 0.3.0
 ```
 
-PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.2.0` のように
+PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.3.0` のように
 実行するか、利用者の判断で現在のセッションだけ実行ポリシーを変更してください。
 
 検証用 rc ビルドでは接尾辞を別に指定します。
 
 ```powershell
-.\packaging\build.ps1 -Version 0.2.0 -Suffix '-rc1'
+.\packaging\build.ps1 -Version 0.3.0 -Suffix '-rc1'
 ```
 
 成果物は毎回異なるビルド ID の `dist/releases/<ビルドID>/` に出力されます。そこにはインストーラー、
@@ -200,6 +203,26 @@ Windows Sandbox または新規 VM でのみ確認してください。継承確
 
 CSV は現在表示中の内訳行を出力し、列は「年度/月、クライアント、発注主体、カテゴリ、管理番号、品名、入庫数、出庫数、支出額、単価未登録数量、廃棄数、廃棄額」の 12 列です。各内訳軸が未指定の列は「(すべて)」になります。PNG は「グラフ」タブで保存でき、スクロール範囲を含む両方のグラフを 1 枚に出力します。集計がまだ取得できていない間は出力できません。
 
+### スマホ棚卸
+
+事務所 PC のネットワーク外にあるクライアント現場へ Android スマートフォンを持ち出し、ブラウザ上のボタン操作で月次棚卸を行い、帰社後に PC へ一括反映します。アプリはネットワーク通信やポート待受を行わず、品目データと操作画面を 1 つにまとめた HTML ファイルの受け渡しと、結果の貼り付け・ファイル読込で連携します。
+
+使い方の流れ:
+
+1. 出発前に「在庫」メニューまたはツールバーの「スマホ棚卸…」を開き、「① 出発前」タブでクライアントとシート作成担当者を選んで「棚卸シート(.html)を作成して保存…」を実行します。対象クライアントの有効品目すべてが対象です。
+2. 作成した HTML をスマートフォンへ転送します。Gmail または Quick Share で送り、Files アプリから Chrome で開く経路を確認済みです。簡易ビューアで開いた場合は画面の案内に従って Chrome で開き直してください。
+3. 現場で品目ごとに「帳簿通りで OK」、または数量(`-10` / `-1` / 直接入力 / `+1` / `+10`)を入力して「この実数で確認」を押します。メモも入力できます。数量やメモを変えると未確認に戻ります。全品目が確認済みで入力に誤りがない場合だけ結果を出力できます。
+4. 結果は「結果テキストをコピー」(`IMM1:...:END`)して Gmail などで自分宛に送るか、「結果ファイル(.json)を保存」して PC へ渡します。コピーや保存ができない場合は「結果テキストを表示」から長押しでコピーできます。
+5. 帰社後に「② 帰社後」タブで結果テキストを貼り付けるか、結果ファイルを読み込み、差分プレビューを確認します。確定担当者を選んで「この内容で棚卸を一括確定する」を押すと、全品目の棚卸が 1 回の操作として記録されます。入力を変更した場合は、もう一度プレビューするまで確定できません。メールの折り返しや引用付き返信でも取り込めます。異なる結果が複数含まれる場合は、1 件だけ貼り付けてください。
+
+注意事項:
+
+- 棚卸手続き中のクライアントは、品目の登録・編集・廃止、在庫操作、履歴の取り消し、クライアントの無効化・削除、シート作成担当者の削除ができません。解除は一括確定または「① 出発前」タブの「棚卸を中止」で行います。他のクライアントの操作と閲覧・CSV 出力・印刷・バックアップは通常どおりです。
+- シート HTML は既存ファイルへ上書きできません。同じクライアントでシートを再作成すると前のシートは無効になり、その結果は取り込めません。
+- 途中保存はブラウザの保存領域を使います。再開は、同じ端末の Chrome で同じファイルを開き直す条件で確認済みです。ファイルの移動・再取得や別アプリからの起動では復元されない場合があるため、現場では画面を閉じずに作業してください。保存できない場合はシート上に警告が表示されます。
+- 復元すると棚卸手続きの状態も復元元のとおりになり、持ち出し中のシートの結果は取り込めなくなる場合があります。
+- v0.3.0 の DB・バックアップは v0.2.0 以前のアプリでは開けません。
+
 ### データ保存先
 
 既定では OS ごとのユーザーデータ領域に保存します。保存先を変更する場合は、起動前に `INVENTORY_MANAGER_MINI_DATA_DIR` を設定してください。DB・バックアップ・多重起動ロックは指定したディレクトリ直下に、ログはその `logs/` 配下に作成します。
@@ -244,6 +267,8 @@ uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventor
 ```sh
 uv run pytest --run-perf tests/test_performance.py
 ```
+
+スマホ棚卸(有効品目 500 件のシート出力・プレビュー・一括確定)だけを計測する場合は `uv run pytest tests/test_performance.py --run-perf -k mobile_stocktake -s` を使います。
 
 ## ディレクトリ構成
 

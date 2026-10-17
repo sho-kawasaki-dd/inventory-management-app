@@ -157,3 +157,14 @@ CREATE TABLE settings (
 );
 
 INSERT INTO settings (key, value) VALUES ('fiscal_year_start_month', '4');
+
+CREATE TABLE active_stocktakes (
+  client_id INTEGER PRIMARY KEY REFERENCES clients(id),
+  session_id TEXT NOT NULL UNIQUE CHECK (
+    typeof(session_id) = 'text'
+    AND length(session_id) = 32
+    AND session_id NOT GLOB '*[^0-9a-f]*'
+  ),
+  staff_id INTEGER NOT NULL REFERENCES staff(id),
+  started_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

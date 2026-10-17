@@ -35,6 +35,7 @@ from inventory_manager_mini.db.repositories import (
     MasterRepository,
     MovementRepository,
     SettingsRepository,
+    StocktakeRepository,
     TotalAggregatesRepository,
 )
 from tests.conftest import unchecked_constraints
@@ -894,6 +895,68 @@ def test_master_repository_unique_violations_become_domain_errors(
         repo.insert_category("重複接頭辞", "ST")
     with pytest.raises(ValidationError):
         repo.insert_category("不正接頭辞", "bad")
+
+
+def test_stocktake_repository_crud_and_master_usage_are_independent(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = StocktakeRepository(repository_conn)
+    master_repo = MasterRepository(repository_conn)
+
+    repo.upsert(
+        client_id=1,
+        session_id="a" * 32,
+        staff_id=1,
+        started_at="2026-01-02 00:00:00",
+    )
+    repo.upsert(
+        client_id=2,
+        session_id="b" * 32,
+        staff_id=2,
+        started_at="2026-01-01 00:00:00",
+    )
+
+    assert repo.is_client_locked(1)
+    assert not repo.is_client_locked(3)
+    assert repo.is_staff_referenced(1)
+    assert not repo.is_staff_referenced(3)
+    assert not master_repo.client_in_use(1)
+    assert not master_repo.staff_in_use(1)
+
+    _insert_item(repository_conn, item_id=1, active=1)
+    _insert_item(repository_conn, item_id=2, active=0)
+    _insert_item(repository_conn, item_id=3, client_id=2)
+    assert repo.get(1) == repo.get_by_session("a" * 32)
+    client_stocktake = repo.get(1)
+    assert client_stocktake is not None
+    assert client_stocktake.item_count == 1
+    assert repo.get(999) is None
+    assert repo.get_by_session("c" * 32) is None
+    assert [entry.client_id for entry in repo.list_all()] == [2, 1]
+
+    repo.upsert(
+        client_id=1,
+        session_id="c" * 32,
+        staff_id=3,
+        started_at="2026-01-03 00:00:00",
+    )
+    updated = repo.get_by_session("c" * 32)
+    assert updated is not None
+    assert (updated.session_id, updated.staff_id, updated.staff_name, updated.item_count) == (
+        "c" * 32,
+        3,
+        "廃止担当",
+        1,
+    )
+    assert repo.get_by_session("a" * 32) is None
+    assert not repo.is_staff_referenced(1)
+    assert repo.is_staff_referenced(3)
+
+    assert repo.delete(1)
+    assert not repo.delete(1)
+    assert repo.get(1) is None
+    assert not repo.is_client_locked(1)
+    assert not repo.is_staff_referenced(3)
 
 
 def test_settings_repository_get_set_all(repository_conn: sqlite3.Connection) -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inventory-manager-mini"
-version = "0.2.0"
+version = "0.3.0"
 authors = [{ name = "IKinoCore" }]
 license = "MIT"
 license-files = [
@@ -29,6 +29,7 @@ dev = [
     "pyright",
     "pyinstaller",
     "tzdata",
+    "playwright>=1.64.0",
 ]
 
 [tool.hatch.build.targets.wheel]

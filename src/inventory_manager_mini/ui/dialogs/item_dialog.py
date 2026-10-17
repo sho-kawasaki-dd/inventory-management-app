@@ -45,6 +45,8 @@ class ItemDialog(QDialog):
         self.item_id = item_id
         self.item = None
         self._threshold_out_of_range: int | None = None
+        self._locked_client_ids: set[int] = set()
+        self._source_client_locked = False
         self.setWindowTitle("品目の登録" if item_id is None else "品目の編集")
         self.setMinimumSize(620, 480)
 
@@ -197,13 +199,16 @@ class ItemDialog(QDialog):
                 self.context.master.list_staff(),
                 self.context.master.list_categories(),
                 self.context.master.list_locations(),
+                self.context.inventory.list_active_stocktakes(),
             ),
         )
         if not succeeded or choices is None:
             self._unavailable = True
             return
-        clients, purchasers, staff, categories, locations = choices
+        clients, purchasers, staff, categories, locations, stocktakes = choices
+        self._locked_client_ids = {stocktake.client_id for stocktake in stocktakes}
         current_client_id = None if self.item is None else self.item.client_id
+        self._source_client_locked = current_client_id in self._locked_client_ids
         current_purchaser_id = None if self.item is None else self.item.purchaser_id
         if any(client.id == current_client_id and not client.is_active for client in clients):
             self.client_notice.setText(
@@ -216,7 +221,9 @@ class ItemDialog(QDialog):
             self.purchaser_notice.setText(
                 "現在の発注主体は無効化されています。変更する場合は有効なものを選択してください"
             )
-        self._fill_required_masters(self.client_combo, clients, current_client_id)
+        self._fill_required_masters(
+            self.client_combo, clients, current_client_id, self._locked_client_ids
+        )
         self._fill_required_masters(self.purchaser_combo, purchasers, current_purchaser_id)
         self.category_picker.set_categories(categories)
         self.location_combo.addItem("(なし)", None)
@@ -227,14 +234,22 @@ class ItemDialog(QDialog):
                 self.initial_staff_combo.addItem(member.name, member.id)
 
     @staticmethod
-    def _fill_required_masters(combo: QComboBox, masters, current_id: int | None) -> None:
+    def _fill_required_masters(
+        combo: QComboBox,
+        masters,
+        current_id: int | None,
+        locked_ids: set[int] | None = None,
+    ) -> None:
         combo.clear()
+        locked_ids = locked_ids or set()
         current_inactive = [
             master for master in masters if master.id == current_id and not master.is_active
         ]
         available = current_inactive + [master for master in masters if master.is_active]
         for master in available:
             label = master.name if master.is_active else f"{master.name} (無効)"
+            if master.id in locked_ids:
+                label += " (棚卸中)"
             combo.addItem(label, master.id)
         index = combo.findData(current_id)
         combo.setCurrentIndex(index if index >= 0 else -1)
@@ -331,6 +346,10 @@ class ItemDialog(QDialog):
                 messages.append("先にカテゴリマスタを登録してください")
         if self.client_combo.currentData() is None:
             messages.append("クライアントを選択してください")
+        elif (
+            self._source_client_locked or self.client_combo.currentData() in self._locked_client_ids
+        ):
+            messages.append("このクライアントはスマホ棚卸手続き中のため品目を変更できません")
         if not self.name_edit.text().strip():
             messages.append("品名を入力してください")
         if self.category_picker.current_category_id() is None:

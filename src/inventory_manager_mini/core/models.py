@@ -269,3 +269,76 @@ class HistoryPage:
     page: int
     page_size: int
     total_pages: int
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveStocktake:
+    client_id: int
+    client_name: str
+    session_id: str
+    staff_id: int
+    staff_name: str
+    started_at: str
+    item_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakeItem:
+    item_id: int
+    code: str
+    name: str
+    manufacturer_part_number: str | None
+    location_name: str | None
+    book_quantity: int
+    unit: str
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakeSheet:
+    session_id: str
+    client_id: int
+    client_name: str
+    staff_id: int
+    staff_name: str
+    started_at: str
+    items: tuple[MobileStocktakeItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakeEntry:
+    item_id: int
+    actual_quantity: int
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakePayload:
+    session_id: str
+    client_id: int
+    entries: tuple[MobileStocktakeEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakePreviewRow:
+    item_id: int
+    code: str
+    name: str
+    location_name: str | None
+    book_quantity: int
+    actual_quantity: int
+    delta: int
+    note: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MobileStocktakePreview:
+    session_id: str
+    client_id: int
+    client_name: str
+    staff_id: int
+    staff_name: str
+    started_at: str
+    rows: tuple[MobileStocktakePreviewRow, ...]
+    unchanged_count: int
+    increased_count: int
+    decreased_count: int

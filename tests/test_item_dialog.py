@@ -142,6 +142,61 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert dialog.result() == dialog.DialogCode.Accepted
 
 
+_LOCK_MESSAGE = "このクライアントはスマホ棚卸手続き中のため品目を変更できません"
+
+
+def test_new_dialog_marks_locked_client_and_disables_ok(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="既存品目", category_id=1)
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    _fill_required(dialog)
+    locked_index = dialog.client_combo.findData(1)
+    other_index = dialog.client_combo.findData(2)
+
+    assert dialog.client_combo.itemText(locked_index) == "総務 (棚卸中)"
+    assert dialog.client_combo.itemText(other_index) == "経理"
+    dialog.client_combo.setCurrentIndex(locked_index)
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    dialog.client_combo.setCurrentIndex(other_index)
+    assert _LOCK_MESSAGE not in dialog.error_label.text()
+    assert _ok_button(dialog).isEnabled()
+
+
+def test_edit_dialog_is_locked_for_current_and_destination_client(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="既存品目", category_id=1)
+    )
+    dialog_context.inventory.create_item(
+        NewItem(client_id=2, purchaser_id=1, name="経理品目", category_id=1)
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+    dialog.client_combo.setCurrentIndex(dialog.client_combo.findData(2))
+    assert _LOCK_MESSAGE in dialog.error_label.text()
+    assert not _ok_button(dialog).isEnabled()
+
+    other_item = dialog_context.inventory.list_items(ItemFilter(client_id=2))[0]
+    other_dialog = ItemDialog(dialog_context, other_item.id)
+    qtbot.addWidget(other_dialog)
+    assert _ok_button(other_dialog).isEnabled()
+    other_dialog.client_combo.setCurrentIndex(other_dialog.client_combo.findData(1))
+    assert _LOCK_MESSAGE in other_dialog.error_label.text()
+    assert not _ok_button(other_dialog).isEnabled()
+
+
 def test_new_dialog_requires_master_choices_and_emits_change_only_on_save(
     qtbot, dialog_context
 ) -> None:

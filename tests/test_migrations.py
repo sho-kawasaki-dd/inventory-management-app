@@ -31,6 +31,10 @@ def _schema_sql() -> str:
     return files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
 
 
+def _schema_v4_sql() -> str:
+    return files("inventory_manager_mini.db").joinpath("schema_v4.sql").read_text(encoding="utf-8")
+
+
 def _create_database(
     path: Path, *, schema_sql: str | None = None, version: int = SCHEMA_VERSION
 ) -> None:
@@ -113,7 +117,7 @@ def test_version_two_rebuild_preserves_rows_and_initializes_aggregates(tmp_path:
 
     migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261009_120000")
     try:
-        assert migrated.execute("PRAGMA user_version").fetchone() == (4,)
+        assert migrated.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert migrated.execute("PRAGMA foreign_keys").fetchone() == (1,)
         assert inspect_schema(migrated, SCHEMA_VERSION) == []
         assert migrated.execute("SELECT id, quantity FROM items").fetchone() == (7, 4)
@@ -518,6 +522,50 @@ def test_version_three_spec_uses_frozen_schema_file() -> None:
     assert SCHEMA_SPECS[3] != SCHEMA_SPECS[4]
 
 
+def test_version_four_spec_uses_frozen_schema_file() -> None:
+    assert SCHEMA_SPECS[4] == migrations._schema_spec_from_ddl(_schema_v4_sql())
+    assert SCHEMA_SPECS[4] != SCHEMA_SPECS[5]
+
+
+def test_v5_migration_sql_matches_active_stocktakes_schema() -> None:
+    migration_table = next(
+        table
+        for table in migrations._schema_spec_from_ddl(migrations._MIGRATION_V5_SQL).tables
+        if table.name == "active_stocktakes"
+    )
+    schema_table = next(
+        table for table in SCHEMA_SPECS[5].tables if table.name == "active_stocktakes"
+    )
+
+    assert normalize_sql(migration_table.sql) == normalize_sql(schema_table.sql)
+
+
+def test_version_four_database_migrates_to_v5(tmp_path: Path) -> None:
+    path = tmp_path / "version-four.db"
+    _create_database(path, schema_sql=_schema_v4_sql(), version=4)
+    conn = sqlite3.connect(path, autocommit=True)
+    conn.executescript(
+        "INSERT INTO clients (id, name) VALUES (1, '利用者');"
+        "INSERT INTO staff (id, name) VALUES (1, '担当者');"
+    )
+    conn.close()
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261017_120000")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+        assert inspect_schema(migrated, SCHEMA_VERSION) == []
+        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
+        migrated.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "a" * 32, 1),
+        )
+        assert migrated.execute(
+            "SELECT client_id, session_id, staff_id FROM active_stocktakes"
+        ).fetchone() == (1, "a" * 32, 1)
+    finally:
+        migrated.close()
+
+
 def test_spec_records_index_expression_and_trigger_definition() -> None:
     category_index = next(
         index for index in SCHEMA_SPECS[1].indexes if index.name == "uq_categories_parent_name"
@@ -765,7 +813,12 @@ def test_version_three_migrates_fifo_history_and_matches_new_schema(tmp_path: Pa
     path = tmp_path / "v3-history.db"
     _create_legacy_database(path, _RICH_LEGACY_ROWS, version=3)
 
-    conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120000")
+    conn = open_database(
+        path,
+        tmp_path / "backups",
+        backup_timestamp=lambda: "20261010_120000",
+        schema_version=4,
+    )
     try:
         assert conn.execute("PRAGMA user_version").fetchone() == (4,)
         assert inspect_schema(conn, 4) == []
@@ -811,7 +864,12 @@ def test_v2_v3_legacy_aggregates_are_preserved_until_v4_conversion(tmp_path: Pat
     finally:
         conn.close()
 
-    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120200")
+    migrated = open_database(
+        path,
+        tmp_path / "backups",
+        backup_timestamp=lambda: "20261010_120200",
+        schema_version=4,
+    )
     try:
         assert migrated.execute("PRAGMA user_version").fetchone() == (4,)
         assert migrated.execute(
@@ -924,7 +982,12 @@ def test_v3_fifo_aggregate_limit_boundary_before_backup(
         finally:
             verify.close()
     else:
-        conn = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261010_120300")
+        conn = open_database(
+            path,
+            tmp_path / "backups",
+            backup_timestamp=lambda: "20261010_120300",
+            schema_version=4,
+        )
         try:
             assert conn.execute("PRAGMA user_version").fetchone() == (4,)
             assert conn.execute("SELECT expenditure FROM total_aggregates").fetchone() == (10,)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import secrets
 import sqlite3
 import tempfile
 from collections.abc import Callable
@@ -21,13 +23,19 @@ from inventory_manager_mini.core.errors import (
     PrefixLockedError,
     RestoreError,
     ReversalNotAllowedError,
+    StocktakeInProgressError,
     ValidationError,
 )
 from inventory_manager_mini.core.fifo import plan_fifo_allocations
+from inventory_manager_mini.core.mobile_stocktake import (
+    parse_stocktake_payload,
+    render_stocktake_html,
+)
 from inventory_manager_mini.core.models import (
     MAX_MOVEMENT_AMOUNT,
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
+    ActiveStocktake,
     Allocation,
     Category,
     Client,
@@ -38,6 +46,12 @@ from inventory_manager_mini.core.models import (
     ItemRow,
     ItemUpdate,
     Location,
+    MobileStocktakeEntry,
+    MobileStocktakeItem,
+    MobileStocktakePayload,
+    MobileStocktakePreview,
+    MobileStocktakePreviewRow,
+    MobileStocktakeSheet,
     MovementRow,
     NewItem,
     PurchaseInfo,
@@ -79,11 +93,13 @@ from inventory_manager_mini.db.repositories import (
     MasterRepository,
     MovementRepository,
     SettingsRepository,
+    StocktakeRepository,
     TotalAggregatesRepository,
 )
 
 _PREFIX_PATTERN = re.compile(r"^[A-Z0-9]{2,5}$")
 _FISCAL_YEAR_KEY = "fiscal_year_start_month"
+_LOGGER = logging.getLogger(__name__)
 
 
 def validate_purchase_url(url: str | None) -> str | None:
@@ -207,10 +223,12 @@ class InventoryService:
         self.allocations = AllocationRepository(conn)
         self.masters = MasterRepository(conn)
         self.aggregates = TotalAggregatesRepository(conn)
+        self.stocktakes = StocktakeRepository(conn)
 
     def create_item(self, new: NewItem) -> Item:
         value = _normalize_new_item(new)
         with transaction(self.conn):
+            self._require_client_not_in_stocktake(value.client_id)
             _active_master(self.masters.get_client(value.client_id), "クライアント")
             _active_master(self.masters.get_purchaser(value.purchaser_id), "発注主体")
             _required_master(self.masters.get_category(value.category_id), "カテゴリ")
@@ -264,6 +282,8 @@ class InventoryService:
         value = _normalize_item_update(update)
         with transaction(self.conn):
             current = self._require_item(value.id)
+            self._require_client_not_in_stocktake(current.client_id)
+            self._require_client_not_in_stocktake(value.client_id)
             self._require_selectable_client(value.client_id, current.client_id)
             self._require_selectable_purchaser(value.purchaser_id, current.purchaser_id)
             _required_master(self.masters.get_category(value.category_id), "カテゴリ")
@@ -273,12 +293,14 @@ class InventoryService:
 
     def deactivate_item(self, item_id: int) -> Item:
         with transaction(self.conn):
-            self._require_item(item_id)
+            item = self._require_item(item_id)
+            self._require_client_not_in_stocktake(item.client_id)
             return self.items.set_active(item_id, False)
 
     def reactivate_item(self, item_id: int) -> Item:
         with transaction(self.conn):
-            self._require_item(item_id)
+            item = self._require_item(item_id)
+            self._require_client_not_in_stocktake(item.client_id)
             return self.items.set_active(item_id, True)
 
     def get_item(self, item_id: int) -> Item | None:
@@ -375,6 +397,7 @@ class InventoryService:
         normalized_note = _normalize_optional(note, "備考")
         with transaction(self.conn):
             item = self._require_active_item(item_id)
+            self._require_client_not_in_stocktake(item.client_id)
             staff = self._require_active_staff(staff_id)
             delta = actual - item.quantity
             unit_price = item.reference_price if delta > 0 else None
@@ -396,6 +419,186 @@ class InventoryService:
                 allocations=allocations,
             )
 
+    def list_active_stocktakes(self) -> list[ActiveStocktake]:
+        return self.stocktakes.list_all()
+
+    def get_active_stocktake(self, client_id: int) -> ActiveStocktake | None:
+        return self.stocktakes.get(client_id)
+
+    def _begin_mobile_stocktake(self, client_id: int, staff_id: int) -> MobileStocktakeSheet:
+        client = _active_master(
+            self.masters.get_client(_integer(client_id, "クライアント ID", 1)), "クライアント"
+        )
+        staff = self._require_active_staff(staff_id)
+        items = self.items.list(ItemFilter(client_id=client.id))
+        if not items:
+            raise ValidationError("対象クライアントに有効な品目がありません")
+
+        session_id = secrets.token_hex(16)
+        started_at = utc_now_str(self.clock())
+        self.stocktakes.upsert(
+            client_id=client.id,
+            session_id=session_id,
+            staff_id=staff.id,
+            started_at=started_at,
+        )
+        return MobileStocktakeSheet(
+            session_id=session_id,
+            client_id=client.id,
+            client_name=client.name,
+            staff_id=staff.id,
+            staff_name=staff.name,
+            started_at=started_at,
+            items=tuple(
+                MobileStocktakeItem(
+                    item_id=item.id,
+                    code=item.code,
+                    name=item.name,
+                    manufacturer_part_number=item.manufacturer_part_number,
+                    location_name=item.location_name,
+                    book_quantity=item.quantity,
+                    unit=item.unit,
+                )
+                for item in items
+            ),
+        )
+
+    def export_mobile_stocktake_html(
+        self, path: Path, client_id: int, staff_id: int
+    ) -> MobileStocktakeSheet:
+        output_path = Path(path)
+        created_file = False
+        try:
+            with transaction(self.conn):
+                sheet = self._begin_mobile_stocktake(client_id, staff_id)
+                content = render_stocktake_html(sheet)
+                try:
+                    with output_path.open("x", encoding="utf-8") as output_file:
+                        created_file = True
+                        output_file.write(content)
+                except FileExistsError as error:
+                    raise FileOutputError(
+                        "同名の棚卸シートがあります。別のファイル名を指定してください: "
+                        f"{output_path}"
+                    ) from error
+                except Exception as error:
+                    raise FileOutputError(
+                        f"棚卸シートを書き込めません: {output_path} ({error})"
+                    ) from error
+            return sheet
+        except BaseException as error:
+            if created_file:
+                try:
+                    output_path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_error:
+                    _LOGGER.exception(
+                        "棚卸シートの後始末に失敗しました。残存ファイルは使用できません: %s",
+                        output_path,
+                    )
+                    raise FileOutputError(
+                        f"{error}。新規ファイルの後始末に失敗しました: {output_path}。"
+                        "残存した棚卸シートの結果は使用できません。"
+                        f" ({cleanup_error})"
+                    ) from error
+            raise
+
+    def cancel_mobile_stocktake(self, client_id: int) -> None:
+        normalized_client_id = _integer(client_id, "クライアント ID", 1)
+        with transaction(self.conn):
+            if not self.stocktakes.delete(normalized_client_id):
+                raise ValidationError("指定されたクライアントは棚卸手続き中ではありません")
+
+    def preview_mobile_stocktake(self, raw_text: str) -> MobileStocktakePreview:
+        payload = parse_stocktake_payload(raw_text)
+        with read_transaction(self.conn):
+            preview, _, _ = self._validate_mobile_stocktake_payload(payload)
+            return preview
+
+    def _validate_mobile_stocktake_payload(
+        self, payload: MobileStocktakePayload
+    ) -> tuple[MobileStocktakePreview, dict[int, MobileStocktakeEntry], list[ItemRow]]:
+        active_stocktake = self.stocktakes.get_by_session(payload.session_id)
+        if active_stocktake is None:
+            raise ValidationError(
+                "この棚卸シートは無効です。中止または再出力された可能性があります。"
+                "最新出力したシートの結果を使用してください"
+            )
+        if payload.client_id != active_stocktake.client_id:
+            raise ValidationError("棚卸結果のクライアントがシートと一致しません")
+
+        items = self.items.list(ItemFilter(client_id=active_stocktake.client_id))
+        entries_by_id = {entry.item_id: entry for entry in payload.entries}
+        if {item.id for item in items} != set(entries_by_id):
+            raise ValidationError("棚卸結果の品目一覧が対象クライアントの有効品目と一致しません")
+
+        rows = tuple(
+            MobileStocktakePreviewRow(
+                item_id=item.id,
+                code=item.code,
+                name=item.name,
+                location_name=item.location_name,
+                book_quantity=item.quantity,
+                actual_quantity=entries_by_id[item.id].actual_quantity,
+                delta=entries_by_id[item.id].actual_quantity - item.quantity,
+                note=entries_by_id[item.id].note,
+            )
+            for item in items
+        )
+        preview = MobileStocktakePreview(
+            session_id=active_stocktake.session_id,
+            client_id=active_stocktake.client_id,
+            client_name=active_stocktake.client_name,
+            staff_id=active_stocktake.staff_id,
+            staff_name=active_stocktake.staff_name,
+            started_at=active_stocktake.started_at,
+            rows=rows,
+            unchanged_count=sum(row.delta == 0 for row in rows),
+            increased_count=sum(row.delta > 0 for row in rows),
+            decreased_count=sum(row.delta < 0 for row in rows),
+        )
+        return preview, entries_by_id, items
+
+    def complete_mobile_stocktake(self, raw_text: str, staff_id: int) -> list[StockMovement]:
+        payload = parse_stocktake_payload(raw_text)
+        with transaction(self.conn):
+            preview, entries_by_id, items = self._validate_mobile_stocktake_payload(payload)
+            staff = self._require_active_staff(staff_id)
+            moved_at = utc_now_str(self.clock())
+            for item in items:
+                latest_moved_at = self.movements.latest_moved_at(item.id)
+                if latest_moved_at is not None and is_before_utc(moved_at, latest_moved_at):
+                    raise ValidationError("記録時刻が対象品目の最新履歴より前のため保存できません")
+
+            movements: list[StockMovement] = []
+            for item in items:
+                entry = entries_by_id[item.id]
+                delta = entry.actual_quantity - item.quantity
+                unit_price = item.reference_price if delta > 0 else None
+                if unit_price is not None:
+                    unit_price = _optional_integer(unit_price, "適用単価", 0, MAX_UNIT_PRICE)
+                allocations: tuple[Allocation, ...] = ()
+                if delta < 0:
+                    allocations, _ = plan_fifo_allocations(
+                        self.allocations.list_available_lots(item.id), -delta
+                    )
+                movements.append(
+                    self._record_movement(
+                        item,
+                        staff.id,
+                        Reason.ADJUST,
+                        delta,
+                        unit_price,
+                        None,
+                        entry.note,
+                        allocations=allocations,
+                        moved_at=moved_at,
+                    )
+                )
+            self.stocktakes.delete(preview.client_id)
+            return movements
+
     def reverse(self, movement_id: int, staff_id: int, note: str | None = None) -> StockMovement:
         normalized_note = _normalize_optional(note, "備考")
         with transaction(self.conn):
@@ -409,6 +612,7 @@ class InventoryService:
             if original.reason is Reason.ADJUST and original.delta == 0:
                 raise ReversalNotAllowedError("差分 0 の棚卸履歴は取り消せません")
             item = self._require_active_item(original.item_id)
+            self._require_client_not_in_stocktake(item.client_id)
             staff = self._require_active_staff(staff_id)
             delta = -original.delta
             if item.quantity + delta > MAX_STOCK_QUANTITY:
@@ -462,13 +666,15 @@ class InventoryService:
             original = self.movements.get(movement_id)
             if original is None:
                 return "履歴が見つかりません"
+            item = self.items.get(original.item_id)
+            if item is not None and self.stocktakes.is_client_locked(item.client_id):
+                return "対象クライアントがスマホ棚卸手続き中のため取り消せません"
             if original.reversal_of is not None:
                 return "取り消し行は取り消せません"
             if self.movements.is_reversed(original.id):
                 return "この履歴はすでに取り消されています"
             if original.reason is Reason.ADJUST and original.delta == 0:
                 return "差分 0 の棚卸履歴は取り消せません"
-            item = self.items.get(original.item_id)
             if item is None or not item.is_active:
                 return "廃止品目の履歴は取り消せません"
             resulting_quantity = item.quantity - original.delta
@@ -497,6 +703,7 @@ class InventoryService:
         normalized_note = _normalize_optional(note, "備考")
         with transaction(self.conn):
             item = self._require_active_item(item_id)
+            self._require_client_not_in_stocktake(item.client_id)
             staff = self._require_active_staff(staff_id)
             if item.quantity + delta < 0:
                 raise NegativeStockError("在庫数が負になるため実行できません")
@@ -556,10 +763,11 @@ class InventoryService:
         reversal_of: int | None = None,
         allocations: tuple[Allocation, ...] = (),
         cost_amount: int | None = None,
+        moved_at: str | None = None,
     ) -> StockMovement:
-        moved_at = utc_now_str(self.clock())
+        recorded_at = utc_now_str(self.clock()) if moved_at is None else moved_at
         latest_moved_at = self.movements.latest_moved_at(item.id)
-        if latest_moved_at is not None and is_before_utc(moved_at, latest_moved_at):
+        if latest_moved_at is not None and is_before_utc(recorded_at, latest_moved_at):
             raise ValidationError("記録時刻が対象品目の最新履歴より前のため保存できません")
         movement = self.movements.insert(
             item_id=item.id,
@@ -573,7 +781,7 @@ class InventoryService:
             used_for=used_for,
             reversal_of=reversal_of,
             note=note,
-            moved_at=moved_at,
+            moved_at=recorded_at,
         )
         self.allocations.insert_many(movement.id, allocations)
         self.items.add_quantity(item.id, delta)
@@ -611,6 +819,14 @@ class InventoryService:
     def _require_active_staff(self, staff_id: int) -> Staff:
         return _active_master(self.masters.get_staff(_integer(staff_id, "担当者 ID", 1)), "担当者")
 
+    def _require_client_not_in_stocktake(self, client_id: int) -> None:
+        active_stocktake = self.stocktakes.get(client_id)
+        if active_stocktake is not None:
+            raise StocktakeInProgressError(
+                f"クライアント「{active_stocktake.client_name}」は"
+                "スマホ棚卸手続き中のため操作できません"
+            )
+
     def _require_selectable_client(self, client_id: int, current_id: int) -> None:
         client = self.masters.get_client(client_id)
         if client is None:
@@ -630,6 +846,7 @@ class MasterService:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.repository = MasterRepository(conn)
+        self.stocktakes = StocktakeRepository(conn)
 
     def add_client(self, name: str) -> Client:
         with transaction(self.conn):
@@ -774,13 +991,33 @@ class MasterService:
         return self.repository.location_in_use(entity_id)
 
     def can_delete_client(self, entity_id: int) -> bool:
-        return self._exists("client", entity_id) and not self.client_in_use(entity_id)
+        return (
+            self._exists("client", entity_id)
+            and self.stocktakes.get(entity_id) is None
+            and not self.client_in_use(entity_id)
+        )
 
     def can_delete_purchaser(self, entity_id: int) -> bool:
         return self._exists("purchaser", entity_id) and not self.purchaser_in_use(entity_id)
 
     def can_delete_staff(self, entity_id: int) -> bool:
-        return self._exists("staff", entity_id) and not self.staff_in_use(entity_id)
+        return (
+            self._exists("staff", entity_id)
+            and not self.stocktakes.is_staff_referenced(entity_id)
+            and not self.staff_in_use(entity_id)
+        )
+
+    def stocktake_lock_reason(self, kind: str, entity_id: int) -> str | None:
+        normalized_id = _integer(entity_id, "マスタ ID", 1)
+        if kind == "client":
+            if self.stocktakes.get(normalized_id) is not None:
+                return "スマホ棚卸手続き中のため無効化・削除できません"
+            return None
+        if kind == "staff":
+            if self.stocktakes.is_staff_referenced(normalized_id):
+                return "スマホ棚卸のシート作成担当者として登録中のため削除できません"
+            return None
+        raise ValidationError("棚卸ロックの対象種別が正しくありません")
 
     def can_delete_category(self, entity_id: int) -> bool:
         return self._exists("category", entity_id) and not self.category_in_use(entity_id)
@@ -791,6 +1028,14 @@ class MasterService:
     def _set_active(self, kind: str, entity_id: int, is_active: bool) -> Client | Purchaser | Staff:
         normalized_id = _integer(entity_id, "マスタ ID", 1)
         with transaction(self.conn):
+            if (
+                kind == "client"
+                and not is_active
+                and self.stocktakes.get(normalized_id) is not None
+            ):
+                raise StocktakeInProgressError(
+                    "スマホ棚卸手続き中のクライアントは無効化・削除できません"
+                )
             if kind == "client":
                 return self.repository.set_client_active(normalized_id, is_active)
             if kind == "purchaser":
@@ -802,6 +1047,12 @@ class MasterService:
         with transaction(self.conn):
             if not self._exists(kind, normalized_id):
                 raise ValidationError("マスタが見つかりません")
+            if kind == "client" and self.stocktakes.get(normalized_id) is not None:
+                raise StocktakeInProgressError(
+                    "スマホ棚卸手続き中のクライアントは無効化・削除できません"
+                )
+            if kind == "staff" and self.stocktakes.is_staff_referenced(normalized_id):
+                raise StocktakeInProgressError("スマホ棚卸のシート作成担当者は削除できません")
             if self._in_use(kind, normalized_id):
                 raise MasterInUseError("使用中または保持が必要なマスタは削除できません")
             if kind == "client":
@@ -891,12 +1142,14 @@ class PreparedRestore:
         movement_count: int,
         last_moved_at: str | None,
         temporary_directory: tempfile.TemporaryDirectory[str],
+        stocktake_client_names: tuple[str, ...] = (),
     ) -> None:
         self.path = path
         self.source_version = source_version
         self.item_count = item_count
         self.movement_count = movement_count
         self.last_moved_at = last_moved_at
+        self.stocktake_client_names = stocktake_client_names
         self._temporary_directory = temporary_directory
         self._closed = False
 
@@ -1078,6 +1331,10 @@ class BackupService:
                 reasons = self.inspect_database(prepared_conn, SCHEMA_VERSION)
                 if reasons:
                     raise InvalidBackupError(tuple(reasons))
+                stocktake_client_names = tuple(
+                    stocktake.client_name
+                    for stocktake in StocktakeRepository(prepared_conn).list_all()
+                )
             finally:
                 prepared_conn.close()
 
@@ -1088,6 +1345,7 @@ class BackupService:
                 source_movement_count,
                 last_moved_at,
                 temporary_directory,
+                stocktake_client_names,
             )
         except InvalidBackupError:
             temporary_directory.cleanup()
