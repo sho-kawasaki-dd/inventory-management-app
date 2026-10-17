@@ -1537,6 +1537,28 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       return `IMM1:${{encoded}}.${{crc32(encoded)}}:END`;
     }}
 
+    // file: などの安全でないコンテキストでは navigator.clipboard が使えないための代替
+    function copyTextLegacy(text) {{
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.top = "0";
+      area.style.left = "0";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      try {{
+        area.focus();
+        area.select();
+        area.setSelectionRange(0, text.length);
+        return document.execCommand("copy");
+      }} catch {{
+        return false;
+      }} finally {{
+        area.remove();
+      }}
+    }}
+
     function showResultInTextarea(message) {{
       const code = createResultText();
       resultTextEl.value = code;
@@ -1607,28 +1629,32 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
         return;
       }}
 
-      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {{
+      const onCopied = () => {{
+        resultFeedbackEl.textContent =
+          "結果テキストをクリップボードにコピーしました。" +
+          "貼り付けできない場合は「結果テキストを表示」も利用できます。";
+        resultFeedbackEl.hidden = false;
+      }};
+      const onFailed = () => {{
         showResultInTextarea(
           "クリップボードへ直接コピーできないため、結果テキストを表示しました。" +
           "長押しでコピーしてください。"
         );
-        return;
-      }}
+      }};
 
-      navigator.clipboard.writeText(code).then(
-        () => {{
-          resultFeedbackEl.textContent =
-            "結果テキストをクリップボードにコピーしました。" +
-            "貼り付けできない場合は「結果テキストを表示」も利用できます。";
-          resultFeedbackEl.hidden = false;
-        }},
-        () => {{
-          showResultInTextarea(
-            "クリップボードへのコピーに失敗したため、結果テキストを表示しました。" +
-            "長押しでコピーしてください。"
-          );
-        }}
-      );
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {{
+        navigator.clipboard.writeText(code).then(onCopied, () => {{
+          if (copyTextLegacy(code)) {{
+            onCopied();
+          }} else {{
+            onFailed();
+          }}
+        }});
+      }} else if (copyTextLegacy(code)) {{
+        onCopied();
+      }} else {{
+        onFailed();
+      }}
     }});
 
     saveResultBtn.addEventListener("click", () => {{

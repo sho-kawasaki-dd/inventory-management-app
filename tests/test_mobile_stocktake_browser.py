@@ -365,6 +365,7 @@ def test_generated_html_confirmation_validation_restore_and_fallbacks(tmp_path: 
                     value: { writeText: () => Promise.reject(new Error('Clipboard blocked')) },
                     configurable: true
                 });
+                document.execCommand = () => false;
             }"""
         )
         copy_btn.click()
@@ -582,11 +583,28 @@ def test_generated_html_copy_success_and_missing_clipboard(tmp_path: Path) -> No
         )
         assert result_box.is_hidden()
 
-        # navigator.clipboard が使えない環境(安全でないコンテキスト等)
+        # navigator.clipboard が使えない環境でも execCommand でコピーできること
         page.evaluate(
-            "() => Object.defineProperty(navigator, 'clipboard', "
-            "{ value: undefined, configurable: true })"
+            """() => {
+                window.__legacy_copied = null;
+                Object.defineProperty(navigator, 'clipboard', {
+                    value: undefined, configurable: true
+                });
+                document.execCommand = command => {
+                    const active = document.activeElement;
+                    window.__legacy_copied = command === 'copy' ? active.value : null;
+                    return true;
+                };
+            }"""
         )
+        copy_btn.click()
+        legacy_copied = page.evaluate("() => window.__legacy_copied")
+        assert parse_stocktake_payload(legacy_copied).entries[0].actual_quantity == 7
+        assert "コピーしました" in page.locator("#result-feedback").inner_text()
+        assert result_box.is_hidden()
+
+        # 代替コピーも失敗する環境
+        page.evaluate("() => { document.execCommand = () => false; }")
         copy_btn.click()
         assert result_box.is_visible()
         assert "直接コピーできない" in page.locator("#result-feedback").inner_text()
