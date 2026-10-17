@@ -22,7 +22,7 @@ from inventory_manager_mini.db.integrity import (
     replay_allocations,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MIN_SUPPORTED_SCHEMA_VERSION = 1
 
 
@@ -37,6 +37,16 @@ _MIGRATION_V2_SQL = (
     "CREATE INDEX idx_movements_item_purchase ON stock_movements "
     "(item_id, moved_at DESC, id DESC) WHERE reason = 'in' AND reversal_of IS NULL;"
 )
+_MIGRATION_V5_SQL = """CREATE TABLE active_stocktakes (
+    client_id INTEGER PRIMARY KEY REFERENCES clients(id),
+    session_id TEXT NOT NULL UNIQUE CHECK (
+        typeof(session_id) = 'text'
+        AND length(session_id) = 32
+        AND session_id NOT GLOB '*[^0-9a-f]*'
+    ),
+    staff_id INTEGER NOT NULL REFERENCES staff(id),
+    started_at TEXT NOT NULL DEFAULT (datetime('now'))
+);"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,6 +575,7 @@ MIGRATIONS: dict[int, MigrationStep] = {
     2: MigrationStep(_MIGRATION_V2_SQL),
     3: MigrationStep(_migrate_v2_to_v3, find_limit_violations, rebuilds_tables=True),
     4: MigrationStep(_migrate_v3_to_v4, find_fifo_migration_violations, rebuilds_tables=True),
+    5: MigrationStep(_MIGRATION_V5_SQL),
 }
 
 SCHEMA_SPECS: dict[int, SchemaSpec] = {
@@ -574,6 +585,9 @@ SCHEMA_SPECS: dict[int, SchemaSpec] = {
         files("inventory_manager_mini.db").joinpath("schema_v3.sql").read_text(encoding="utf-8")
     ),
     4: _schema_spec_from_ddl(
+        files("inventory_manager_mini.db").joinpath("schema_v4.sql").read_text(encoding="utf-8")
+    ),
+    5: _schema_spec_from_ddl(
         files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
     ),
 }

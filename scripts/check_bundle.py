@@ -59,6 +59,7 @@ def _required_files(version: str) -> list[Path]:
         internal / "PySide6" / "plugins" / "platforms" / "qwindows.dll",
         internal / "inventory_manager_mini" / "db" / "schema.sql",
         internal / "inventory_manager_mini" / "db" / "schema_v3.sql",
+        internal / "inventory_manager_mini" / "db" / "schema_v4.sql",
         internal / f"inventory_manager_mini-{version}.dist-info" / "METADATA",
         Path("LICENSE"),
         Path("DISTRIBUTION_LICENSE.txt"),

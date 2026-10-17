@@ -44,6 +44,9 @@ def _create_inventory_database(
         elif schema_version == 3:
             schema_v3 = files("inventory_manager_mini.db").joinpath("schema_v3.sql")
             create_schema(conn, schema_v3.read_text(encoding="utf-8"), version=3)
+        elif schema_version == 4:
+            schema_v4 = files("inventory_manager_mini.db").joinpath("schema_v4.sql")
+            create_schema(conn, schema_v4.read_text(encoding="utf-8"), version=4)
         else:
             create_schema(conn, version=schema_version)
         conn.executemany("INSERT INTO clients (id, name) VALUES (?, ?)", [(1, "クライアント")])
@@ -351,7 +354,7 @@ def test_prepare_restore_migrates_v3_and_rechecks_fifo_integrity(tmp_path: Path)
     with BackupService().prepare_restore(source_path) as prepared:
         restored = connect_readonly(prepared.path)
         try:
-            assert restored.execute("PRAGMA user_version").fetchone() == (4,)
+            assert restored.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
             assert restored.execute(
                 "SELECT unit_price, cost_amount FROM stock_movements WHERE id = 11"
             ).fetchone() == (None, 100)
@@ -364,7 +367,7 @@ def test_prepare_restore_migrates_v3_and_rechecks_fifo_integrity(tmp_path: Path)
         writable = connect(prepared.path)
         try:
             writable.execute("UPDATE stock_allocations SET quantity = 2 WHERE movement_id = 11")
-            reasons = BackupService().inspect_database(writable, 4)
+            reasons = BackupService().inspect_database(writable, SCHEMA_VERSION)
             assert any("引当明細" in reason and "一致しません" in reason for reason in reasons)
         finally:
             writable.close()
@@ -372,7 +375,7 @@ def test_prepare_restore_migrates_v3_and_rechecks_fifo_integrity(tmp_path: Path)
     assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
 
 
-def test_prepare_restore_migrates_v2_database_through_v4(tmp_path: Path) -> None:
+def test_prepare_restore_migrates_v2_database_through_v5(tmp_path: Path) -> None:
     source_path = tmp_path / "v2-backup.db"
     _create_inventory_database(source_path, "v2復元品", schema_version=2)
     source_hash = hashlib.sha256(source_path.read_bytes()).digest()
@@ -380,14 +383,43 @@ def test_prepare_restore_migrates_v2_database_through_v4(tmp_path: Path) -> None
     with BackupService().prepare_restore(source_path) as prepared:
         restored = connect_readonly(prepared.path)
         try:
-            assert restored.execute("PRAGMA user_version").fetchone() == (4,)
-            assert migrations.inspect_schema(restored, 4) == []
+            assert restored.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+            assert migrations.inspect_schema(restored, SCHEMA_VERSION) == []
             assert restored.execute("PRAGMA foreign_key_check").fetchall() == []
             assert restored.execute("SELECT name FROM items").fetchone() == ("v2復元品",)
         finally:
             restored.close()
 
     assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+
+
+def test_prepare_restore_migrates_v4_backup_to_v5(tmp_path: Path) -> None:
+    source_path = tmp_path / "source-v4.db"
+    _create_inventory_database(source_path, "v4品目", schema_version=4)
+
+    with BackupService().prepare_restore(source_path) as prepared:
+        restored = connect_readonly(prepared.path)
+        try:
+            assert restored.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+            assert migrations.inspect_schema(restored, SCHEMA_VERSION) == []
+            assert restored.execute("PRAGMA foreign_key_check").fetchall() == []
+        finally:
+            restored.close()
+
+
+def test_inspect_database_accepts_v5_with_active_stocktake(tmp_path: Path) -> None:
+    database_path = tmp_path / "active-stocktake.db"
+    _create_inventory_database(database_path, "棚卸品目")
+    conn = connect(database_path)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "a" * 32, 1),
+        )
+
+        assert BackupService().inspect_database(conn, SCHEMA_VERSION) == []
+    finally:
+        conn.close()
 
 
 def test_backup_service_stops_before_business_checks_when_schema_is_invalid(
@@ -953,7 +985,7 @@ def test_inspect_database_compares_aggregates_with_the_method_of_each_version(
     tmp_path: Path,
 ) -> None:
     v4_path = tmp_path / "v4.db"
-    _create_inventory_database(v4_path, "v4")
+    _create_inventory_database(v4_path, "v4", schema_version=4)
     _add_fifo_history(v4_path)
     v3_path = tmp_path / "v3.db"
     _create_inventory_database(v3_path, "v3", schema_version=3)

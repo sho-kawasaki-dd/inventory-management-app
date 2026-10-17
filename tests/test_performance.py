@@ -806,6 +806,7 @@ def test_v4_migration_with_large_history(performance_db: Path, tmp_path: Path) -
         legacy_path,
         tmp_path / "v4-migration-backups",
         backup_timestamp=lambda: "20261010_120000",
+        schema_version=4,
     )
     elapsed = time.perf_counter() - started_at
     try:

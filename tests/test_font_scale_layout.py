@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox, QPush
 
 from inventory_manager_mini.core.models import Category, NewItem
 from inventory_manager_mini.core.services import PreparedRestore
+from inventory_manager_mini.db.migrations import SCHEMA_VERSION
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs.history_dialog import HistoryDialog
 from inventory_manager_mini.ui.dialogs.history_export_dialog import HistoryExportDialog
@@ -31,7 +32,7 @@ def dialog_context(seeded_conn, inventory, master, settings, tmp_path: Path) -> 
         master=master,
         settings=settings,
         db_path=tmp_path / "test.db",
-        schema_version=4,
+        schema_version=SCHEMA_VERSION,
     )
 
 

@@ -20,6 +20,7 @@ FIXED_FILES = [
     "_internal/PySide6/plugins/platforms/qwindows.dll",
     "_internal/inventory_manager_mini/db/schema.sql",
     "_internal/inventory_manager_mini/db/schema_v3.sql",
+    "_internal/inventory_manager_mini/db/schema_v4.sql",
     f"_internal/inventory_manager_mini-{VERSION}.dist-info/METADATA",
     "LICENSE",
     "DISTRIBUTION_LICENSE.txt",
@@ -88,7 +89,8 @@ def test_rejects_metadata_version_mismatch(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     _make_bundle(bundle_dir)
-    metadata_path = bundle_dir / FIXED_FILES[8]
+    metadata_relative_path = next(path for path in FIXED_FILES if path.endswith("/METADATA"))
+    metadata_path = bundle_dir / metadata_relative_path
     metadata_path.write_text(
         "Metadata-Version: 2.1\nName: inventory-manager-mini\nVersion: 9.9.9\n",
         encoding="utf-8",

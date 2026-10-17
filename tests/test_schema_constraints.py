@@ -418,6 +418,53 @@ def test_movement_reason_and_delta_checks(
         _insert_movement(schema_conn, reason=reason, delta=delta)
 
 
+@pytest.mark.parametrize(
+    "session_id",
+    ["", "a" * 31, "a" * 33, "A" * 32, "g" * 32],
+)
+def test_active_stocktakes_rejects_invalid_session_ids(
+    schema_conn: sqlite3.Connection, session_id: str
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, session_id, 1),
+        )
+
+
+def test_active_stocktakes_enforces_client_and_session_uniqueness(
+    schema_conn: sqlite3.Connection,
+) -> None:
+    session_id = "a" * 32
+    schema_conn.execute(
+        "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+        (1, session_id, 1),
+    )
+    schema_conn.execute("INSERT INTO clients (id, name) VALUES (2, '別クライアント')")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "b" * 32, 1),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (2, session_id, 1),
+        )
+
+
+@pytest.mark.parametrize(("client_id", "staff_id"), [(99, 1), (1, 99)])
+def test_active_stocktakes_requires_existing_client_and_staff(
+    schema_conn: sqlite3.Connection, client_id: int, staff_id: int
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        schema_conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (client_id, "a" * 32, staff_id),
+        )
+
+
 def test_reversal_movement_is_exempt_from_reason_delta_sign_check(
     schema_conn: sqlite3.Connection,
 ) -> None:
