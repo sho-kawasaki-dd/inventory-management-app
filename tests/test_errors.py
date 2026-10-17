@@ -17,6 +17,7 @@ from inventory_manager_mini.core.errors import (
     RestoreError,
     ReversalNotAllowedError,
     SchemaTooNewError,
+    StocktakeInProgressError,
     UnsupportedSchemaError,
     ValidationError,
 )
@@ -35,6 +36,7 @@ from inventory_manager_mini.core.errors import (
         CategoryCycleError,
         PrefixLockedError,
         MasterInUseError,
+        StocktakeInProgressError,
         SchemaTooNewError,
         UnsupportedSchemaError,
     ],

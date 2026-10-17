@@ -50,6 +50,10 @@ class MasterInUseError(DomainError):
     pass
 
 
+class StocktakeInProgressError(DomainError):
+    pass
+
+
 class SchemaTooNewError(DomainError):
     pass
 
