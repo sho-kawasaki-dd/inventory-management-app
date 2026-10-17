@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -28,6 +30,18 @@ from inventory_manager_mini.ui.signals import DataBus
 # 1366×768 の画面からタスクバー分を除いた作業領域の目安
 WORK_AREA_WIDTH = 1366
 WORK_AREA_HEIGHT = 768 - 40
+
+
+@pytest.fixture(scope="session")
+def qapp_args(tmp_path_factory: pytest.TempPathFactory) -> list[str]:
+    if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        return []
+    config_path = tmp_path_factory.mktemp("qt-offscreen") / "config.json"
+    config_path.write_text(
+        json.dumps({"screens": [{"width": WORK_AREA_WIDTH, "height": WORK_AREA_HEIGHT}]}),
+        encoding="utf-8",
+    )
+    return ["pytest", "-platform", f"offscreen:configfile={config_path}"]
 
 
 @pytest.fixture

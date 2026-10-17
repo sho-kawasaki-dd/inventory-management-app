@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -26,9 +27,24 @@ from inventory_manager_mini.ui.dialogs.reversal_dialog import ReversalDialog
 from inventory_manager_mini.ui.display_settings import DisplaySettings, apply_display_settings
 from inventory_manager_mini.ui.main_window import MainWindow
 from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
-from tests.conftest import assert_buttons_reachable, assert_fits_work_area, create_test_context
+from tests.conftest import (
+    WORK_AREA_HEIGHT,
+    WORK_AREA_WIDTH,
+    assert_buttons_reachable,
+    assert_fits_work_area,
+    create_test_context,
+)
 
 SCALES = [100, 150]
+
+
+@pytest.mark.skipif(os.environ.get("QT_QPA_PLATFORM") != "offscreen", reason="offscreen 専用")
+def test_offscreen_matches_supported_work_area(qapp: QApplication) -> None:
+    screen = qapp.primaryScreen()
+    assert screen is not None
+    available = screen.availableGeometry()
+    assert available.width() == WORK_AREA_WIDTH
+    assert available.height() == WORK_AREA_HEIGHT
 
 
 @pytest.fixture
