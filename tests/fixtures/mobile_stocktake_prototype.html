@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>スマホ棚卸 最小実証</title>
+</head>
+<body>
+  <h1>備品棚卸</h1>
+  <main id="items"></main>
+  <button id="show-result" disabled>結果テキストを表示</button>
+  <textarea id="result" aria-label="結果テキスト" hidden></textarea>
+  <button id="save-result" disabled>結果 JSON を保存</button>
+  <script>
+    const sessionId = "a0-prototype-session-000000000000";
+    const storageKey = `imm_stocktake_${sessionId}`;
+    const items = [
+      { id: 101, code: "DEMO-001", name: "日本語の備品", quantity: 4 },
+      { id: 102, code: "DEMO-002", name: "手袋", quantity: 12 },
+    ];
+    let state = Object.fromEntries(items.map(item => [item.id, {
+      actual: String(item.quantity), note: "", confirmed: false,
+    }]));
+
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const restored = JSON.parse(stored);
+        if (items.every(item => restored[item.id]
+            && typeof restored[item.id].actual === "string"
+            && typeof restored[item.id].note === "string"
+            && typeof restored[item.id].confirmed === "boolean")) {
+          state = restored;
+        }
+      }
+    } catch {
+      document.body.dataset.storageError = "true";
+    }
+
+    function saveState() {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(state));
+        document.body.dataset.storageError = "false";
+      } catch {
+        document.body.dataset.storageError = "true";
+      }
+    }
+
+    function render() {
+      const root = document.querySelector("#items");
+      root.replaceChildren();
+      for (const item of items) {
+        const card = document.createElement("section");
+        card.dataset.itemId = item.id;
+        const title = document.createElement("h2");
+        title.textContent = `${item.code} ${item.name} (帳簿 ${item.quantity})`;
+        const quantity = document.createElement("input");
+        quantity.type = "number";
+        quantity.min = "0";
+        quantity.max = "1000000";
+        quantity.step = "1";
+        quantity.setAttribute("aria-label", `${item.code} 実数`);
+        quantity.value = state[item.id].actual;
+        quantity.addEventListener("input", () => {
+          state[item.id] = { ...state[item.id], actual: quantity.value, confirmed: false };
+          saveState();
+          render();
+        });
+        const note = document.createElement("input");
+        note.type = "text";
+        note.setAttribute("aria-label", `${item.code} メモ`);
+        note.value = state[item.id].note;
+        note.addEventListener("input", () => {
+          state[item.id] = { ...state[item.id], note: note.value, confirmed: false };
+          saveState();
+          render();
+        });
+        const confirm = document.createElement("button");
+        confirm.textContent = state[item.id].confirmed ? "確認済み" : "この実数で確認";
+        confirm.disabled = !/^\d+$/.test(state[item.id].actual)
+          || Number(state[item.id].actual) > 1000000;
+        confirm.addEventListener("click", () => {
+          state[item.id].confirmed = true;
+          saveState();
+          render();
+        });
+        card.append(title, quantity, note, confirm);
+        root.append(card);
+      }
+      const complete = items.every(item => state[item.id].confirmed);
+      document.querySelector("#show-result").disabled = !complete;
+      document.querySelector("#save-result").disabled = !complete;
+    }
+
+    function crc32(value) {
+      let crc = 0xffffffff;
+      for (const byte of new TextEncoder().encode(value)) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit += 1) {
+          crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+        }
+      }
+      return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0");
+    }
+
+    function createPayload() {
+      return {
+        v: 1,
+        session_id: sessionId,
+        client_id: 1,
+        entries: items.map(item => ({
+          item_id: item.id,
+          actual_quantity: Number(state[item.id].actual),
+          note: state[item.id].note.trim() || null,
+        })),
+      };
+    }
+
+    function createResultText() {
+      const json = JSON.stringify(createPayload());
+      const bytes = new TextEncoder().encode(json);
+      const binary = Array.from(bytes, byte => String.fromCharCode(byte)).join("");
+      const encoded = btoa(binary);
+      return `IMM1:${encoded}.${crc32(encoded)}:END`;
+    }
+
+    document.querySelector("#show-result").addEventListener("click", () => {
+      const output = document.querySelector("#result");
+      output.value = createResultText();
+      output.hidden = false;
+      output.select();
+    });
+
+    document.querySelector("#save-result").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(createPayload(), null, 2)], {
+        type: "application/json",
+      });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "stocktake-result.json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+
+    render();
+  </script>
+</body>
+</html>

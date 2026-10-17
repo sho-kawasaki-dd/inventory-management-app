@@ -52,6 +52,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Install Playwright Chromium on Windows
+        if: runner.os == 'Windows'
+        run: uv run playwright install chromium
+
+      - name: Install Playwright Chromium on Linux
+        if: runner.os == 'Linux'
+        run: uv run playwright install --with-deps chromium
+
       - name: Lint
         run: uv run ruff check
 

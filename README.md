@@ -23,12 +23,15 @@ uv sync
 
 ```sh
 uv sync --locked
+uv run playwright install chromium
 uv run ruff check
 uv run ruff format --check
 uv run pyright
 uv run pytest --cov
 uv run coverage report --include="src/inventory_manager_mini/core/*,src/inventory_manager_mini/db/*" --fail-under=90
 ```
+
+Linux CI では Chromium とシステム依存関係を `uv run playwright install --with-deps chromium` で準備します。
 
 ## アプリの起動
 
