@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PySide6.QtCore import QMarginsF, QPointF, QRect, QSize, Qt
+from PySide6.QtCore import QMarginsF, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QDialog, QDialogButtonBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHeaderView, QSpinBox
 
 from inventory_manager_mini.core.models import ItemRow, PurchaseInfo
 from inventory_manager_mini.ui import error_handling
@@ -35,7 +35,12 @@ from inventory_manager_mini.ui.printing.layout import (
 from tests.conftest import assert_buttons_reachable, assert_fits_work_area
 
 
-def _item_row(note: str | None = "備考") -> ItemRow:
+def _item_row(
+    note: str | None = "備考",
+    *,
+    manufacturer_part_number: str | None = "MODEL-001",
+    application: str | None = "機器補修用",
+) -> ItemRow:
     return ItemRow(
         id=1,
         client_id=1,
@@ -50,8 +55,8 @@ def _item_row(note: str | None = "備考") -> ItemRow:
         reorder_quantity=None,
         purchase_url=None,
         supplier=None,
-        manufacturer_part_number=None,
-        application=None,
+        manufacturer_part_number=manufacturer_part_number,
+        application=application,
         reference_price=None,
         note=note,
         is_active=True,
@@ -77,6 +82,9 @@ class _FakeMetrics:
 
     def ascent(self) -> int:
         return 10
+
+    def boundingRect(self, text: str) -> QRect:
+        return QRect(0, -self.ascent(), len(text), self.ascent())
 
 
 class _FakePainter:
@@ -243,12 +251,95 @@ def test_render_labels_uses_device_metrics_and_preserves_selected_slot(
     slot_x, slot_y, _, _ = slot_rect_mm(LABEL_72212, 11, 1.0, -0.5)
     expected_x = (slot_x + 3.0) * dpi / 25.4
     expected_width = math.floor((LABEL_72212.label_width_mm - 6.0) * dpi / 25.4)
+    top_offsets_mm = (3.0, 9.0, 15.0, 21.0, 27.0, 33.0)
     assert device.new_page_calls == 0
-    assert len(painter.draw_calls) == 4
+    assert len(painter.draw_calls) == 6
     assert painter.draw_calls[0][0] == pytest.approx(expected_x)
-    assert painter.draw_calls[0][1] == pytest.approx((slot_y + 3.0) * dpi / 25.4 + 10)
-    assert painter.widths == [expected_width] * 4
+    assert [call[1] for call in painter.draw_calls] == pytest.approx(
+        [(slot_y + offset) * dpi / 25.4 + 10 for offset in top_offsets_mm]
+    )
+    assert [call[2] for call in painter.draw_calls] == [
+        "棚ラベルの品目",
+        "MODEL-001",
+        "機器補修用",
+        "ITEM-001",
+        "棚A-1",
+        "備考 2行目",
+    ]
+    assert painter.widths == [expected_width] * 6
     assert painter.draw_calls[-1][2] == "備考 2行目"
+
+
+@pytest.mark.parametrize("manufacturer_part_number", ["MODEL-001", None, ""])
+@pytest.mark.parametrize("application", ["機器補修用", None, ""])
+def test_render_labels_keeps_blank_rows_in_their_fixed_positions(
+    monkeypatch,
+    manufacturer_part_number: str | None,
+    application: str | None,
+) -> None:
+    painter = _FakePainter()
+    device = _FakeDevice()
+    _install_fake_painter(monkeypatch, painter)
+    item = _item_row(
+        manufacturer_part_number=manufacturer_part_number,
+        application=application,
+    )
+
+    label_renderer.render_labels(
+        _as_paged_device(device),
+        [LabelPlacement(1, 0, 1)],
+        {1: item},
+        LABEL_72212,
+        0.0,
+        0.0,
+    )
+
+    offsets = (3.0, 9.0, 15.0, 21.0, 27.0, 33.0)
+    texts = (
+        item.name,
+        item.manufacturer_part_number or "",
+        item.application or "",
+        item.code,
+        item.location_name or "",
+        item.note or "",
+    )
+    slot_y = slot_rect_mm(LABEL_72212, 0)[1]
+    expected_rows = [(text, offset) for text, offset in zip(texts, offsets, strict=True) if text]
+    assert [call[2] for call in painter.draw_calls] == [text for text, _ in expected_rows]
+    assert [call[1] for call in painter.draw_calls] == pytest.approx(
+        [(slot_y + offset) * device.dpi / 25.4 + 10 for _, offset in expected_rows]
+    )
+    assert (
+        painter.widths == [math.floor((LABEL_72212.label_width_mm - 6.0) * device.dpi / 25.4)] * 6
+    )
+
+
+def test_render_labels_replaces_newlines_in_application_and_note(monkeypatch) -> None:
+    painter = _FakePainter()
+    _install_fake_painter(monkeypatch, painter)
+    item = _item_row(
+        "備考1\r\n備考2\r備考3\n備考4",
+        application="用途1\r\n用途2\r用途3\n用途4",
+    )
+
+    label_renderer.render_labels(
+        _as_paged_device(_FakeDevice()),
+        [LabelPlacement(1, 0, 1)],
+        {1: item},
+        LABEL_72212,
+        0.0,
+        0.0,
+    )
+
+    assert [call[2] for call in painter.draw_calls] == [
+        "棚ラベルの品目",
+        "MODEL-001",
+        "用途1 用途2 用途3 用途4",
+        "ITEM-001",
+        "棚A-1",
+        "備考1 備考2 備考3 備考4",
+    ]
+    assert all("\r" not in call[2] and "\n" not in call[2] for call in painter.draw_calls)
 
 
 def test_render_labels_empty_placements_do_not_start_painter(monkeypatch) -> None:
@@ -295,7 +386,7 @@ def test_render_labels_new_page_failure_stops_before_later_page(monkeypatch) -> 
         )
 
     assert device.new_page_calls == 1
-    assert len(painter.draw_calls) == 4
+    assert len(painter.draw_calls) == 6
     assert painter.end_calls == 1
 
 
@@ -367,6 +458,78 @@ def test_label_print_dialog_defaults_and_updates_page_count(qtbot) -> None:
     assert dialog.entries[0] == LabelEntry(1, 12)
 
 
+@pytest.mark.parametrize(
+    ("manufacturer_part_number", "application"),
+    [
+        (manufacturer_part_number, application)
+        for manufacturer_part_number in ("MODEL-001", None, "")
+        for application in ("機器補修用", None, "")
+    ],
+)
+def test_label_print_dialog_displays_item_details_and_quantity_in_last_column(
+    qtbot,
+    manufacturer_part_number: str | None,
+    application: str | None,
+) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    dialog = LabelPrintDialog(
+        [
+            _item_row(
+                manufacturer_part_number=manufacturer_part_number,
+                application=application,
+            )
+        ]
+    )
+    qtbot.addWidget(dialog)
+
+    table = dialog.item_table
+    header = table.horizontalHeader()
+    assert table.columnCount() == 5
+    header_labels = []
+    for column in range(5):
+        header_item = table.horizontalHeaderItem(column)
+        assert header_item is not None
+        header_labels.append(header_item.text())
+    assert header_labels == [
+        "管理番号",
+        "品名",
+        "メーカー型番",
+        "用途",
+        "枚数",
+    ]
+    assert [header.sectionResizeMode(column) for column in range(5)] == [
+        QHeaderView.ResizeMode.ResizeToContents,
+        QHeaderView.ResizeMode.Stretch,
+        QHeaderView.ResizeMode.Interactive,
+        QHeaderView.ResizeMode.Interactive,
+        QHeaderView.ResizeMode.Fixed,
+    ]
+    assert [table.columnWidth(column) for column in (2, 3, 4)] == [140, 140, 90]
+
+    expected_texts = [
+        "ITEM-001",
+        "棚ラベルの品目",
+        manufacturer_part_number or "",
+        application or "",
+    ]
+    for column, expected_text in enumerate(expected_texts):
+        cell = table.item(0, column)
+        assert cell is not None
+        assert cell.text() == expected_text
+        assert not cell.flags() & Qt.ItemFlag.ItemIsEditable
+        if column > 0:
+            assert cell.toolTip() == expected_text
+
+    assert table.cellWidget(0, 2) is None
+    assert table.cellWidget(0, 3) is None
+    quantity_spin = table.cellWidget(0, 4)
+    assert isinstance(quantity_spin, QSpinBox)
+    assert quantity_spin is dialog.quantity_spins[0]
+    assert quantity_spin.minimum() == 1
+    assert quantity_spin.maximum() == 99
+
+
 def test_label_print_dialog_requires_at_least_one_slot(qtbot) -> None:
     from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
 
@@ -387,18 +550,27 @@ def test_label_print_dialog_requires_at_least_one_slot(qtbot) -> None:
     assert ok_button.isEnabled()
 
 
-def test_label_print_dialog_fits_at_large_font_scale(qtbot) -> None:
+@pytest.mark.parametrize("font_scale", [1.0, 1.5])
+def test_label_print_dialog_fits_at_large_font_scale(qtbot, font_scale: float) -> None:
     from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
 
     rows = [
-        replace(_item_row(), id=index, code=f"ITEM-{index:03d}", name=f"品目{index}")
+        replace(
+            _item_row(
+                manufacturer_part_number=f"MODEL-{index:03d}-" + "X" * 80,
+                application="機器補修用" * 20,
+            ),
+            id=index,
+            code=f"ITEM-{index:03d}",
+            name=f"長い品目名{index}-" + "部品" * 20,
+        )
         for index in range(1, 41)
     ]
     dialog = LabelPrintDialog(rows)
     qtbot.addWidget(dialog)
     original_font = dialog.font()
     large_font = QFont(original_font)
-    large_font.setPointSizeF(original_font.pointSizeF() * 1.5)
+    large_font.setPointSizeF(original_font.pointSizeF() * font_scale)
     dialog.setFont(large_font)
     dialog.show()
     qtbot.waitExposed(dialog)
@@ -410,6 +582,49 @@ def test_label_print_dialog_fits_at_large_font_scale(qtbot) -> None:
         dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
     )
     assert dialog.item_table.verticalScrollBar().maximum() > 0
+    first_quantity_spin = dialog.quantity_spins[0]
+    assert first_quantity_spin.isVisible()
+    first_spin_rect = QRect(
+        first_quantity_spin.mapTo(dialog.item_table.viewport(), QPoint(0, 0)),
+        first_quantity_spin.size(),
+    )
+    assert dialog.item_table.viewport().rect().contains(first_spin_rect)
+    long_texts = (
+        rows[0].name,
+        rows[0].manufacturer_part_number or "",
+        rows[0].application or "",
+    )
+    for column, expected_text in enumerate(long_texts, start=1):
+        cell = dialog.item_table.item(0, column)
+        assert cell is not None
+        assert cell.text() == expected_text
+        assert cell.toolTip() == expected_text
+
+    dialog.item_table.setColumnWidth(2, 500)
+    dialog.item_table.setColumnWidth(3, 500)
+    horizontal_scrollbar = dialog.item_table.horizontalScrollBar()
+    qtbot.waitUntil(lambda: horizontal_scrollbar.maximum() > 0)
+    header = dialog.item_table.horizontalHeader()
+    viewport_width = dialog.item_table.viewport().width()
+    visible_columns: set[int] = set()
+    for scroll_position in range(
+        horizontal_scrollbar.minimum(), horizontal_scrollbar.maximum() + 1
+    ):
+        horizontal_scrollbar.setValue(scroll_position)
+        for column in range(dialog.item_table.columnCount()):
+            column_left = header.sectionViewportPosition(column)
+            column_right = column_left + header.sectionSize(column)
+            if column_left < viewport_width and column_right > 0:
+                visible_columns.add(column)
+    assert visible_columns == set(range(dialog.item_table.columnCount()))
+
+    first_slot_checkbox = dialog.slot_checkboxes[0]
+    dialog.scroll_area.ensureWidgetVisible(first_slot_checkbox)
+    checkbox_rect = QRect(
+        first_slot_checkbox.mapTo(dialog.scroll_area.viewport(), QPoint(0, 0)),
+        first_slot_checkbox.size(),
+    )
+    assert dialog.scroll_area.viewport().rect().contains(checkbox_rect)
 
 
 def test_label_print_dialog_does_not_retain_settings_between_instances(qtbot) -> None:
@@ -897,7 +1112,7 @@ class _MeasuringPainter:
 
     def __init__(self) -> None:
         self._painter = QPainter()
-        self.drawn: list[tuple[str, int, float]] = []
+        self.drawn: list[tuple[str, int, float, bool, str, float, int, int, QRect]] = []
 
     def begin(self, device: object) -> bool:
         return self._painter.begin(cast(QPagedPaintDevice, device))
@@ -912,8 +1127,22 @@ class _MeasuringPainter:
         return self._painter.fontMetrics()
 
     def drawText(self, point: QPointF, text: str) -> None:
-        width = self._painter.fontMetrics().horizontalAdvance(text)
-        self.drawn.append((text, width, self._painter.font().pointSizeF()))
+        font = self._painter.font()
+        metrics = self._painter.fontMetrics()
+        width = metrics.horizontalAdvance(text)
+        self.drawn.append(
+            (
+                text,
+                width,
+                font.pointSizeF(),
+                font.bold(),
+                font.family(),
+                point.y(),
+                metrics.ascent(),
+                metrics.descent(),
+                metrics.boundingRect(text),
+            )
+        )
         self._painter.drawText(point, text)
 
 
@@ -931,12 +1160,22 @@ def test_render_labels_elides_long_text_within_inner_width_at_device_dpi(
     painter = _MeasuringPainter()
     monkeypatch.setattr(label_renderer, "QPainter", lambda: painter)
     long_item = replace(
-        _item_row("備" * 200),
+        _item_row(
+            "備" * 200,
+            manufacturer_part_number="M" * 200,
+            application="用" * 200,
+        ),
         name="品" * 200,
         code="C" * 200,
         location_name="場" * 200,
     )
-    short_item = replace(_item_row("備考"), id=2, name="短い品名", code="S-1", location_name="棚B")
+    short_item = replace(
+        _item_row("備考", manufacturer_part_number="M-1", application="補修用"),
+        id=2,
+        name="短い品名",
+        code="S-1",
+        location_name="棚B",
+    )
 
     label_renderer.render_labels(
         _pdf_writer(tmp_path / f"width-{dpi}.pdf", dpi),
@@ -948,19 +1187,100 @@ def test_render_labels_elides_long_text_within_inner_width_at_device_dpi(
     )
 
     inner_width = math.floor((LABEL_72212.label_width_mm - 6.0) * dpi / 25.4)
-    long_rows, short_rows = painter.drawn[:4], painter.drawn[4:]
-    assert [row[2] for row in long_rows] == [11, 14, 10, 9]
-    for (text, width, _), original in zip(
+    long_rows, short_rows = painter.drawn[:6], painter.drawn[6:]
+    assert [row[2] for row in long_rows] == [10] * 6
+    assert [row[3] for row in long_rows] == [True, True, False, False, False, False]
+    for row, original in zip(
         long_rows,
-        (long_item.name, long_item.code, long_item.location_name, long_item.note),
+        (
+            long_item.name,
+            long_item.manufacturer_part_number,
+            long_item.application,
+            long_item.code,
+            long_item.location_name,
+            long_item.note,
+        ),
         strict=True,
     ):
+        text, width = row[0], row[1]
         assert original is not None
         assert text != original
         assert text.endswith("…")
         assert width <= inner_width
-    assert [row[0] for row in short_rows] == ["短い品名", "S-1", "棚B", "備考"]
-    assert all(width <= inner_width for _, width, _ in short_rows)
+    assert [row[0] for row in short_rows] == [
+        "短い品名",
+        "M-1",
+        "補修用",
+        "S-1",
+        "棚B",
+        "備考",
+    ]
+    assert all(row[1] <= inner_width for row in short_rows)
+
+
+@pytest.mark.parametrize("dpi", [300, 1200])
+def test_render_labels_keeps_text_within_vertical_label_insets_at_device_dpi(
+    monkeypatch, qapp, tmp_path: Path, dpi: int
+) -> None:
+    painter = _MeasuringPainter()
+    monkeypatch.setattr(label_renderer, "QPainter", lambda: painter)
+    short_item = replace(
+        _item_row("備考 gyp"),
+        name="品名 日本語 Agyp",
+        manufacturer_part_number="型番 gyp",
+        application="用途 日本語 gyp",
+        code="ID gyp",
+        location_name="棚 gyp",
+    )
+    long_item = replace(
+        _item_row("備考 " + "日本語 gyp " * 80),
+        id=2,
+        name="品名 " + "日本語 Agyp " * 80,
+        manufacturer_part_number="型番 " + "日本語 gyp " * 80,
+        application="用途 " + "日本語 gyp " * 80,
+        code="ID " + "日本語 gyp " * 80,
+        location_name="棚 " + "日本語 gyp " * 80,
+    )
+    placements = [LabelPlacement(1, 0, 1), LabelPlacement(1, 1, 2)]
+
+    label_renderer.render_labels(
+        _pdf_writer(tmp_path / f"vertical-{dpi}.pdf", dpi),
+        placements,
+        {1: short_item, 2: long_item},
+        LABEL_72212,
+        0.0,
+        0.0,
+    )
+
+    assert len(painter.drawn) == 12
+    offsets_mm = (3.0, 9.0, 15.0, 21.0, 27.0, 33.0)
+    bold_rows = (True, True, False, False, False, False)
+    # QFontMetrics の整数 boundingRect と mm→pixel 換算の丸め差として 1px だけ許容する。
+    rounding_tolerance_px = 1
+    for item_index, slot in enumerate((0, 1)):
+        slot_y = slot_rect_mm(LABEL_72212, slot)[1]
+        label_top = (slot_y + 3.0) * dpi / 25.4
+        label_bottom = (slot_y + LABEL_72212.label_height_mm - 3.0) * dpi / 25.4
+        item_rows = painter.drawn[item_index * 6 : (item_index + 1) * 6]
+        for row_index, (row, offset_mm, bold) in enumerate(
+            zip(item_rows, offsets_mm, bold_rows, strict=True)
+        ):
+            _, width, point_size, actual_bold, family, baseline, ascent, descent, bounds = row
+            assert point_size == 10
+            assert actual_bold is bold
+            assert family == fonts.print_font(10, bold).family()
+            assert ascent > 0
+            assert descent >= 0
+            assert baseline == pytest.approx((slot_y + offset_mm) * dpi / 25.4 - bounds.top())
+            text_top = baseline + bounds.top()
+            text_bottom = baseline + bounds.bottom()
+            assert text_top >= label_top - rounding_tolerance_px
+            assert text_bottom <= label_bottom + rounding_tolerance_px
+            if row_index < len(item_rows) - 1:
+                next_row = item_rows[row_index + 1]
+                next_top = next_row[5] + next_row[8].top()
+                assert text_bottom <= next_top + rounding_tolerance_px
+            assert width <= math.floor((LABEL_72212.label_width_mm - 6.0) * dpi / 25.4)
 
 
 def test_render_labels_offsets_move_drawing_position(monkeypatch) -> None:
@@ -984,7 +1304,15 @@ def test_render_labels_offsets_move_drawing_position(monkeypatch) -> None:
 
 
 def test_render_labels_handles_very_long_text_in_pdf(tmp_path: Path, qapp) -> None:
-    long_item = replace(_item_row("備" * 500), name="品" * 500, location_name="場" * 500)
+    long_item = replace(
+        _item_row(
+            "備" * 500,
+            manufacturer_part_number="型" * 500,
+            application="用" * 500,
+        ),
+        name="品" * 500,
+        location_name="場" * 500,
+    )
     pdf_path = tmp_path / "long.pdf"
 
     label_renderer.render_labels(
@@ -1057,9 +1385,9 @@ def test_render_labels_range_keeps_original_slots_without_reapplying_first_page_
     expected_xs = [
         (slot_rect_mm(LABEL_72212, slot)[0] + 3.0) * 300 / 25.4 for slot in expected_slots
     ]
-    drawn_xs = [call[0] for call in painter.draw_calls[0::4]]
+    drawn_xs = [call[0] for call in painter.draw_calls[0::6]]
     assert device.new_page_calls == expected_new_pages
-    assert len(painter.draw_calls) == 4 * len(expected_slots)
+    assert len(painter.draw_calls) == 6 * len(expected_slots)
     assert drawn_xs == pytest.approx(expected_xs)
 
 

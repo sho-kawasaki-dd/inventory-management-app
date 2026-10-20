@@ -38,29 +38,43 @@ class LabelPrintDialog(QDialog):
         content = QWidget(self.scroll_area)
         content_layout = QVBoxLayout(content)
 
-        self.item_table = QTableWidget(len(self._items), 3, content)
-        self.item_table.setHorizontalHeaderLabels(["管理番号", "品名", "枚数"])
+        self.item_table = QTableWidget(len(self._items), 5, content)
+        self.item_table.setHorizontalHeaderLabels(
+            ["管理番号", "品名", "メーカー型番", "用途", "枚数"]
+        )
         self.item_table.verticalHeader().hide()
         self.item_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.item_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         header = self.item_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.item_table.setColumnWidth(2, 90)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.item_table.setColumnWidth(2, 140)
+        self.item_table.setColumnWidth(3, 140)
+        self.item_table.setColumnWidth(4, 90)
         self.item_table.setMaximumHeight(280)
         self.quantity_spins: list[QSpinBox] = []
         for row_index, item in enumerate(self._items):
-            for column, text in enumerate((item.code, item.name)):
+            cell_texts = (
+                item.code,
+                item.name,
+                item.manufacturer_part_number or "",
+                item.application or "",
+            )
+            for column, text in enumerate(cell_texts):
                 cell = QTableWidgetItem(text)
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if column > 0:
+                    cell.setToolTip(text)
                 self.item_table.setItem(row_index, column, cell)
             quantity_spin = QSpinBox(self.item_table)
             quantity_spin.setRange(1, 99)
             quantity_spin.setValue(1)
             quantity_spin.valueChanged.connect(self._update_summary)
             self.quantity_spins.append(quantity_spin)
-            self.item_table.setCellWidget(row_index, 2, quantity_spin)
+            self.item_table.setCellWidget(row_index, 4, quantity_spin)
         content_layout.addWidget(self.item_table)
 
         slots_heading = QLabel("1 枚目の印字位置", content)
