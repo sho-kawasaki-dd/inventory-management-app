@@ -1460,3 +1460,457 @@ def test_generated_html_reset_confirmation_and_stale_write_invalidation(
         assert not page_errors
         context.close()
         browser.close()
+
+
+HOLD_WRITE_SCRIPT = """(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, "oncomplete");
+    window.__holdWrites = false;
+    window.__heldWrites = [];
+    Object.defineProperty(IDBTransaction.prototype, "oncomplete", {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get() { return descriptor.get.call(this); },
+        set(handler) {
+            if (window.__holdWrites && this.mode === "readwrite") {
+                const transaction = this;
+                descriptor.set.call(this, event => {
+                    window.__heldWrites.push(() => handler.call(transaction, event));
+                });
+            } else {
+                descriptor.set.call(this, handler);
+            }
+        },
+    });
+    window.__releaseHeldWrite = () => {
+        const release = window.__heldWrites.shift();
+        if (!release) return false;
+        release();
+        return true;
+    };
+})();"""
+
+HOLD_OPEN_SCRIPT = """(() => {
+    const originalOpen = IDBFactory.prototype.open;
+    window.__holdStorageOpen = true;
+    window.__heldOpens = [];
+    window.__databaseCloseCount = 0;
+    const originalClose = IDBDatabase.prototype.close;
+    IDBDatabase.prototype.close = function(...args) {
+        window.__databaseCloseCount += 1;
+        return originalClose.apply(this, args);
+    };
+    IDBFactory.prototype.open = function(...args) {
+        const request = originalOpen.apply(this, args);
+        if (window.__holdStorageOpen) {
+            request.addEventListener("success", event => {
+                event.stopImmediatePropagation();
+                window.__heldOpens.push(request);
+            }, { once: true });
+        }
+        return request;
+    };
+    window.__releaseHeldOpen = () => {
+        const request = window.__heldOpens.shift();
+        if (!request || typeof request.onsuccess !== "function") return false;
+        request.onsuccess.call(request, new Event("success"));
+        return true;
+    };
+})();"""
+
+STATUS_HISTORY_SCRIPT = """() => {
+    window.__statusHistory = [];
+    const badge = document.querySelector("#storage-status");
+    new MutationObserver(() => window.__statusHistory.push(badge.dataset.status))
+        .observe(badge, { attributes: true, attributeFilter: ["data-status"] });
+}"""
+
+UNHANDLED_REJECTION_SCRIPT = """window.__unhandledRejections = [];
+window.addEventListener("unhandledrejection", event => {
+    window.__unhandledRejections.push(String(event.reason));
+});"""
+
+OFFLINE_SCHEMES = ("file:", "data:", "blob:", "about:")
+
+
+def _watch_requests(page: Page, external_requests: list[str]) -> None:
+    page.on(
+        "request",
+        lambda request: (
+            external_requests.append(request.url)
+            if not request.url.startswith(OFFLINE_SCHEMES)
+            else None
+        ),
+    )
+
+
+def _small_sheet_draft(*, actual: str, note: str, confirmed: bool) -> dict[str, object]:
+    return {
+        "kind": "imm-stocktake-draft",
+        "v": 1,
+        "session_id": SESSION_ID,
+        "client_id": 2,
+        "started_at": "2026-10-17 02:00:00",
+        "items": [
+            {
+                "item_id": 201,
+                "book_quantity": 10,
+                "actual": actual,
+                "note": note,
+                "confirmed": confirmed,
+                "badInput": False,
+            },
+            {
+                "item_id": 202,
+                "book_quantity": 20,
+                "actual": "20",
+                "note": "",
+                "confirmed": False,
+                "badInput": False,
+            },
+        ],
+    }
+
+
+def test_generated_html_consecutive_edits_save_latest_without_stale_saved_status(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(HOLD_WRITE_SCRIPT)
+        page.add_init_script(UNHANDLED_REJECTION_SCRIPT)
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+        page.evaluate(STATUS_HISTORY_SCRIPT)
+
+        actual = page.locator('[data-item-id="201"]').get_by_label("B-001 実数")
+        page.evaluate("() => { window.__holdWrites = true; }")
+        actual.fill("1")
+        page.wait_for_function("() => window.__heldWrites.length === 1")
+        assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+
+        actual.fill("2")
+        actual.fill("3")
+        assert actual.input_value() == "3"
+        assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+        assert page.evaluate("() => window.__heldWrites.length") == 1
+
+        # 古い書込の完了通知だけでは、最新変更を保存済みと表示しない
+        page.evaluate("() => { window.__holdWrites = false; window.__releaseHeldWrite(); }")
+        _wait_for_storage_status(page, "saved")
+        history = page.evaluate("() => window.__statusHistory")
+        assert history.count("saved") == 1
+        assert history[-1] == "saved"
+
+        record = _read_indexeddb_record(page, SESSION_ID)
+        assert record is not None
+        assert record["storage_revision"] == 2
+        assert _saved_draft_item(record, 0)["actual"] == "3"
+        assert page.evaluate("() => window.__unhandledRejections") == []
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_ignores_late_open_after_timeout_and_recovers_on_retry(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(HOLD_OPEN_SCRIPT)
+        page.add_init_script(UNHANDLED_REJECTION_SCRIPT)
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.clock.install()
+        page.goto(html_path.as_uri())
+        page.wait_for_function("() => window.__heldOpens.length === 1")
+        assert page.locator("#storage-status").get_attribute("data-status") == "loading"
+        assert page.locator("#items-container").evaluate("(element) => element.inert")
+
+        page.clock.fast_forward(10_000)
+        _wait_for_storage_status(page, "error")
+        assert page.locator("#storage-warning").is_visible()
+        assert not page.locator("#items-container").evaluate("(element) => element.inert")
+
+        actual = page.locator('[data-item-id="201"]').get_by_label("B-001 実数")
+        actual.fill("6")
+        close_count = page.evaluate("() => window.__databaseCloseCount")
+
+        # 打ち切り後に遅れて成功した接続は閉じ、state や保存状態を変更しない
+        assert page.evaluate("() => window.__releaseHeldOpen()") is True
+        assert page.evaluate("() => window.__databaseCloseCount") == close_count + 1
+        assert page.locator("#storage-status").get_attribute("data-status") == "error"
+        assert page.locator("#storage-warning").is_visible()
+        assert actual.input_value() == "6"
+
+        page.evaluate("() => { window.__holdStorageOpen = false; }")
+        page.get_by_role("button", name="再試行").click()
+        _wait_for_storage_status(page, "saved")
+        assert page.locator("#storage-warning").is_hidden()
+        record = _read_indexeddb_record(page, SESSION_ID)
+        assert _saved_draft_item(record, 0)["actual"] == "6"
+        assert page.evaluate("() => window.__unhandledRejections") == []
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_backup_import_during_held_write_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    replacement = _small_sheet_draft(actual="8", note="退避データ", confirmed=True)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(HOLD_WRITE_SCRIPT)
+        page.add_init_script(UNHANDLED_REJECTION_SCRIPT)
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+        page.locator("#draft-tools summary").click()
+
+        card = page.locator('[data-item-id="201"]')
+        actual = card.get_by_label("B-001 実数")
+        page.evaluate("() => { window.__holdWrites = true; }")
+        actual.fill("5")
+        page.wait_for_function("() => window.__heldWrites.length === 1")
+
+        page.get_by_label("途中バックアップ JSON を貼り付け").fill(
+            json.dumps(replacement, ensure_ascii=False)
+        )
+        page.get_by_role("button", name="貼付データを検証").click()
+        page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        page.get_by_role("button", name="現在の入力全体を置き換える").click()
+        assert actual.input_value() == "8"
+        assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+
+        # 読込前に発行された保存の遅い完了通知で、読込結果を戻さない
+        page.evaluate("() => { window.__holdWrites = false; window.__releaseHeldWrite(); }")
+        _wait_for_storage_status(page, "saved")
+        assert actual.input_value() == "8"
+        assert card.get_by_label("B-001 メモ").input_value() == "退避データ"
+        record = _read_indexeddb_record(page, SESSION_ID)
+        assert record is not None
+        assert record["draft"] == replacement
+        assert page.evaluate("() => window.__unhandledRejections") == []
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_has_no_external_requests_or_unhandled_errors(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    external_requests: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        page.add_init_script(UNHANDLED_REJECTION_SCRIPT)
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        _watch_requests(page, external_requests)
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+        page.locator("#draft-tools summary").click()
+
+        card = page.locator('[data-item-id="201"]')
+        card.get_by_label("B-001 実数").fill("4")
+        card.get_by_role("button", name="この実数で確認").click()
+        page.locator('[data-item-id="202"]').get_by_role("button", name="この実数で確認").click()
+        _wait_for_storage_status(page, "saved")
+
+        page.get_by_role("button", name="結果テキストを表示").click()
+        page.get_by_role("button", name="JSON を表示").click()
+        with page.expect_download():
+            page.locator("#save-result").click()
+        with page.expect_download():
+            page.get_by_role("button", name="途中データを保存").click()
+        page.get_by_role("button", name="初期状態にリセット").click()
+        page.get_by_role("button", name="入力をリセット").click()
+        _wait_for_storage_status(page, "saved")
+
+        assert external_requests == []
+        assert page.evaluate("() => window.__unhandledRejections") == []
+        assert not page_errors
+        context.close()
+        browser.close()
+
+
+def _build_500_item_sheet(tmp_path: Path) -> Path:
+    items = tuple(
+        MobileStocktakeItem(
+            item_id=index,
+            code=f"ITM-{index:04d}",
+            name=f"テスト備品 {index} 番 (長めの品名サンプル)",
+            manufacturer_part_number=f"MPN-{index:04d}",
+            location_name=f"棚{(index % 5) + 1}",
+            book_quantity=index % 50,
+            unit="個",
+        )
+        for index in range(1, 501)
+    )
+    sheet = MobileStocktakeSheet(
+        session_id=SESSION_ID,
+        client_id=10,
+        client_name="大規模クライアント株式会社",
+        staff_id=1,
+        staff_name="佐藤",
+        started_at="2026-10-17 03:00:00",
+        items=items,
+    )
+    html_path = tmp_path / "sheet_500_states.html"
+    html_path.write_text(render_stocktake_html(sheet), encoding="utf-8")
+    return html_path
+
+
+def _assert_control_reachable(page: Page, selector: str, viewport_height: int) -> None:
+    target = page.locator(selector).first
+    in_header = target.evaluate("(element) => element.closest('#app-header') !== null")
+    target.evaluate(
+        "(element, block) => element.scrollIntoView({ block, inline: 'nearest' })",
+        "nearest" if in_header else "center",
+    )
+    target_box = target.bounding_box()
+    header_box = page.locator("#app-header").bounding_box()
+    assert target_box is not None, selector
+    assert header_box is not None
+    header_bottom = header_box["y"] + header_box["height"]
+    assert header_bottom <= viewport_height + 1.0
+    target_bottom = target_box["y"] + target_box["height"]
+    if in_header:
+        assert target_box["y"] >= header_box["y"] - 1.0, selector
+        assert target_bottom <= header_bottom + 1.0, selector
+    else:
+        assert not _boxes_overlap(header_box, target_box), selector
+        assert target_box["y"] >= header_bottom - 1.0, selector
+        assert target_bottom <= viewport_height + 1.0, selector
+
+
+def _assert_header_controls_do_not_overlap(page: Page) -> None:
+    page.locator("#app-header").evaluate("(element) => { element.scrollTop = 0; }")
+    boxes: list[tuple[str, FloatRect]] = []
+    selector = (
+        "#app-header button:visible, #app-header select:visible, "
+        "#app-header input:visible, #app-header .storage-badge:visible"
+    )
+    for index, element in enumerate(page.locator(selector).all()):
+        box = element.bounding_box()
+        assert box is not None
+        boxes.append((f"control-{index}", box))
+    for first_index, (first_name, first_box) in enumerate(boxes):
+        for second_name, second_box in boxes[first_index + 1 :]:
+            assert not _boxes_overlap(first_box, second_box), (first_name, second_name)
+
+
+def test_generated_html_500_items_layout_in_storage_and_backup_states(tmp_path: Path) -> None:
+    html_path = _build_500_item_sheet(tmp_path)
+    viewports = [
+        ("desktop", 1280, 800),
+        ("mobile_portrait", 390, 844),
+        ("mobile_landscape", 844, 390),
+    ]
+    states = ("normal", "saving", "warning", "warning_reset", "backup")
+    page_errors: list[str] = []
+    external_requests: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        for state_name in states:
+            for label, width, height in viewports:
+                context = browser.new_context(viewport={"width": width, "height": height})
+                page = context.new_page()
+                page.add_init_script(UNHANDLED_REJECTION_SCRIPT)
+                if state_name == "saving":
+                    page.add_init_script(HOLD_WRITE_SCRIPT)
+                if state_name.startswith("warning"):
+                    page.add_init_script(
+                        """Object.defineProperty(window, "indexedDB", {
+                            configurable: true,
+                            get() { throw new Error("IndexedDB denied"); }
+                        });"""
+                    )
+                page.on("pageerror", lambda error: page_errors.append(str(error)))
+                _watch_requests(page, external_requests)
+                page.goto(html_path.as_uri())
+                header_controls = [
+                    "#reset-state",
+                    ".tab-btn[data-status-filter='all']",
+                    ".tab-btn[data-status-filter='diff']",
+                    "#location-filter",
+                    "#search-input",
+                ]
+                scroll_controls = [
+                    '[data-item-id="1"] .input-actual',
+                    '[data-item-id="1"] .input-note',
+                    '[data-item-id="500"] .input-actual',
+                    '[data-item-id="500"] .input-note',
+                    "#copy-result",
+                    "#save-result",
+                    "#show-result",
+                    "#draft-tools summary",
+                ]
+
+                if state_name == "saving":
+                    _wait_for_storage_status(page, "ready")
+                    page.evaluate("() => { window.__holdWrites = true; }")
+                    page.locator('[data-item-id="1"] .input-actual').fill("9")
+                    page.wait_for_function("() => window.__heldWrites.length === 1")
+                    assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+                elif state_name.startswith("warning"):
+                    _wait_for_storage_status(page, "error")
+                    assert page.locator("#storage-warning").is_visible()
+                    header_controls.append("#retry-storage")
+                    if state_name == "warning_reset":
+                        page.locator("#reset-state").click()
+                        assert page.locator("#reset-confirmation").is_visible()
+                        header_controls += ["#confirm-reset-state", "#cancel-reset-state"]
+                else:
+                    _wait_for_storage_status(page, "ready")
+
+                if state_name == "backup":
+                    page.locator("#draft-tools summary").click()
+                    page.get_by_role("button", name="JSON を表示").click()
+                    page.wait_for_function("() => !document.querySelector('#draft-text').hidden")
+                    page.get_by_label("途中バックアップ JSON を貼り付け").fill("{")
+                    page.get_by_role("button", name="貼付データを検証").click()
+                    assert page.locator("#draft-feedback").is_visible()
+                    scroll_controls += [
+                        "#save-draft",
+                        "#show-draft",
+                        "#copy-draft",
+                        "#draft-file",
+                        "#draft-import-text",
+                        "#read-draft-text",
+                        "#draft-feedback",
+                    ]
+
+                screenshot_path = tmp_path / f"layout_{state_name}_{label}.png"
+                page.screenshot(path=str(screenshot_path))
+                assert screenshot_path.exists()
+
+                header_box = page.locator("#app-header").bounding_box()
+                assert header_box is not None
+                assert header_box["height"] <= height * 0.55 + 1.0, (state_name, label)
+                _assert_header_controls_do_not_overlap(page)
+                for selector in header_controls:
+                    _assert_control_reachable(page, selector, height)
+                for card_id in (1, 500):
+                    buttons = page.locator(f'[data-item-id="{card_id}"] button').all()
+                    assert buttons
+                    for index in range(len(buttons)):
+                        _assert_control_reachable(
+                            page,
+                            f'[data-item-id="{card_id}"] button >> nth={index}',
+                            height,
+                        )
+                for selector in scroll_controls:
+                    _assert_control_reachable(page, selector, height)
+                assert page.evaluate("() => window.__unhandledRejections") == []
+                context.close()
+
+        assert external_requests == []
+        assert not page_errors
+        browser.close()

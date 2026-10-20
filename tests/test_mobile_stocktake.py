@@ -530,6 +530,29 @@ def test_render_stocktake_html_escapes_script_and_contains_required_elements() -
     assert "custom-time" in custom_html
 
 
+def test_render_uses_indexeddb_without_local_storage_or_network_access() -> None:
+    rendered = render_stocktake_html(_sample_sheet())
+
+    assert "indexedDB" in rendered
+    assert 'const STORAGE_DATABASE_NAME = "imm_stocktake";' in rendered
+    assert "imm-stocktake-draft" in rendered
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "fetch(",
+        "XMLHttpRequest",
+        "sendBeacon",
+        "WebSocket",
+        "EventSource",
+        "http://",
+        "https://",
+        "<link",
+        "src=",
+        "@import",
+    ):
+        assert forbidden not in rendered, forbidden
+
+
 def test_parse_rejects_repeated_end_marker_and_end_before_prefix() -> None:
     code = encode_stocktake_payload(_sample_payload())
 

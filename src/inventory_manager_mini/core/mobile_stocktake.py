@@ -393,6 +393,9 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       padding: 8px 12px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
       z-index: 10;
+      max-height: 55vh;
+      max-height: 55dvh;
+      overflow-y: auto;
     }}
     .header-top {{
       display: flex;
