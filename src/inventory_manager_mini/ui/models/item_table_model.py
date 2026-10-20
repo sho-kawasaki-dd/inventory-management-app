@@ -26,6 +26,7 @@ class ItemTableModel(QAbstractTableModel):
         ("管理番号", "code"),
         ("品名", "name"),
         ("メーカー型番", "manufacturer_part_number"),
+        ("用途", "application"),
         ("クライアント", "client_name"),
         ("発注主体", "purchaser_name"),
         ("カテゴリ", "category_path"),
@@ -39,7 +40,7 @@ class ItemTableModel(QAbstractTableModel):
         ("最終購入日", "last_purchased_at"),
         ("状態", "is_active"),
     )
-    _NUMERIC_COLUMNS = {7, 9, 10, 11}
+    _NUMERIC_COLUMNS = {8, 10, 11, 12}
     _LOW_STOCK_BACKGROUND = QBrush(QColor("#FFF3CD"))
     _INACTIVE_FOREGROUND = QBrush(QColor(Qt.GlobalColor.gray))
 
@@ -110,11 +111,11 @@ class ItemTableModel(QAbstractTableModel):
     def _display_value(value: Any, column: int) -> str:
         if value is None:
             return ""
-        if column == 11:
+        if column == 12:
             return f"{value:,}円"
-        if column == 13:
-            return value.isoformat() if isinstance(value, date) else ""
         if column == 14:
+            return value.isoformat() if isinstance(value, date) else ""
+        if column == 15:
             return "有効" if value else "廃止"
         if column in ItemTableModel._NUMERIC_COLUMNS:
             return f"{value:,}"
@@ -267,10 +268,13 @@ class ItemSortProxyModel(QAbstractProxyModel):
         ):
             column = self._sort_column
             values = [ItemTableModel._raw_value(row, column) for row in source_model._rows]
+            none_rows = [row for row in source_rows if values[row] is None]
+            source_rows = [row for row in source_rows if values[row] is not None]
             source_rows.sort(
-                key=lambda row: (values[row] is None, values[row]),
+                key=lambda row: values[row],
                 reverse=self._sort_order == Qt.SortOrder.DescendingOrder,
             )
+            source_rows.extend(none_rows)
         self._source_rows = source_rows
         self._proxy_rows = [0] * row_count
         for proxy_row, source_row in enumerate(source_rows):
