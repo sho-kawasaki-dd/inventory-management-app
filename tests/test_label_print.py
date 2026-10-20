@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PySide6.QtCore import QMarginsF, QPointF, QRect, QSize, Qt
+from PySide6.QtCore import QMarginsF, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QDialog, QDialogButtonBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHeaderView, QSpinBox
 
 from inventory_manager_mini.core.models import ItemRow, PurchaseInfo
 from inventory_manager_mini.ui import error_handling
@@ -455,6 +455,78 @@ def test_label_print_dialog_defaults_and_updates_page_count(qtbot) -> None:
     assert dialog.entries[0] == LabelEntry(1, 12)
 
 
+@pytest.mark.parametrize(
+    ("manufacturer_part_number", "application"),
+    [
+        (manufacturer_part_number, application)
+        for manufacturer_part_number in ("MODEL-001", None, "")
+        for application in ("機器補修用", None, "")
+    ],
+)
+def test_label_print_dialog_displays_item_details_and_quantity_in_last_column(
+    qtbot,
+    manufacturer_part_number: str | None,
+    application: str | None,
+) -> None:
+    from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
+
+    dialog = LabelPrintDialog(
+        [
+            _item_row(
+                manufacturer_part_number=manufacturer_part_number,
+                application=application,
+            )
+        ]
+    )
+    qtbot.addWidget(dialog)
+
+    table = dialog.item_table
+    header = table.horizontalHeader()
+    assert table.columnCount() == 5
+    header_labels = []
+    for column in range(5):
+        header_item = table.horizontalHeaderItem(column)
+        assert header_item is not None
+        header_labels.append(header_item.text())
+    assert header_labels == [
+        "管理番号",
+        "品名",
+        "メーカー型番",
+        "用途",
+        "枚数",
+    ]
+    assert [header.sectionResizeMode(column) for column in range(5)] == [
+        QHeaderView.ResizeMode.ResizeToContents,
+        QHeaderView.ResizeMode.Stretch,
+        QHeaderView.ResizeMode.Interactive,
+        QHeaderView.ResizeMode.Interactive,
+        QHeaderView.ResizeMode.Fixed,
+    ]
+    assert [table.columnWidth(column) for column in (2, 3, 4)] == [140, 140, 90]
+
+    expected_texts = [
+        "ITEM-001",
+        "棚ラベルの品目",
+        manufacturer_part_number or "",
+        application or "",
+    ]
+    for column, expected_text in enumerate(expected_texts):
+        cell = table.item(0, column)
+        assert cell is not None
+        assert cell.text() == expected_text
+        assert not cell.flags() & Qt.ItemFlag.ItemIsEditable
+        if column > 0:
+            assert cell.toolTip() == expected_text
+
+    assert table.cellWidget(0, 2) is None
+    assert table.cellWidget(0, 3) is None
+    quantity_spin = table.cellWidget(0, 4)
+    assert isinstance(quantity_spin, QSpinBox)
+    assert quantity_spin is dialog.quantity_spins[0]
+    assert quantity_spin.minimum() == 1
+    assert quantity_spin.maximum() == 99
+
+
 def test_label_print_dialog_requires_at_least_one_slot(qtbot) -> None:
     from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
 
@@ -475,18 +547,27 @@ def test_label_print_dialog_requires_at_least_one_slot(qtbot) -> None:
     assert ok_button.isEnabled()
 
 
-def test_label_print_dialog_fits_at_large_font_scale(qtbot) -> None:
+@pytest.mark.parametrize("font_scale", [1.0, 1.5])
+def test_label_print_dialog_fits_at_large_font_scale(qtbot, font_scale: float) -> None:
     from inventory_manager_mini.ui.printing.label_print_dialog import LabelPrintDialog
 
     rows = [
-        replace(_item_row(), id=index, code=f"ITEM-{index:03d}", name=f"品目{index}")
+        replace(
+            _item_row(
+                manufacturer_part_number=f"MODEL-{index:03d}-" + "X" * 80,
+                application="機器補修用" * 20,
+            ),
+            id=index,
+            code=f"ITEM-{index:03d}",
+            name=f"長い品目名{index}-" + "部品" * 20,
+        )
         for index in range(1, 41)
     ]
     dialog = LabelPrintDialog(rows)
     qtbot.addWidget(dialog)
     original_font = dialog.font()
     large_font = QFont(original_font)
-    large_font.setPointSizeF(original_font.pointSizeF() * 1.5)
+    large_font.setPointSizeF(original_font.pointSizeF() * font_scale)
     dialog.setFont(large_font)
     dialog.show()
     qtbot.waitExposed(dialog)
@@ -498,6 +579,34 @@ def test_label_print_dialog_fits_at_large_font_scale(qtbot) -> None:
         dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
     )
     assert dialog.item_table.verticalScrollBar().maximum() > 0
+    first_quantity_spin = dialog.quantity_spins[0]
+    assert first_quantity_spin.isVisible()
+    first_spin_rect = QRect(
+        first_quantity_spin.mapTo(dialog.item_table.viewport(), QPoint(0, 0)),
+        first_quantity_spin.size(),
+    )
+    assert dialog.item_table.viewport().rect().contains(first_spin_rect)
+
+    dialog.item_table.setColumnWidth(2, 500)
+    dialog.item_table.setColumnWidth(3, 500)
+    horizontal_scrollbar = dialog.item_table.horizontalScrollBar()
+    qtbot.waitUntil(lambda: horizontal_scrollbar.maximum() > 0)
+    horizontal_scrollbar.setValue(horizontal_scrollbar.maximum())
+    assert dialog.item_table.horizontalHeader().sectionViewportPosition(4) >= 0
+    assert (
+        dialog.item_table.horizontalHeader().sectionViewportPosition(4)
+        < dialog.item_table.viewport().width()
+    )
+    horizontal_scrollbar.setValue(0)
+    assert dialog.item_table.horizontalHeader().sectionViewportPosition(0) >= 0
+
+    first_slot_checkbox = dialog.slot_checkboxes[0]
+    dialog.scroll_area.ensureWidgetVisible(first_slot_checkbox)
+    checkbox_rect = QRect(
+        first_slot_checkbox.mapTo(dialog.scroll_area.viewport(), QPoint(0, 0)),
+        first_slot_checkbox.size(),
+    )
+    assert dialog.scroll_area.viewport().rect().contains(checkbox_rect)
 
 
 def test_label_print_dialog_does_not_retain_settings_between_instances(qtbot) -> None:
