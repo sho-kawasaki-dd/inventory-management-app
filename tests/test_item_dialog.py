@@ -142,6 +142,117 @@ def test_edit_keeps_only_current_inactive_masters_and_saves(qtbot, dialog_contex
     assert dialog.result() == dialog.DialogCode.Accepted
 
 
+def test_edit_category_change_confirmation_yes_saves_and_emits_data_changed(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="既存品目", category_id=1)
+    )
+    original_code = item.code
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+    category = next(
+        category for category in dialog_context.master.list_categories() if category.id == 2
+    )
+    confirmations = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: confirmations.append(args) or QMessageBox.StandardButton.Yes,
+    )
+    changes = []
+    dialog_context.data_bus.data_changed.connect(lambda: changes.append(True))
+    dialog.category_picker.set_current_category_id(category.id)
+
+    dialog._save()
+
+    updated_item = dialog_context.inventory.get_item(item.id)
+    assert len(confirmations) == 1
+    assert confirmations[0][1:3] == (
+        "管理番号の変更",
+        "カテゴリを変更すると、管理番号が新しいカテゴリのものに再採番されます。印刷済みのラベルは再印刷が必要です。保存しますか?",
+    )
+    assert confirmations[0][3] == (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    assert confirmations[0][4] == QMessageBox.StandardButton.No
+    assert updated_item.category_id == category.id
+    assert updated_item.code != original_code
+    assert updated_item.code.startswith(f"{category.code_prefix}-")
+    assert changes == [True]
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_edit_category_change_confirmation_no_keeps_dialog_open_and_does_not_save(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="既存品目", category_id=1)
+    )
+    original_code = item.code
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args: QMessageBox.StandardButton.No,
+    )
+    changes = []
+    dialog_context.data_bus.data_changed.connect(lambda: changes.append(True))
+    dialog.category_picker.set_current_category_id(2)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    dialog._save()
+
+    unchanged_item = dialog_context.inventory.get_item(item.id)
+    assert unchanged_item.category_id == 1
+    assert unchanged_item.code == original_code
+    assert changes == []
+    assert dialog.isVisible()
+    assert dialog.result() != dialog.DialogCode.Accepted
+
+
+def test_edit_without_category_change_does_not_ask_for_confirmation(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    item = dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="既存品目", category_id=1)
+    )
+    dialog = ItemDialog(dialog_context, item.id)
+    qtbot.addWidget(dialog)
+    confirmations = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: confirmations.append(args) or QMessageBox.StandardButton.Yes,
+    )
+    dialog.name_edit.setText("更新後")
+
+    dialog._save()
+
+    assert confirmations == []
+    assert dialog_context.inventory.get_item(item.id).name == "更新後"
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_new_item_does_not_ask_for_category_change_confirmation(
+    qtbot, dialog_context, monkeypatch
+) -> None:
+    dialog = ItemDialog(dialog_context)
+    qtbot.addWidget(dialog)
+    confirmations = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: confirmations.append(args) or QMessageBox.StandardButton.Yes,
+    )
+    _fill_required(dialog)
+
+    dialog._save()
+
+    assert confirmations == []
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
 _LOCK_MESSAGE = "このクライアントはスマホ棚卸手続き中のため品目を変更できません"
 
 
