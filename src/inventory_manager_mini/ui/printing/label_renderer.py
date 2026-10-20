@@ -17,10 +17,12 @@ logger = logging.getLogger(__name__)
 
 _LABEL_INSET_MM = 3.0
 _LABEL_TEXT_ROWS = (
-    (3.0, 11, True),
-    (11.0, 14, True),
-    (20.0, 10, False),
-    (29.0, 9, False),
+    (3.0, 10, True),
+    (9.0, 10, True),
+    (15.0, 10, False),
+    (21.0, 10, False),
+    (27.0, 10, False),
+    (33.0, 10, False),
 )
 
 
@@ -28,9 +30,19 @@ def _mm_to_device(mm: float, dpi: int) -> float:
     return mm * dpi / 25.4
 
 
-def _item_label_text(item: ItemRow) -> tuple[str, str, str, str]:
+def _item_label_text(item: ItemRow) -> tuple[str, str, str, str, str, str]:
+    application = (
+        (item.application or "").replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    )
     note = (item.note or "").replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-    return item.name, item.code, item.location_name or "", note
+    return (
+        item.name,
+        item.manufacturer_part_number or "",
+        application,
+        item.code,
+        item.location_name or "",
+        note,
+    )
 
 
 def render_labels(
