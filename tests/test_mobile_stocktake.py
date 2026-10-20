@@ -390,6 +390,25 @@ def test_parse_rejects_invalid_payload_fields(invalid_obj: object) -> None:
         parse_stocktake_payload(raw_json)
 
 
+def test_parse_rejects_draft_backup_with_specific_error() -> None:
+    draft_json = json.dumps(
+        {
+            "kind": "imm-stocktake-draft",
+            "v": 1,
+            "session_id": VALID_SESSION_ID,
+            "client_id": 1,
+            "started_at": "2026-10-17 00:30:00",
+            "items": [],
+        }
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="これは途中保存用の下書きデータです。全品目を確認して出力した棚卸結果データを読み込んでください",
+    ):
+        parse_stocktake_payload(draft_json)
+
+
 def test_parse_and_encode_note_normalization_and_length_boundary() -> None:
     note_500 = "😀" * MAX_NOTE_LENGTH
     payload_500 = MobileStocktakePayload(

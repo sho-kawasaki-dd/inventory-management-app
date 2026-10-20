@@ -224,6 +224,11 @@ def _validate_payload_object(data: object) -> MobileStocktakePayload:
         raise ValidationError("棚卸結果データの形式が正しくありません")
     payload_dict = cast(dict[str, object], data)
 
+    if payload_dict.get("kind") == "imm-stocktake-draft":
+        raise ValidationError(
+            "これは途中保存用の下書きデータです。全品目を確認して出力した棚卸結果データを読み込んでください"
+        )
+
     version = payload_dict.get("v")
     if type(version) is not int or version != PAYLOAD_VERSION:
         raise ValidationError("対応していない棚卸結果フォーマット版数です")
@@ -801,6 +806,63 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       color: #111827;
       resize: vertical;
     }}
+    .draft-tools {{
+      border-top: 1px solid #d1d5db;
+      padding-top: 8px;
+    }}
+    .draft-tools summary {{
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }}
+    .draft-tools-content {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 8px;
+    }}
+    .draft-tools p {{
+      margin: 0;
+      font-size: 0.8rem;
+    }}
+    .draft-file-label {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }}
+    .draft-file-label input {{
+      min-width: 0;
+      max-width: 100%;
+    }}
+    .draft-confirmation {{
+      padding: 8px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+      color: #78350f;
+    }}
+    .draft-confirmation-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }}
+    #draft-text,
+    #draft-import-text {{
+      width: 100%;
+      min-height: 7rem;
+      padding: 8px;
+      border: 1px solid #9ca3af;
+      border-radius: 6px;
+      background: #f9fafb;
+      color: #111827;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      resize: vertical;
+    }}
     @media (max-height: 500px) {{
       .sticky-header {{
         padding: 4px 10px;
@@ -980,6 +1042,65 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
             hidden
           ></textarea>
         </div>
+        <details id="draft-tools" class="draft-tools">
+          <summary>途中データのバックアップ（未確認を含む）</summary>
+          <div class="draft-tools-content">
+            <p>
+              棚卸結果とは別の下書き JSON です。ファイル保存の完了は確認できないため、
+              必要に応じて JSON を表示してコピーしてください。
+              バックアップには入力内容が平文で含まれます。
+            </p>
+            <div class="completion-actions">
+              <button type="button" id="save-draft" class="btn-secondary">
+                途中データを保存
+              </button>
+              <button type="button" id="show-draft" class="btn-secondary">
+                JSON を表示
+              </button>
+              <button type="button" id="copy-draft" class="btn-secondary">
+                JSON をコピー
+              </button>
+            </div>
+            <label class="draft-file-label" for="draft-file">
+              途中バックアップファイルを選択
+              <input id="draft-file" type="file" accept=".json,application/json">
+            </label>
+            <label for="draft-import-text">途中バックアップ JSON を貼り付け</label>
+            <textarea
+              id="draft-import-text"
+              aria-label="途中バックアップ JSON を貼り付け"
+              rows="5"
+            ></textarea>
+            <div class="completion-actions">
+              <button type="button" id="read-draft-text" class="btn-secondary">
+                貼付データを検証
+              </button>
+            </div>
+            <p id="draft-feedback" class="result-feedback" role="status" hidden></p>
+            <div id="draft-preview" class="draft-confirmation" role="group" hidden>
+              <p id="draft-preview-summary"></p>
+              <p>現在の入力全体を置き換えます。内容を確認してから実行してください。</p>
+              <div class="draft-confirmation-actions">
+                <button type="button" id="confirm-draft-replace" class="btn-secondary">
+                  現在の入力全体を置き換える
+                </button>
+                <button type="button" id="cancel-draft-replace" class="btn-secondary">
+                  読み込みをキャンセル
+                </button>
+              </div>
+            </div>
+            <div id="draft-box" class="result-box" hidden>
+              <p>途中バックアップ JSON（長押しでコピーしてください）</p>
+              <textarea
+                id="draft-text"
+                aria-label="途中バックアップ JSON"
+                rows="7"
+                readonly
+                hidden
+              ></textarea>
+            </div>
+          </div>
+        </details>
       </footer>
     </div>
   </div>
@@ -1017,6 +1138,9 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     let pendingSnapshot = null;
     let saveLoopActive = false;
     let conflictCandidate = null;
+    let backupCandidate = null;
+    let backupReadGeneration = 0;
+    let backupDownloadGeneration = 0;
 
     const storageWarningEl = document.getElementById("storage-warning");
     const storageWarningMessageEl = document.getElementById("storage-warning-message");
@@ -1045,6 +1169,19 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     const resultFeedbackEl = document.getElementById("result-feedback");
     const resultBoxEl = document.getElementById("result-box");
     const resultTextEl = document.getElementById("result-text");
+    const saveDraftBtn = document.getElementById("save-draft");
+    const showDraftBtn = document.getElementById("show-draft");
+    const copyDraftBtn = document.getElementById("copy-draft");
+    const draftFileInputEl = document.getElementById("draft-file");
+    const draftImportTextEl = document.getElementById("draft-import-text");
+    const readDraftTextBtn = document.getElementById("read-draft-text");
+    const draftFeedbackEl = document.getElementById("draft-feedback");
+    const draftPreviewEl = document.getElementById("draft-preview");
+    const draftPreviewSummaryEl = document.getElementById("draft-preview-summary");
+    const confirmDraftReplaceBtn = document.getElementById("confirm-draft-replace");
+    const cancelDraftReplaceBtn = document.getElementById("cancel-draft-replace");
+    const draftBoxEl = document.getElementById("draft-box");
+    const draftTextEl = document.getElementById("draft-text");
     const completionPanelEl = document.getElementById("completion-panel");
 
     function stripNote(value) {{
@@ -1234,6 +1371,123 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
         }};
       }}
       return restored;
+    }}
+
+    function parseBackupDraft(text) {{
+      let parsed;
+      try {{
+        parsed = JSON.parse(text);
+      }} catch (error) {{
+        throw new Error(
+          `JSON を解析できません。途中バックアップ JSON を指定してください。(${{error}})`
+        );
+      }}
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        (parsed.kind === "imm-stocktake-result" || "entries" in parsed)
+      ) {{
+        throw new Error("これは棚卸結果データです。途中バックアップ JSON を読み込んでください。");
+      }}
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        parsed.kind !== "imm-stocktake-draft"
+      ) {{
+        throw new Error("途中バックアップの形式が正しくありません。");
+      }}
+      if (parsed.v !== 1) {{
+        throw new Error("対応していない途中バックアップの版数です。");
+      }}
+      if (
+        parsed.session_id !== SHEET.session_id ||
+        parsed.client_id !== SHEET.client_id ||
+        parsed.started_at !== SHEET.started_at
+      ) {{
+        throw new Error("別の棚卸シートのバックアップです。現在のシートでは読み込めません。");
+      }}
+      const restoredState = validateDraft(parsed);
+      if (restoredState === null) {{
+        throw new Error("途中バックアップの品目または入力データが不正です。");
+      }}
+      let confirmedCount = 0;
+      for (const item of SHEET.items) {{
+        const entry = restoredState[String(item.item_id)];
+        const validation = validateItemState(entry.actual, entry.note, entry.badInput);
+        if (entry.confirmed && validation.valid) {{
+          confirmedCount += 1;
+        }}
+      }}
+      return {{ state: restoredState, confirmedCount }};
+    }}
+
+    function setDraftFeedback(message) {{
+      draftFeedbackEl.textContent = message;
+      draftFeedbackEl.hidden = false;
+    }}
+
+    function clearBackupCandidate() {{
+      backupCandidate = null;
+      draftPreviewEl.hidden = true;
+      draftPreviewSummaryEl.textContent = "";
+    }}
+
+    function inspectBackupText(text, generation = ++backupReadGeneration) {{
+      clearBackupCandidate();
+      try {{
+        const candidate = parseBackupDraft(text);
+        if (generation !== backupReadGeneration) return;
+        backupCandidate = candidate;
+        draftPreviewSummaryEl.textContent =
+          `${{SHEET.client_name}} / ${{SHEET.started_at_display}} 開始 / ` +
+          `${{SHEET.items.length}} 件中 ${{candidate.confirmedCount}} 件を確認済として復元予定`;
+        draftPreviewEl.hidden = false;
+        setDraftFeedback("バックアップを検証しました。置き換えを承認するまで画面と保存データは変更しません。");
+      }} catch (error) {{
+        if (generation !== backupReadGeneration) return;
+        setDraftFeedback(`バックアップを読み込めませんでした: ${{error.message || error}}`);
+      }}
+    }}
+
+    function readBackupFile(file) {{
+      const generation = ++backupReadGeneration;
+      clearBackupCandidate();
+      if (!file) {{
+        setDraftFeedback("読み込むファイルが選択されていません。");
+        return;
+      }}
+      try {{
+        const reader = new FileReader();
+        reader.onload = () => {{
+          if (generation !== backupReadGeneration) return;
+          if (typeof reader.result !== "string") {{
+            setDraftFeedback("ファイルの内容をテキストとして読み込めませんでした。");
+            return;
+          }}
+          draftImportTextEl.value = reader.result;
+          inspectBackupText(reader.result, generation);
+        }};
+        reader.onerror = () => {{
+          if (generation === backupReadGeneration) {{
+            const detail = reader.error ? reader.error.message : "読み込みエラー";
+            setDraftFeedback(
+              `ファイルを読み込めませんでした: ${{detail}}`
+            );
+          }}
+        }};
+        reader.onabort = () => {{
+          if (generation === backupReadGeneration) {{
+            setDraftFeedback("ファイルの読み込みがキャンセルされました。画面と保存データは変更していません。");
+          }}
+        }};
+        reader.readAsText(file, "UTF-8");
+      }} catch (error) {{
+        if (generation === backupReadGeneration) {{
+          setDraftFeedback(`ファイルを読み込めませんでした: ${{error.message || error}}`);
+        }}
+      }}
     }}
 
     function validateStorageRecord(record) {{
@@ -2257,10 +2511,128 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       resultTextEl.select();
     }}
 
+    function showDraftInTextarea(jsonText, message, selectText = true) {{
+      draftTextEl.value = jsonText;
+      draftBoxEl.hidden = false;
+      draftTextEl.hidden = false;
+      setDraftFeedback(message);
+      if (selectText) {{
+        draftTextEl.focus();
+        draftTextEl.select();
+      }}
+    }}
+
+    function createDraftJsonText() {{
+      return JSON.stringify(createDraft(), null, 2);
+    }}
+
     function buildDownloadFilename() {{
       const safeClient =
         String(SHEET.client_name).replace(/[\\\\/:*?"<>|\\u0000-\\u001f]+/g, "_") || "client";
       return `棚卸結果_${{safeClient}}_${{SHEET.filename_timestamp}}.json`;
+    }}
+
+    function buildDraftDownloadFilename() {{
+      const safeClient =
+        String(SHEET.client_name).replace(/[\\\\/:*?"<>|\\u0000-\\u001f]+/g, "_") || "client";
+      return (
+        `棚卸途中_${{safeClient}}_${{SHEET.filename_timestamp}}_` +
+        `${{SHEET.session_id.slice(0, 8)}}.json`
+      );
+    }}
+
+    function saveDraftBackup() {{
+      let jsonText;
+      try {{
+        jsonText = createDraftJsonText();
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+        return;
+      }}
+
+      const generation = ++backupDownloadGeneration;
+      let url = null;
+      let link = null;
+      try {{
+        const blob = new Blob([jsonText], {{ type: "application/json" }});
+        if (!window.URL || typeof window.URL.createObjectURL !== "function") {{
+          throw new Error("createObjectURL is unavailable");
+        }}
+        url = window.URL.createObjectURL(blob);
+        link = document.createElement("a");
+        link.href = url;
+        link.download = buildDraftDownloadFilename();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }} catch (error) {{
+        if (link) link.remove();
+        if (url && window.URL && typeof window.URL.revokeObjectURL === "function") {{
+          try {{
+            window.URL.revokeObjectURL(url);
+          }} catch {{
+            // URL cleanup failure does not affect the backup text fallback.
+          }}
+        }}
+        showDraftInTextarea(
+          jsonText,
+          `ファイル保存を開始できませんでした: ${{error}} JSON をコピーして保管してください。`
+        );
+        return;
+      }}
+
+      setDraftFeedback(
+        "途中バックアップの保存処理を開始しました。実際の保存完了は確認できません。"
+      );
+      setTimeout(() => {{
+        if (window.URL && typeof window.URL.revokeObjectURL === "function") {{
+          try {{
+            window.URL.revokeObjectURL(url);
+          }} catch {{
+            // URL cleanup failure does not affect the backup text fallback.
+          }}
+        }}
+        if (generation === backupDownloadGeneration) {{
+          showDraftInTextarea(
+            jsonText,
+            "保存完了は確認できません。ファイルが見当たらない場合は、" +
+              "以下の JSON をコピーして保管してください。",
+            false
+          );
+        }}
+      }}, 1500);
+    }}
+
+    function copyDraftBackup() {{
+      let jsonText;
+      try {{
+        jsonText = createDraftJsonText();
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+        return;
+      }}
+      const onCopied = () => {{
+        setDraftFeedback("途中バックアップ JSON をクリップボードにコピーしました。");
+      }};
+      const onFailed = () => {{
+        showDraftInTextarea(
+          jsonText,
+          "直接コピーできませんでした。表示した JSON を長押ししてコピーしてください。"
+        );
+      }};
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {{
+        navigator.clipboard.writeText(jsonText).then(onCopied, () => {{
+          if (copyTextLegacy(jsonText)) {{
+            onCopied();
+          }} else {{
+            onFailed();
+          }}
+        }});
+      }} else if (copyTextLegacy(jsonText)) {{
+        onCopied();
+      }} else {{
+        onFailed();
+      }}
     }}
 
     document.querySelectorAll(".tab-btn").forEach(btn => {{
@@ -2297,6 +2669,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
 
     confirmResetStateBtn.addEventListener("click", () => {{
       resetConfirmationEl.hidden = true;
+      clearBackupCandidate();
       saveGeneration += 1;
       resetWritePending = true;
       pendingSnapshot = null;
@@ -2310,6 +2683,62 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       }}
       applyFilters();
       updateOverallProgress();
+      saveState(true);
+    }});
+
+    saveDraftBtn.addEventListener("click", saveDraftBackup);
+
+    showDraftBtn.addEventListener("click", () => {{
+      backupDownloadGeneration += 1;
+      try {{
+        showDraftInTextarea(
+          createDraftJsonText(),
+          "途中バックアップ JSON を表示しました。長押しでコピーしてください。"
+        );
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+      }}
+    }});
+
+    copyDraftBtn.addEventListener("click", copyDraftBackup);
+
+    draftFileInputEl.addEventListener("change", () => {{
+      const file = draftFileInputEl.files && draftFileInputEl.files[0];
+      draftFileInputEl.value = "";
+      readBackupFile(file);
+    }});
+
+    readDraftTextBtn.addEventListener("click", () => {{
+      inspectBackupText(draftImportTextEl.value);
+    }});
+
+    cancelDraftReplaceBtn.addEventListener("click", () => {{
+      backupReadGeneration += 1;
+      clearBackupCandidate();
+      setDraftFeedback("読み込みをキャンセルしました。画面と保存データは変更していません。");
+      readDraftTextBtn.focus();
+    }});
+
+    confirmDraftReplaceBtn.addEventListener("click", () => {{
+      if (!backupCandidate) return;
+      const replacement = backupCandidate.state;
+      clearBackupCandidate();
+      backupReadGeneration += 1;
+      backupDownloadGeneration += 1;
+      saveGeneration += 1;
+      resetWritePending = true;
+      pendingSnapshot = null;
+      state = replacement;
+      storageWriteAllowed = true;
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
+      resetConfirmationEl.hidden = true;
+      hideResultOutput();
+      renderCurrentState();
+      setDraftFeedback(
+        "バックアップの入力を復元しました。" +
+          "IndexedDB への保存状態を確認してください。"
+      );
       saveState(true);
     }});
 

@@ -781,6 +781,257 @@ def test_generated_html_indexeddb_failure_keeps_input_and_retries(tmp_path: Path
         browser.close()
 
 
+def test_generated_html_draft_backup_round_trip_after_storage_clear(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+        page.locator("#draft-tools summary").click()
+
+        card = page.locator('[data-item-id="201"]')
+        card.get_by_label("B-001 実数").fill("1.5")
+        card.get_by_label("B-001 メモ").fill(" 途中入力 🙂 \n")
+        _wait_for_storage_status(page, "saved")
+        assert page.get_by_role("button", name="結果テキストを表示").is_disabled()
+
+        with page.expect_download() as download_info:
+            page.get_by_role("button", name="途中データを保存").click()
+        download = download_info.value
+        expected_stamp = to_local("2026-10-17 02:00:00").strftime("%Y%m%d_%H%M%S")
+        assert download.suggested_filename == f"棚卸途中_B社_{expected_stamp}_{SESSION_ID[:8]}.json"
+        backup_text = Path(download.path()).read_text(encoding="utf-8")
+        backup = json.loads(backup_text)
+        assert backup["kind"] == "imm-stocktake-draft"
+        assert backup["items"][0]["actual"] == "1.5"
+        assert backup["items"][0]["note"] == " 途中入力 🙂 \n"
+        assert backup["items"][0]["confirmed"] is False
+        assert backup["items"][1]["actual"] == "20"
+
+        page.wait_for_function(
+            "() => !document.querySelector('#draft-text').hidden",
+            timeout=5000,
+        )
+        assert page.get_by_label("途中バックアップ JSON", exact=True).input_value() == backup_text
+
+        recovered_context = browser.new_context()
+        recovered_page = recovered_context.new_page()
+        recovered_page.on("pageerror", lambda error: page_errors.append(str(error)))
+        recovered_page.goto(html_path.as_uri())
+        _wait_for_storage_status(recovered_page, "ready")
+        recovered_page.locator("#draft-tools summary").click()
+        assert _read_indexeddb_record(recovered_page, SESSION_ID) is None
+
+        recovered_card = recovered_page.locator('[data-item-id="201"]')
+        file_input = recovered_page.locator("#draft-file")
+        file_input.set_input_files(download.path())
+        recovered_page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        assert "B社" in recovered_page.locator("#draft-preview-summary").inner_text()
+        expected_started_at = to_local("2026-10-17 02:00:00").strftime("%Y-%m-%d %H:%M:%S")
+        assert expected_started_at in recovered_page.locator("#draft-preview-summary").inner_text()
+        assert "2 件中 0 件" in recovered_page.locator("#draft-preview-summary").inner_text()
+        assert recovered_card.get_by_label("B-001 実数").input_value() == "10"
+        assert _read_indexeddb_record(recovered_page, SESSION_ID) is None
+
+        recovered_page.get_by_role("button", name="読み込みをキャンセル").click()
+        assert recovered_page.locator("#draft-preview").is_hidden()
+        assert recovered_card.get_by_label("B-001 実数").input_value() == "10"
+        assert _read_indexeddb_record(recovered_page, SESSION_ID) is None
+
+        recovered_page.get_by_role("button", name="貼付データを検証").click()
+        recovered_page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        recovered_page.get_by_role("button", name="現在の入力全体を置き換える").click()
+        _wait_for_storage_status(recovered_page, "saved")
+        assert recovered_card.get_by_label("B-001 実数").input_value() == "1.5"
+        assert recovered_card.get_by_label("B-001 メモ").input_value() == " 途中入力 🙂 \n"
+        assert recovered_card.locator(".status-badge").inner_text() == "入力エラー"
+        stored = _read_indexeddb_record(recovered_page, SESSION_ID)
+        assert stored is not None
+        assert stored["draft"] == backup
+        assert not page_errors
+        recovered_context.close()
+        context.close()
+        browser.close()
+
+
+def test_generated_html_draft_import_rejects_bad_data_and_confirms_replacement(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+        page.locator("#draft-tools summary").click()
+
+        card = page.locator('[data-item-id="201"]')
+        card.get_by_label("B-001 実数").fill("7")
+        _wait_for_storage_status(page, "saved")
+        original_record = _read_indexeddb_record(page, SESSION_ID)
+        assert original_record is not None
+
+        original_draft = original_record["draft"]
+        assert isinstance(original_draft, dict)
+        replacement = dict(original_draft)
+        original_items = original_draft["items"]
+        assert isinstance(original_items, list)
+        replacement_items = [dict(item) for item in original_items]
+        replacement_items[0].update(actual="8", note="バックアップから復元", confirmed=True)
+        replacement["items"] = replacement_items
+
+        malformed = [
+            "{",
+            json.dumps(
+                {
+                    "v": 1,
+                    "session_id": SESSION_ID,
+                    "client_id": 2,
+                    "entries": [{"item_id": 201, "actual_quantity": 8, "note": None}],
+                }
+            ),
+            json.dumps({**replacement, "session_id": "f" * 32}),
+            json.dumps({**replacement, "items": []}),
+        ]
+        for text in malformed:
+            page.get_by_label("途中バックアップ JSON を貼り付け").fill(text)
+            page.get_by_role("button", name="貼付データを検証").click()
+            assert page.locator("#draft-preview").is_hidden()
+            assert page.locator("#draft-feedback").is_visible()
+            assert card.get_by_label("B-001 実数").input_value() == "7"
+            assert _read_indexeddb_record(page, SESSION_ID) == original_record
+
+        replacement_text = json.dumps(replacement, ensure_ascii=False)
+        import_text = page.get_by_label("途中バックアップ JSON を貼り付け")
+        import_text.fill(replacement_text)
+        page.get_by_role("button", name="貼付データを検証").click()
+        page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        assert card.get_by_label("B-001 実数").input_value() == "7"
+        assert _read_indexeddb_record(page, SESSION_ID) == original_record
+
+        page.get_by_role("button", name="読み込みをキャンセル").click()
+        assert card.get_by_label("B-001 実数").input_value() == "7"
+        assert _read_indexeddb_record(page, SESSION_ID) == original_record
+
+        import_text.fill(replacement_text)
+        page.get_by_role("button", name="貼付データを検証").click()
+        page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        page.get_by_role("button", name="現在の入力全体を置き換える").click()
+        _wait_for_storage_status(page, "saved")
+        assert card.get_by_label("B-001 実数").input_value() == "8"
+        assert card.get_by_label("B-001 メモ").input_value() == "バックアップから復元"
+        assert card.locator(".status-badge").inner_text() == "確認済"
+        saved_record = _read_indexeddb_record(page, SESSION_ID)
+        assert saved_record is not None
+        assert saved_record["draft"] == replacement
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_draft_backup_works_without_indexeddb_and_reports_failures(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    unreadable_backup = tmp_path / "unreadable.json"
+    unreadable_backup.write_text("{}", encoding="utf-8")
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_context(accept_downloads=True).new_page()
+        page.add_init_script(
+            """Object.defineProperty(window, "indexedDB", {
+                configurable: true,
+                get() { throw new Error("IndexedDB denied"); }
+            });"""
+        )
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "error")
+        page.locator("#draft-tools summary").click()
+        card = page.locator('[data-item-id="201"]')
+        card.get_by_label("B-001 実数").fill("6")
+        assert page.locator("#storage-warning").is_visible()
+
+        with page.expect_download() as download_info:
+            page.get_by_role("button", name="途中データを保存").click()
+        backup_text = Path(download_info.value.path()).read_text(encoding="utf-8")
+        backup = json.loads(backup_text)
+        assert backup["items"][0]["actual"] == "6"
+
+        page.evaluate(
+            """() => {
+                window.__nativeCreateObjectURL = window.URL.createObjectURL;
+                window.URL.createObjectURL = () => { throw new Error("blocked"); };
+            }"""
+        )
+        page.get_by_role("button", name="途中データを保存").click()
+        assert page.get_by_label("途中バックアップ JSON", exact=True).is_visible()
+        assert "ファイル保存を開始できませんでした" in page.locator("#draft-feedback").inner_text()
+
+        page.evaluate(
+            """() => {
+                window.URL.createObjectURL = window.__nativeCreateObjectURL;
+                HTMLAnchorElement.prototype.click = function() {};
+            }"""
+        )
+        page.get_by_role("button", name="途中データを保存").click()
+        page.wait_for_function(
+            "() => !document.querySelector('#draft-text').hidden",
+            timeout=5000,
+        )
+        assert (
+            json.loads(page.get_by_label("途中バックアップ JSON", exact=True).input_value())
+            == backup
+        )
+
+        page.evaluate(
+            """() => {
+                Object.defineProperty(navigator, "clipboard", {
+                    value: undefined,
+                    configurable: true
+                });
+                document.execCommand = () => false;
+            }"""
+        )
+        page.get_by_role("button", name="JSON をコピー").click()
+        assert page.get_by_label("途中バックアップ JSON", exact=True).is_visible()
+        assert "直接コピーできませんでした" in page.locator("#draft-feedback").inner_text()
+
+        page.evaluate(
+            """() => {
+                FileReader.prototype.readAsText = function() {
+                    throw new Error("read denied");
+                };
+            }"""
+        )
+        page.locator("#draft-file").set_input_files(str(unreadable_backup))
+        assert "read denied" in page.locator("#draft-feedback").inner_text()
+        assert card.get_by_label("B-001 実数").input_value() == "6"
+
+        backup["items"][0].update(actual="8", note="保存不能時の復元", confirmed=True)
+        page.get_by_label("途中バックアップ JSON を貼り付け").fill(
+            json.dumps(backup, ensure_ascii=False)
+        )
+        page.get_by_role("button", name="貼付データを検証").click()
+        page.wait_for_function("() => !document.querySelector('#draft-preview').hidden")
+        page.get_by_role("button", name="現在の入力全体を置き換える").click()
+        page.wait_for_function(
+            "() => document.querySelector('#storage-status')?.dataset.status === 'error'"
+        )
+        assert page.locator("#storage-warning").is_visible()
+        assert card.get_by_label("B-001 実数").input_value() == "8"
+        assert card.get_by_label("B-001 メモ").input_value() == "保存不能時の復元"
+        assert card.locator(".status-badge").inner_text() == "確認済"
+        assert not page_errors
+        browser.close()
+
+
 def test_generated_html_disables_input_until_initial_read_finishes(tmp_path: Path) -> None:
     html_path = _write_small_sheet(tmp_path)
     with sync_playwright() as playwright:
