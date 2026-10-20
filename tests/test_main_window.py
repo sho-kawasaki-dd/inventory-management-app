@@ -1112,6 +1112,40 @@ def test_item_dialog_edit_threshold_updates_dock_with_one_reload_each(
     assert _is_colored(window, first.id)
 
 
+def test_item_dialog_category_change_refreshes_code_and_restores_selection(
+    window_with_items, monkeypatch
+) -> None:
+    window, item, _second = window_with_items
+    from inventory_manager_mini.ui.dialogs.item_dialog import ItemDialog
+
+    destination = next(
+        category for category in window.context.master.list_categories() if category.id == 1
+    )
+    expected_code = f"{destination.code_prefix}-{destination.next_seq:04d}"
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args: QMessageBox.StandardButton.Yes,
+    )
+
+    def change_category_and_save(dialog: ItemDialog) -> int:
+        dialog.category_picker.set_current_category_id(destination.id)
+        dialog._save()
+        return dialog.result()
+
+    monkeypatch.setattr(ItemDialog, "exec", change_category_and_save)
+    _select_item(window, item.id)
+
+    window.edit_action.trigger()
+
+    updated_item = window.context.inventory.get_item(item.id)
+    source_row = window.item_model.row_of(item.id)
+    assert source_row is not None
+    assert updated_item.code == expected_code
+    assert window.item_model.row_at(source_row).code == expected_code
+    assert window._selected_item_id() == item.id
+
+
 def test_item_dialog_create_reloads_once_and_cancel_does_not_reload(
     window_with_items, monkeypatch
 ) -> None:

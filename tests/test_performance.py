@@ -949,7 +949,7 @@ def test_filter_changes_to_table_paint(qtbot, performance_window) -> None:
 def test_sort_changes_to_table_paint(qtbot, performance_window) -> None:
     window, probe = performance_window
     results: list[tuple[str, float]] = []
-    for label, column in (("数量", 7), ("品名", 1)):
+    for label, column in (("数量", 8), ("品名", 1)):
         probe.arm()
         started_at = time.perf_counter()
         window.table.sortByColumn(column, window.sort_model.sortOrder())

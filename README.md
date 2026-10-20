@@ -70,7 +70,7 @@ GitHub Release からインストーラーと同じ版の `.sha256` ファイル
 起動前にハッシュを照合してください。
 
 ```powershell
-$installer = '.\inventory-manager-mini-0.3.0-setup.exe'
+$installer = '.\inventory-manager-mini-0.3.1-setup.exe'
 $expected = ((Get-Content "$installer.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
 $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'SHA256 が一致しません。インストーラーを実行しないでください。' }
@@ -126,16 +126,16 @@ Windows x64、Python 3.13、uv、および Inno Setup 6.7.3 が必要です。�
 ```powershell
 uv sync --locked
 uv run python scripts/fetch_dependency_sources.py
-.\packaging\build.ps1 -Version 0.3.0
+.\packaging\build.ps1 -Version 0.3.1
 ```
 
-PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.3.0` のように
+PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.3.1` のように
 実行するか、利用者の判断で現在のセッションだけ実行ポリシーを変更してください。
 
 検証用 rc ビルドでは接尾辞を別に指定します。
 
 ```powershell
-.\packaging\build.ps1 -Version 0.3.0 -Suffix '-rc1'
+.\packaging\build.ps1 -Version 0.3.1 -Suffix '-rc1'
 ```
 
 成果物は毎回異なるビルド ID の `dist/releases/<ビルドID>/` に出力されます。そこにはインストーラー、
@@ -174,6 +174,8 @@ Windows Sandbox または新規 VM でのみ確認してください。継承確
 ### 在庫操作
 
 初回は「マスタ」メニューでクライアント・発注主体・担当者などを登録し、「品目」メニューの「新規」から品目を登録します。品目を一覧で選択し、「在庫」メニューまたはツールバーから入庫・出庫・返品・廃棄・棚卸を選びます。右クリックメニューからも操作できます。在庫操作は有効な品目を選択しているときに利用できます。
+
+品目の編集でカテゴリを変更して保存すると、管理番号は変更後のカテゴリで再採番されます。印刷済みの棚ラベルは再印刷してください。
 
 操作ごとに担当者を選択します。出庫では使用先が必須です。入庫の単価は空欄にすると現在の参考価格が使われます。参考価格と異なる単価を入力した場合は、確認画面で参考価格を更新するか選べます。「キャンセル」では入庫を記録しません。出庫・廃棄の原価は入庫単価の古いロットからFIFOで計算され、操作画面に見積原価と単価未登録数量が表示されます。参考価格は出庫・廃棄の原価には使われません。棚卸では実数を入力し、現在数との差分が履歴に記録されます。
 

@@ -15,6 +15,7 @@ from inventory_manager_mini.core.errors import (
     MasterInUseError,
     NegativeStockError,
     ReversalNotAllowedError,
+    StocktakeInProgressError,
     ValidationError,
 )
 from inventory_manager_mini.core.models import (
@@ -114,26 +115,70 @@ def test_create_item_rejects_missing_or_inactive_initial_staff_atomically(
 def test_category_code_sequence_is_not_reused_after_item_moves(
     inventory: InventoryService,
     master: MasterService,
+    seeded_conn: sqlite3.Connection,
 ) -> None:
-    original = inventory.create_item(_new_item())
-    inventory.update_item(_update_item(original, category_id=1))
+    original = inventory.create_item(_new_item(initial_quantity=3, initial_staff_id=1))
+    inventory.issue(original.id, 1, 1, "使用")
+    destination = master.add_category("工具", "TL", parent_id=1)
+    first_destination_item = inventory.create_item(
+        _new_item(name="工具品1", category_id=destination.id)
+    )
+    with transaction(seeded_conn):
+        assert inventory.items.allocate_code(destination.id) == "TL-0002"
+    second_destination_item = inventory.create_item(
+        _new_item(name="工具品2", category_id=destination.id)
+    )
+    assert (first_destination_item.code, second_destination_item.code) == (
+        "TL-0001",
+        "TL-0003",
+    )
+
+    before = inventory.get_item(original.id)
+    assert before is not None
+    before_snapshot = _snapshot(seeded_conn)
+    updated = inventory.update_item(_update_item(original, category_id=destination.id))
+
+    assert (updated.category_id, updated.code) == (destination.id, "TL-0004")
+    assert (updated.quantity, updated.client_id, updated.purchaser_id) == (
+        before.quantity,
+        before.client_id,
+        before.purchaser_id,
+    )
+    after_snapshot = _snapshot(seeded_conn)
+    assert after_snapshot["stock_movements"] == before_snapshot["stock_movements"]
+    assert after_snapshot["stock_allocations"] == before_snapshot["stock_allocations"]
+    assert after_snapshot["total_aggregates"] == before_snapshot["total_aggregates"]
+    assert seeded_conn.execute("SELECT next_seq FROM categories WHERE id = 2").fetchone()[0] == 2
+    assert (
+        seeded_conn.execute(
+            "SELECT next_seq FROM categories WHERE id = ?", (destination.id,)
+        ).fetchone()[0]
+        == 5
+    )
+
     with pytest.raises(MasterInUseError):
         master.delete_category(2)
 
     next_item = inventory.create_item(_new_item(name="次の品目"))
-    assert (original.code, next_item.code) == ("ST-0001", "ST-0002")
+    moved_back = inventory.update_item(_update_item(updated, category_id=2))
+    assert (next_item.code, moved_back.code) == ("ST-0002", "ST-0003")
 
 
 def test_update_item_keeps_identity_and_allows_unchanged_inactive_masters(
     inventory: InventoryService,
     master: MasterService,
+    seeded_conn: sqlite3.Connection,
 ) -> None:
     item = inventory.create_item(_new_item(initial_quantity=3, initial_staff_id=1))
     master.deactivate_client(1)
     master.deactivate_purchaser(1)
 
+    next_seq = seeded_conn.execute("SELECT next_seq FROM categories WHERE id = 2").fetchone()[0]
     updated = inventory.update_item(_update_item(item, name="更新後"))
     assert (updated.code, updated.quantity, updated.unit) == (item.code, 3, "個")
+    assert seeded_conn.execute("SELECT next_seq FROM categories WHERE id = 2").fetchone()[0] == (
+        next_seq
+    )
     with pytest.raises(InactiveMasterError):
         inventory.update_item(_update_item(updated, client_id=3))
     with pytest.raises(InactiveMasterError):
@@ -145,6 +190,62 @@ def test_update_item_keeps_identity_and_allows_unchanged_inactive_masters(
     assert (history[0].client_id, history[0].purchaser_id) == (1, 1)
     with pytest.raises(InactiveMasterError):
         inventory.create_item(_new_item(purchaser_id=3))
+
+
+def test_category_change_unique_violation_rolls_back_code_item_and_sequence(
+    inventory: InventoryService,
+    master: MasterService,
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    original = inventory.create_item(_new_item(name="元の品目"))
+    destination = master.add_category("工具", "TL", parent_id=1)
+    inventory.create_item(_new_item(name="既存品目", category_id=destination.id))
+    seeded_conn.execute("UPDATE categories SET next_seq = 1 WHERE id = ?", (destination.id,))
+    before = _snapshot(seeded_conn)
+
+    with pytest.raises(ValidationError, match="同じ値がすでに登録されています"):
+        inventory.update_item(_update_item(original, name="変更後", category_id=destination.id))
+
+    assert _snapshot(seeded_conn) == before
+    assert inventory.get_item(original.id) == original
+    assert not seeded_conn.in_transaction
+
+
+def test_category_change_reallocates_number_for_inactive_item(
+    inventory: InventoryService,
+) -> None:
+    item = inventory.create_item(_new_item())
+    inventory.deactivate_item(item.id)
+
+    updated = inventory.update_item(_update_item(item, category_id=1))
+
+    assert (updated.code, updated.category_id, updated.is_active) == ("TO-0001", 1, False)
+
+
+def test_category_change_during_stocktake_is_rejected_without_allocating_code(
+    inventory: InventoryService,
+    seeded_conn: sqlite3.Connection,
+    tmp_path: Path,
+) -> None:
+    item = inventory.create_item(_new_item())
+    inventory.export_mobile_stocktake_html(tmp_path / "stocktake.html", 1, 1)
+    next_seq_before = {
+        category_id: seeded_conn.execute(
+            "SELECT next_seq FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()[0]
+        for category_id in (1, 2)
+    }
+
+    with pytest.raises(StocktakeInProgressError):
+        inventory.update_item(_update_item(item, category_id=1))
+
+    assert inventory.get_item(item.id) == item
+    assert {
+        category_id: seeded_conn.execute(
+            "SELECT next_seq FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()[0]
+        for category_id in (1, 2)
+    } == next_seq_before
 
 
 @pytest.mark.parametrize(
@@ -1133,6 +1234,39 @@ class _CommitFailConnection(sqlite3.Connection):
             self.fail_next_commit = False
             raise sqlite3.OperationalError("commit failed")
         return super().execute(sql, parameters)  # type: ignore[arg-type]
+
+
+def test_category_change_commit_failure_rolls_back_code_and_sequence() -> None:
+    conn = sqlite3.connect(":memory:", autocommit=True, factory=_CommitFailConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    create_schema(conn)
+    master = MasterService(conn)
+    client = master.add_client("総務")
+    purchaser = master.add_purchaser("本部")
+    source = master.add_category("文具", "ST")
+    destination = master.add_category("工具", "TL")
+    inventory = InventoryService(conn)
+    item = inventory.create_item(
+        _new_item(
+            client_id=client.id,
+            purchaser_id=purchaser.id,
+            category_id=source.id,
+            location_id=None,
+        )
+    )
+    before = _snapshot(conn)
+
+    try:
+        assert isinstance(conn, _CommitFailConnection)
+        conn.fail_next_commit = True
+        with pytest.raises(sqlite3.OperationalError, match="commit failed"):
+            inventory.update_item(_update_item(item, category_id=destination.id))
+
+        assert _snapshot(conn) == before
+        assert inventory.get_item(item.id) == item
+        assert not conn.in_transaction
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize("failure", ["amount-limit", "aggregate-limit", "injected", "commit"])

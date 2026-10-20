@@ -196,6 +196,37 @@ def test_item_repository_allocates_sequences_without_reusing_codes(
         repo.allocate_code(999)
 
 
+def test_item_repository_set_code_updates_code(repository_conn: sqlite3.Connection) -> None:
+    repo = ItemRepository(repository_conn)
+    _insert_item(repository_conn, item_id=1, code="ST-0001")
+
+    repo.set_code(1, "TL-0001")
+
+    item = repo.get(1)
+    assert item is not None
+    assert item.code == "TL-0001"
+
+
+def test_item_repository_set_code_rejects_missing_item(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    with pytest.raises(ValidationError, match="品目が見つかりません"):
+        ItemRepository(repository_conn).set_code(999, "TL-0001")
+
+
+def test_item_repository_set_code_converts_unique_violation(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = ItemRepository(repository_conn)
+    _insert_item(repository_conn, item_id=1, code="ST-0001")
+    _insert_item(repository_conn, item_id=2, code="TL-0001")
+
+    with pytest.raises(ValidationError, match="同じ値がすでに登録されています"):
+        repo.set_code(1, "TL-0001")
+
+    assert repo.get(1).code == "ST-0001"  # type: ignore[union-attr]
+
+
 def test_item_repository_insert_update_get_and_active_state(
     repository_conn: sqlite3.Connection,
 ) -> None:

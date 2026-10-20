@@ -44,11 +44,12 @@ def _item(item_id: int = 1, **changes: object) -> ItemRow:
 def test_headers_and_column_count() -> None:
     model = ItemTableModel()
 
-    assert model.columnCount() == 15
-    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(15)] == [
+    assert model.columnCount() == 16
+    assert [model.headerData(column, Qt.Orientation.Horizontal) for column in range(16)] == [
         "管理番号",
         "品名",
         "メーカー型番",
+        "用途",
         "クライアント",
         "発注主体",
         "カテゴリ",
@@ -88,23 +89,23 @@ def test_display_values_roles_and_inactive_foreground(monkeypatch: pytest.Monkey
     display = Qt.ItemDataRole.DisplayRole
     raw = Qt.ItemDataRole.UserRole
 
-    assert model.data(model.index(0, 7), display) == "1,234"
-    assert model.data(model.index(0, 10), display) == "2,000"
-    assert model.data(model.index(0, 11), display) == "123,456円"
-    assert model.data(model.index(0, 13), display) == "2026-02-03"
-    assert model.data(model.index(0, 14), display) == "廃止"
-    assert model.data(model.index(0, 5), raw) == "備品 > 文具"
-    assert model.data(model.index(0, 7), raw) == 1234
-    assert model.data(model.index(0, 10), raw) == 2000
-    assert model.data(model.index(0, 11), raw) == 123456
-    assert model.data(model.index(0, 13), raw) == date(2026, 2, 3)
-    assert model.data(model.index(0, 6), display) == "倉庫"
+    assert model.data(model.index(0, 8), display) == "1,234"
+    assert model.data(model.index(0, 11), display) == "2,000"
+    assert model.data(model.index(0, 12), display) == "123,456円"
+    assert model.data(model.index(0, 14), display) == "2026-02-03"
+    assert model.data(model.index(0, 15), display) == "廃止"
+    assert model.data(model.index(0, 6), raw) == "備品 > 文具"
+    assert model.data(model.index(0, 8), raw) == 1234
+    assert model.data(model.index(0, 11), raw) == 2000
+    assert model.data(model.index(0, 12), raw) == 123456
+    assert model.data(model.index(0, 14), raw) == date(2026, 2, 3)
+    assert model.data(model.index(0, 7), display) == "倉庫"
     assert model.data(model.index(0, 2), display) == "MP-1"
-    assert model.data(model.index(0, 12), display) == "仕入先A"
-    assert model.data(model.index(0, 6), Qt.ItemDataRole.ForegroundRole) == QBrush(
+    assert model.data(model.index(0, 13), display) == "仕入先A"
+    assert model.data(model.index(0, 7), Qt.ItemDataRole.ForegroundRole) == QBrush(
         QColor(Qt.GlobalColor.gray)
     )
-    assert model.data(model.index(0, 6), Qt.ItemDataRole.BackgroundRole) is None
+    assert model.data(model.index(0, 7), Qt.ItemDataRole.BackgroundRole) is None
 
 
 def test_background_role_highlights_only_active_low_stock_rows() -> None:
@@ -134,13 +135,15 @@ def test_none_values_are_blank_and_numeric_columns_are_right_aligned() -> None:
     right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
     assert model.data(model.index(0, 2)) == ""
-    assert model.data(model.index(0, 6)) == ""
-    assert model.data(model.index(0, 10)) == ""
+    assert model.data(model.index(0, 3)) == ""
+    assert model.data(model.index(0, 7)) == ""
     assert model.data(model.index(0, 11)) == ""
-    assert model.data(model.index(0, 13)) == ""
-    for column in (7, 9, 10, 11):
+    assert model.data(model.index(0, 12)) == ""
+    assert model.data(model.index(0, 14)) == ""
+    for column in (8, 10, 11, 12):
         assert model.data(model.index(0, column), Qt.ItemDataRole.TextAlignmentRole) == right
     assert model.data(model.index(0, 1), Qt.ItemDataRole.TextAlignmentRole) is None
+    assert model.data(model.index(0, 3), Qt.ItemDataRole.TextAlignmentRole) is None
 
 
 def test_set_rows_and_row_lookups() -> None:
@@ -162,10 +165,10 @@ def test_set_rows_and_row_lookups() -> None:
 @pytest.mark.parametrize(
     ("column", "rows", "expected"),
     [
-        (7, [_item(1, quantity=10), _item(2, quantity=2)], [2, 1]),
+        (8, [_item(1, quantity=10), _item(2, quantity=2)], [2, 1]),
         (1, [_item(1, name="Zebra"), _item(2, name="Apple")], [2, 1]),
         (
-            10,
+            11,
             [_item(1, reorder_quantity=None), _item(2, reorder_quantity=3)],
             [2, 1],
         ),
@@ -179,6 +182,31 @@ def test_proxy_sorts_values_and_places_none_last(column: int, rows, expected: li
     proxy.sort(column, Qt.SortOrder.AscendingOrder)
 
     assert [proxy.index(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(2)] == [
+        source.row_at(index - 1).code for index in expected
+    ]
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        (Qt.SortOrder.AscendingOrder, [2, 3, 1]),
+        (Qt.SortOrder.DescendingOrder, [3, 2, 1]),
+    ],
+)
+def test_proxy_sorts_application_and_places_none_last(order, expected: list[int]) -> None:
+    source = ItemTableModel()
+    source.set_rows(
+        [
+            _item(1, application=None),
+            _item(2, application="用途A"),
+            _item(3, application="用途B"),
+        ]
+    )
+    proxy = ItemSortProxyModel()
+    proxy.setSourceModel(source)
+    proxy.sort(3, order)
+
+    assert [proxy.index(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(3)] == [
         source.row_at(index - 1).code for index in expected
     ]
 
@@ -198,7 +226,7 @@ def test_proxy_sort_preserves_multiple_selected_source_rows() -> None:
         )
     assert len(selection.selectedRows()) == 2
 
-    proxy.sort(7, Qt.SortOrder.AscendingOrder)
+    proxy.sort(8, Qt.SortOrder.AscendingOrder)
 
     selected_proxy_rows = selection.selectedRows()
     assert len(selected_proxy_rows) == 2

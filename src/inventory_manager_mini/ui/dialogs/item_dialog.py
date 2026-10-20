@@ -23,6 +23,7 @@ from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.models import (
     MAX_STOCK_QUANTITY,
     MAX_UNIT_PRICE,
+    Item,
     ItemUpdate,
     NewItem,
 )
@@ -43,7 +44,7 @@ class ItemDialog(QDialog):
         super().__init__(parent)
         self.context = context
         self.item_id = item_id
-        self.item = None
+        self.item: Item | None = None
         self._threshold_out_of_range: int | None = None
         self._locked_client_ids: set[int] = set()
         self._source_client_locked = False
@@ -438,6 +439,16 @@ class ItemDialog(QDialog):
                 reference_price=reference_price,
                 note=self.note_edit.toPlainText(),
             )
+            if self.item is not None and category_id != self.item.category_id:
+                answer = QMessageBox.question(
+                    self,
+                    "管理番号の変更",
+                    "カテゴリを変更すると、管理番号が新しいカテゴリのものに再採番されます。印刷済みのラベルは再印刷が必要です。保存しますか?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
             succeeded, _item = run_guarded(self, lambda: self.context.inventory.update_item(value))
         if succeeded:
             self.context.data_bus.data_changed.emit()
