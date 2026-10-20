@@ -438,6 +438,8 @@ def test_generated_html_confirmation_validation_restore_and_fallbacks(tmp_path: 
 
         # ダウンロードが無反応でも手動で「結果テキストを表示」から取得できること
         page.get_by_role("button", name="初期状態にリセット").click()
+        page.get_by_role("button", name="入力をリセット").click()
+        _wait_for_storage_status(page, "saved")
         assert copy_btn.is_disabled()
         page.locator('[data-item-id="201"]').get_by_role("button", name="この実数で確認").click()
         page.locator('[data-item-id="202"]').get_by_role("button", name="この実数で確認").click()
@@ -552,6 +554,18 @@ def test_generated_html_500_items_layout_across_viewports(tmp_path: Path) -> Non
 
         assert not page_errors
         browser.close()
+
+
+def _saved_draft_item(record: dict[str, object] | None, index: int) -> dict[str, object]:
+    assert record is not None
+    draft = record.get("draft")
+    assert isinstance(draft, dict)
+    items = draft.get("items")
+    assert isinstance(items, list)
+    item = items[index]
+    assert isinstance(item, dict)
+    assert all(isinstance(key, str) for key in item)
+    return {key: value for key, value in item.items() if isinstance(key, str)}
 
 
 def _write_small_sheet(tmp_path: Path) -> Path:
@@ -985,8 +999,7 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
         "confirmed_not_bool": changed_draft(items=changed_item(0, confirmed="true")),
         "bad_input_not_bool": changed_draft(items=changed_item(0, badInput="false")),
         "actual_not_string": changed_draft(items=changed_item(0, actual=7)),
-        "negative_actual": changed_draft(items=changed_item(0, actual="-1")),
-        "note_too_long": changed_draft(items=changed_item(0, note="😀" * (MAX_NOTE_LENGTH + 1))),
+        "note_not_string": changed_draft(items=changed_item(0, note=7)),
         "revision": wrapped(storage_revision=0),
     }
     page_errors: list[str] = []
@@ -1010,10 +1023,54 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
             assert card.get_by_label("B-001 メモ").input_value() == "", name
             assert _read_indexeddb_record(page, SESSION_ID) == record, name
 
-        # 正常な保存値は確認状態・数量・メモ(前後の Unicode 空白を含む)のまま復元される
+        healthy_note = "  \u3000他品目🙂 \t"
+        incomplete_values = {
+            "empty_actual": ("", "", False),
+            "decimal_actual": ("1.5", "", False),
+            "negative_actual": ("-1", "", False),
+            "quantity_over_limit": (str(MAX_STOCK_QUANTITY + 1), "", False),
+            "note_too_long": ("7", "😀" * (MAX_NOTE_LENGTH + 1), False),
+            "bad_input": ("", "", True),
+        }
+        for name, (actual, note, bad_input) in incomplete_values.items():
+            restored_items = [dict(item) for item in valid_items]
+            restored_items[0].update(
+                actual=actual,
+                note=note,
+                confirmed=True,
+                badInput=bad_input,
+            )
+            restored_items[1]["note"] = healthy_note
+            incomplete_record = wrapped(draft={**valid_draft, "items": restored_items})
+            _seed_indexeddb_record(page, incomplete_record)
+            page.reload()
+            _wait_for_storage_status(page, "saved")
+
+            first_card = page.locator('[data-item-id="201"]')
+            second_card = page.locator('[data-item-id="202"]')
+            assert page.locator("#restore-warning").is_hidden(), name
+            assert first_card.get_by_label("B-001 実数").input_value() == actual, name
+            assert first_card.get_by_label("B-001 メモ").input_value() == note, name
+            assert first_card.get_attribute("data-confirmed") == "false", name
+            assert first_card.locator(".status-badge").inner_text() == "入力エラー", name
+            assert first_card.get_by_role("button", name="この実数で確認").is_disabled(), name
+            assert second_card.get_by_label("B-002 実数").input_value() == "20", name
+            assert second_card.get_by_label("B-002 メモ").input_value() == healthy_note, name
+            assert second_card.get_attribute("data-confirmed") == "true", name
+            assert copy_btn.is_disabled(), name
+            if name == "bad_input":
+                assert (
+                    first_card.get_by_label("B-001 実数").evaluate(
+                        "(input) => input.validity.badInput"
+                    )
+                    is False
+                )
+
+        # 正常な保存値は確認状態・数量・未正規化メモのまま復元される
         restored_note = "  \u3000復元メモ \t"
-        valid_items[0]["note"] = restored_note
-        valid_record = wrapped(draft={**valid_draft, "items": valid_items})
+        restored_items = [dict(item) for item in valid_items]
+        restored_items[0]["note"] = restored_note
+        valid_record = wrapped(draft={**valid_draft, "items": restored_items})
         _seed_indexeddb_record(page, valid_record)
         page.reload()
         _wait_for_storage_status(page, "saved")
@@ -1027,6 +1084,128 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
             (7, "復元メモ"),
             (20, None),
         ]
+        assert not page_errors
+        context.close()
+        browser.close()
+
+
+def test_generated_html_reset_confirmation_and_stale_write_invalidation(
+    tmp_path: Path,
+) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context()
+        page = context.new_page()
+        page.add_init_script(
+            """(() => {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                    IDBTransaction.prototype,
+                    "oncomplete",
+                );
+                window.__holdNextStocktakeWrite = false;
+                window.__heldStocktakeWriteCompletion = null;
+                Object.defineProperty(IDBTransaction.prototype, "oncomplete", {
+                    configurable: descriptor.configurable,
+                    enumerable: descriptor.enumerable,
+                    get() {
+                        return descriptor.get.call(this);
+                    },
+                    set(handler) {
+                        if (window.__holdNextStocktakeWrite && this.mode === "readwrite") {
+                            window.__holdNextStocktakeWrite = false;
+                            const transaction = this;
+                            descriptor.set.call(this, event => {
+                                window.__heldStocktakeWriteCompletion = () =>
+                                    handler.call(transaction, event);
+                            });
+                        } else {
+                            descriptor.set.call(this, handler);
+                        }
+                    },
+                });
+            })();"""
+        )
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+
+        other_session_id = "f" * 32
+        other_record = {
+            "session_id": other_session_id,
+            "storage_revision": 3,
+            "draft": {"untouched": True},
+        }
+        _seed_indexeddb_record(page, other_record)
+
+        corrupt_record = {
+            "session_id": SESSION_ID,
+            "storage_revision": 1,
+            "draft": {"kind": "invalid"},
+        }
+        _seed_indexeddb_record(page, corrupt_record)
+        page.reload()
+        _wait_for_storage_status(page, "error")
+        assert page.locator("#restore-warning").is_visible()
+        assert _read_indexeddb_record(page, SESSION_ID) == corrupt_record
+
+        reset_button = page.get_by_role("button", name="初期状態にリセット")
+        confirmation = page.locator("#reset-confirmation")
+        reset_button.click()
+        assert confirmation.is_visible()
+        page.get_by_role("button", name="キャンセル").click()
+        assert confirmation.is_hidden()
+        assert page.locator("#restore-warning").is_visible()
+        assert _read_indexeddb_record(page, SESSION_ID) == corrupt_record
+
+        reset_button.click()
+        page.get_by_role("button", name="入力をリセット").click()
+        _wait_for_storage_status(page, "saved")
+        assert page.locator("#restore-warning").is_hidden()
+        first_card = page.locator('[data-item-id="201"]')
+        first_quantity = first_card.get_by_label("B-001 実数")
+        assert first_quantity.input_value() == "10"
+        reset_record = _read_indexeddb_record(page, SESSION_ID)
+        assert reset_record is not None
+        reset_item = _saved_draft_item(reset_record, 0)
+        assert reset_item["actual"] == "10"
+        assert reset_item["confirmed"] is False
+        assert _read_indexeddb_record(page, other_session_id) == other_record
+
+        first_quantity.fill("8")
+        _wait_for_storage_status(page, "saved")
+        reset_button.click()
+        assert confirmation.is_visible()
+        page.get_by_role("button", name="キャンセル").click()
+        assert first_quantity.input_value() == "8"
+        saved_record = _read_indexeddb_record(page, SESSION_ID)
+        assert _saved_draft_item(saved_record, 0)["actual"] == "8"
+
+        page.evaluate("() => { window.__holdNextStocktakeWrite = true; }")
+        first_quantity.fill("9")
+        page.wait_for_function("() => typeof window.__heldStocktakeWriteCompletion === 'function'")
+        assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+
+        reset_button.click()
+        page.get_by_role("button", name="入力をリセット").click()
+        assert first_quantity.input_value() == "10"
+        assert page.locator("#storage-status").get_attribute("data-status") == "saving"
+        page.evaluate(
+            """() => {
+                const complete = window.__heldStocktakeWriteCompletion;
+                window.__heldStocktakeWriteCompletion = null;
+                complete();
+            }"""
+        )
+        _wait_for_storage_status(page, "saved")
+        assert first_quantity.input_value() == "10"
+        final_record = _read_indexeddb_record(page, SESSION_ID)
+        assert final_record is not None
+        final_item = _saved_draft_item(final_record, 0)
+        assert final_item["actual"] == "10"
+        assert final_item["confirmed"] is False
+        assert _read_indexeddb_record(page, other_session_id) == other_record
         assert not page_errors
         context.close()
         browser.close()

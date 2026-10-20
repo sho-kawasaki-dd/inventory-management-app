@@ -489,6 +489,9 @@ def test_render_stocktake_html_escapes_script_and_contains_required_elements() -
     assert "保管場所" in rendered
     assert "品名・管理番号・型番" in rendered
     assert "初期状態にリセット" in rendered
+    assert 'id="reset-confirmation"' in rendered
+    assert 'id="confirm-reset-state"' in rendered
+    assert 'id="cancel-reset-state"' in rendered
     assert "📋 結果テキストをコピー(IMM1:...)" in rendered
     assert "💾 結果ファイル(.json)を保存" in rendered
     assert "結果テキストを表示" in rendered

@@ -523,6 +523,28 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     .storage-resolution-actions {{
       margin-top: 6px;
     }}
+    .reset-confirmation {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      margin-top: 6px;
+      padding: 6px 10px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+      color: #78350f;
+      font-size: 0.8rem;
+    }}
+    .reset-confirmation p {{
+      flex: 1 1 240px;
+      margin: 0;
+    }}
+    .reset-confirmation-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
     .content-scroll {{
       flex: 1 1 auto;
       overflow-y: auto;
@@ -842,6 +864,23 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
           </button>
         </div>
       </div>
+      <div
+        id="reset-confirmation"
+        class="reset-confirmation"
+        role="group"
+        aria-label="初期状態へのリセット確認"
+        hidden
+      >
+        <p>このシートの入力をすべて帳簿数量・未確認の状態に戻します。</p>
+        <div class="reset-confirmation-actions">
+          <button type="button" id="confirm-reset-state" class="btn-secondary btn-small">
+            入力をリセット
+          </button>
+          <button type="button" id="cancel-reset-state" class="btn-secondary btn-small">
+            キャンセル
+          </button>
+        </div>
+      </div>
       <div class="filter-bar">
         <div class="status-tabs" role="group" aria-label="状態フィルタ">
           <button
@@ -973,6 +1012,8 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     let initializationGeneration = 0;
     let changeNumber = 0;
     let savedChangeNumber = 0;
+    let saveGeneration = 0;
+    let resetWritePending = false;
     let pendingSnapshot = null;
     let saveLoopActive = false;
     let conflictCandidate = null;
@@ -989,6 +1030,9 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     const progressTextEl = document.getElementById("progress-text");
     const progressBarEl = document.getElementById("progress-bar");
     const resetStateBtn = document.getElementById("reset-state");
+    const resetConfirmationEl = document.getElementById("reset-confirmation");
+    const confirmResetStateBtn = document.getElementById("confirm-reset-state");
+    const cancelResetStateBtn = document.getElementById("cancel-reset-state");
     const filterBarEl = document.querySelector(".filter-bar");
     const locationFilterEl = document.getElementById("location-filter");
     const searchInputEl = document.getElementById("search-input");
@@ -1085,6 +1129,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       filterBarEl.inert = loading;
       completionPanelEl.inert = loading;
       storageResolutionEl.inert = loading;
+      resetConfirmationEl.inert = loading;
       retryStorageBtn.disabled = loading;
       resetStateBtn.disabled = loading;
       document.body.dataset.storageLoading = loading ? "true" : "false";
@@ -1181,20 +1226,17 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
         const key = String(item.item_id);
         const entry = structuredState[key];
         const check = validateItemState(entry.actual, entry.note, entry.badInput);
-        if (!check.valid) {{
-          return null;
-        }}
         restored[key] = {{
-          actual: String(check.quantity),
+          actual: entry.actual,
           note: entry.note,
-          confirmed: entry.confirmed,
-          badInput: false,
+          confirmed: entry.confirmed && check.valid,
+          badInput: entry.badInput,
         }};
       }}
       return restored;
     }}
 
-    function validateStorageRecord(record, allowIncomplete = false) {{
+    function validateStorageRecord(record) {{
       if (
         typeof record !== "object" ||
         record === null ||
@@ -1205,9 +1247,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       ) {{
         return null;
       }}
-      const restoredState = allowIncomplete
-        ? validateDraftStructure(record.draft)
-        : validateDraft(record.draft);
+      const restoredState = validateDraft(record.draft);
       if (restoredState === null) {{
         return null;
       }}
@@ -1388,7 +1428,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       }}));
     }}
 
-    function writeStorageRecord(draft, expectedRevision) {{
+    function writeStorageRecord(draft, expectedRevision, forceReplace = false) {{
       return openDatabase().then(database => new Promise((resolve, reject) => {{
         let transaction;
         let timeoutId = null;
@@ -1416,22 +1456,30 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
             let currentRevision = 0;
             let currentRecord = null;
             if (request.result !== undefined) {{
-              currentRecord = validateStorageRecord(request.result, true);
+              currentRecord = validateStorageRecord(request.result);
               if (currentRecord === null) {{
-                failure = createStorageError(
-                  "corrupt",
-                  "保存先に不正なデータがあります。現在の入力では上書きしません。"
-                );
-                try {{
-                  transaction.abort();
-                }} catch {{
-                  finishError(failure);
+                if (!forceReplace) {{
+                  failure = createStorageError(
+                    "corrupt",
+                    "保存先に不正なデータがあります。現在の入力では上書きしません。"
+                  );
+                  try {{
+                    transaction.abort();
+                  }} catch {{
+                    finishError(failure);
+                  }}
+                  return;
                 }}
-                return;
+                const storedRevision = request.result.storage_revision;
+                currentRevision =
+                  Number.isSafeInteger(storedRevision) && storedRevision >= 1
+                    ? storedRevision
+                    : 0;
+              }} else {{
+                currentRevision = currentRecord.revision;
               }}
-              currentRevision = currentRecord.revision;
             }}
-            if (currentRevision !== expectedRevision) {{
+            if (!forceReplace && currentRevision !== expectedRevision) {{
               failure = createStorageError(
                 "conflict",
                 "別のページで保存内容が更新されています。自動上書きは停止しました。",
@@ -1508,10 +1556,12 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       updateOverallProgress();
     }}
 
-    function createSnapshot() {{
+    function createSnapshot(forceReplace = false) {{
       changeNumber += 1;
       return {{
         changeNumber,
+        saveGeneration,
+        forceReplace,
         draft: createDraft(),
       }};
     }}
@@ -1547,15 +1597,30 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
           pendingSnapshot = null;
           setStorageStatus("saving", "保存中");
           try {{
-            storageRevision = await writeStorageRecord(snapshot.draft, storageRevision);
-            if (!pendingSnapshot && snapshot.changeNumber === changeNumber) {{
+            storageRevision = await writeStorageRecord(
+              snapshot.draft,
+              storageRevision,
+              snapshot.forceReplace
+            );
+            if (
+              snapshot.saveGeneration === saveGeneration &&
+              !pendingSnapshot &&
+              snapshot.changeNumber === changeNumber
+            ) {{
               savedChangeNumber = snapshot.changeNumber;
               setStorageError(false);
+              if (snapshot.forceReplace) {{
+                resetWritePending = false;
+                setRestoreError(false);
+              }}
               storageResolutionEl.hidden = true;
               conflictCandidate = null;
               setStorageStatus("saved", "保存済み");
             }}
           }} catch (error) {{
+            if (snapshot.saveGeneration !== saveGeneration) {{
+              continue;
+            }}
             if (!pendingSnapshot || pendingSnapshot.changeNumber < snapshot.changeNumber) {{
               pendingSnapshot = snapshot;
             }}
@@ -1580,9 +1645,9 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       }}
     }}
 
-    function saveState() {{
+    function saveState(forceReplace = false) {{
       if (!initializationComplete) return;
-      pendingSnapshot = createSnapshot();
+      pendingSnapshot = createSnapshot(forceReplace || resetWritePending);
       if (!storageWriteAllowed) {{
         if (!storageWarningEl.hidden) {{
           setStorageStatus("error", "途中保存できません");
@@ -2221,15 +2286,31 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     }});
 
     resetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = false;
+      confirmResetStateBtn.focus();
+    }});
+
+    cancelResetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = true;
+      resetStateBtn.focus();
+    }});
+
+    confirmResetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = true;
+      saveGeneration += 1;
+      resetWritePending = true;
+      pendingSnapshot = null;
       state = createInitialState();
-      setRestoreError(false);
+      storageWriteAllowed = true;
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
       hideResultOutput();
-      saveState();
       for (const item of SHEET.items) {{
         updateCardUI(item, true);
       }}
       applyFilters();
       updateOverallProgress();
+      saveState(true);
     }});
 
     showResultBtn.addEventListener("click", () => {{
