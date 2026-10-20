@@ -182,6 +182,16 @@ class ItemRepository:
             raise ValidationError("カテゴリが見つかりません")
         return f"{row['code_prefix']}-{int(row['allocated_seq']):04d}"
 
+    def set_code(self, item_id: int, code: str) -> None:
+        cursor = _execute(
+            self.conn,
+            "UPDATE items SET code = ? WHERE id = ?",
+            (code, item_id),
+            integrity_mappings=(_UNIQUE_VALIDATION,),
+        )
+        if cursor.rowcount == 0:
+            raise ValidationError("品目が見つかりません")
+
     def insert(
         self,
         *,

@@ -289,6 +289,9 @@ class InventoryService:
             _required_master(self.masters.get_category(value.category_id), "カテゴリ")
             if value.location_id is not None:
                 _required_master(self.masters.get_location(value.location_id), "保管場所")
+            if current.category_id != value.category_id:
+                code = self.items.allocate_code(value.category_id)
+                self.items.set_code(value.id, code)
             return self.items.update(value)
 
     def deactivate_item(self, item_id: int) -> Item:
