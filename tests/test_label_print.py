@@ -586,19 +586,34 @@ def test_label_print_dialog_fits_at_large_font_scale(qtbot, font_scale: float) -
         first_quantity_spin.size(),
     )
     assert dialog.item_table.viewport().rect().contains(first_spin_rect)
+    long_texts = (
+        rows[0].name,
+        rows[0].manufacturer_part_number or "",
+        rows[0].application or "",
+    )
+    for column, expected_text in enumerate(long_texts, start=1):
+        cell = dialog.item_table.item(0, column)
+        assert cell is not None
+        assert cell.text() == expected_text
+        assert cell.toolTip() == expected_text
 
     dialog.item_table.setColumnWidth(2, 500)
     dialog.item_table.setColumnWidth(3, 500)
     horizontal_scrollbar = dialog.item_table.horizontalScrollBar()
     qtbot.waitUntil(lambda: horizontal_scrollbar.maximum() > 0)
-    horizontal_scrollbar.setValue(horizontal_scrollbar.maximum())
-    assert dialog.item_table.horizontalHeader().sectionViewportPosition(4) >= 0
-    assert (
-        dialog.item_table.horizontalHeader().sectionViewportPosition(4)
-        < dialog.item_table.viewport().width()
-    )
-    horizontal_scrollbar.setValue(0)
-    assert dialog.item_table.horizontalHeader().sectionViewportPosition(0) >= 0
+    header = dialog.item_table.horizontalHeader()
+    viewport_width = dialog.item_table.viewport().width()
+    visible_columns: set[int] = set()
+    for scroll_position in range(
+        horizontal_scrollbar.minimum(), horizontal_scrollbar.maximum() + 1
+    ):
+        horizontal_scrollbar.setValue(scroll_position)
+        for column in range(dialog.item_table.columnCount()):
+            column_left = header.sectionViewportPosition(column)
+            column_right = column_left + header.sectionSize(column)
+            if column_left < viewport_width and column_right > 0:
+                visible_columns.add(column)
+    assert visible_columns == set(range(dialog.item_table.columnCount()))
 
     first_slot_checkbox = dialog.slot_checkboxes[0]
     dialog.scroll_area.ensureWidgetVisible(first_slot_checkbox)
@@ -1237,6 +1252,8 @@ def test_render_labels_keeps_text_within_vertical_label_insets_at_device_dpi(
     assert len(painter.drawn) == 12
     offsets_mm = (3.0, 9.0, 15.0, 21.0, 27.0, 33.0)
     bold_rows = (True, True, False, False, False, False)
+    # QFontMetrics の整数 boundingRect と mm→pixel 換算の丸め差として 1px だけ許容する。
+    rounding_tolerance_px = 1
     for item_index, slot in enumerate((0, 1)):
         slot_y = slot_rect_mm(LABEL_72212, slot)[1]
         label_top = (slot_y + 3.0) * dpi / 25.4
@@ -1254,12 +1271,12 @@ def test_render_labels_keeps_text_within_vertical_label_insets_at_device_dpi(
             assert baseline == pytest.approx((slot_y + offset_mm) * dpi / 25.4 + ascent)
             text_top = baseline + bounds.top()
             text_bottom = baseline + bounds.bottom()
-            assert text_top >= label_top - 1
-            assert text_bottom <= label_bottom + 1
+            assert text_top >= label_top - rounding_tolerance_px
+            assert text_bottom <= label_bottom + rounding_tolerance_px
             if row_index < len(item_rows) - 1:
                 next_row = item_rows[row_index + 1]
                 next_top = next_row[5] + next_row[8].top()
-                assert text_bottom <= next_top + 1
+                assert text_bottom <= next_top + rounding_tolerance_px
             assert width <= math.floor((LABEL_72212.label_width_mm - 6.0) * dpi / 25.4)
 
 
