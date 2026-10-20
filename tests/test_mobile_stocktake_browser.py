@@ -59,6 +59,65 @@ def _assert_reachable_without_header_overlap(
     assert target_box["y"] + target_box["height"] <= viewport_height + 1.0
 
 
+def _wait_for_storage_status(page: Page, status: str) -> None:
+    page.wait_for_function(
+        "(expected) => document.querySelector('#storage-status')?.dataset.status === expected",
+        arg=status,
+    )
+
+
+def _seed_indexeddb_record(page: Page, record: dict[str, object]) -> None:
+    page.evaluate(
+        """async record => {
+            const database = await new Promise((resolve, reject) => {
+                const request = indexedDB.open("imm_stocktake", 1);
+                request.onupgradeneeded = () => {
+                    if (!request.result.objectStoreNames.contains("drafts")) {
+                        request.result.createObjectStore("drafts", { keyPath: "session_id" });
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            try {
+                await new Promise((resolve, reject) => {
+                    const transaction = database.transaction("drafts", "readwrite");
+                    transaction.objectStore("drafts").put(record);
+                    transaction.oncomplete = resolve;
+                    transaction.onabort = () => reject(transaction.error);
+                    transaction.onerror = () => reject(transaction.error);
+                });
+            } finally {
+                database.close();
+            }
+        }""",
+        record,
+    )
+
+
+def _read_indexeddb_record(page: Page, session_id: str) -> dict[str, object] | None:
+    return page.evaluate(
+        """sessionId => new Promise((resolve, reject) => {
+            const request = indexedDB.open("imm_stocktake", 1);
+            request.onsuccess = () => {
+                const database = request.result;
+                const transaction = database.transaction("drafts", "readonly");
+                const readRequest = transaction.objectStore("drafts").get(sessionId);
+                let result;
+                readRequest.onsuccess = () => { result = readRequest.result ?? null; };
+                readRequest.onerror = () => reject(readRequest.error);
+                transaction.oncomplete = () => {
+                    database.close();
+                    resolve(result);
+                };
+                transaction.onabort = () => reject(transaction.error);
+            };
+            request.onerror = () => reject(request.error);
+        })""",
+        session_id,
+    )
+
+
 def test_local_html_input_resume_and_result_round_trip() -> None:
     page_errors: list[str] = []
     with sync_playwright() as playwright:
@@ -350,7 +409,9 @@ def test_generated_html_confirmation_validation_restore_and_fallbacks(tmp_path: 
         assert copy_btn.is_enabled()
 
         # リロードによる状態復元
+        _wait_for_storage_status(page, "saved")
         page.reload()
+        _wait_for_storage_status(page, "saved")
         assert page.locator('[data-item-id="201"]').get_by_label("B-001 実数").input_value() == "8"
         assert (
             page.locator('[data-item-id="201"]').get_by_label("B-001 メモ").input_value()
@@ -402,40 +463,30 @@ def test_generated_html_confirmation_validation_restore_and_fallbacks(tmp_path: 
             parse_stocktake_payload(page.get_by_label("結果テキスト").input_value()).client_id == 2
         )
 
-        # 不正な localStorage データ (小数かつ confirmed=true) は復元時に拒否され警告されること
+        # 旧 localStorage の保存データが存在しても新方式の復元に影響しないこと
         storage_key = f"imm_stocktake_{SESSION_ID}"
         page.evaluate(
-            """(key) => {
-                localStorage.setItem(key, JSON.stringify({
-                    v: 1,
-                    session_id: "0123456789abcdef0123456789abcdef",
-                    items: {
-                        "201": { actual: "1.5", note: "", confirmed: true },
-                        "202": { actual: "20", note: "", confirmed: true }
-                    }
-                }));
-            }""",
+            "key => localStorage.setItem(key, '{not json}')",
             storage_key,
         )
         page.reload()
-        assert page.locator("#restore-warning").is_visible()
-        assert copy_btn.is_disabled()
+        _wait_for_storage_status(page, "saved")
+        assert page.locator("#restore-warning").is_hidden()
+        assert copy_btn.is_enabled()
         assert page.locator('[data-item-id="201"]').get_by_label("B-001 実数").input_value() == "10"
 
-        # localStorage 例外時に「途中保存できません。画面を閉じないでください。」と警告されること
+        # localStorage が利用できない環境でも IndexedDB の保存・復元を行えること
         page2 = context.new_page()
         page2.on("pageerror", lambda error: page_errors.append(str(error)))
         page2.add_init_script(
-            """
-            Storage.prototype.getItem = function() { throw new Error('SecurityError'); };
-            Storage.prototype.setItem = function() { throw new Error('SecurityError'); };
-            """
+            """Storage.prototype.getItem = function() { throw new Error("SecurityError"); };
+            Storage.prototype.setItem = function() { throw new Error("SecurityError"); };"""
         )
         page2.goto(html_path.as_uri())
-        assert page2.locator("#storage-warning").is_visible()
+        _wait_for_storage_status(page2, "saved")
+        assert page2.locator("#storage-warning").is_hidden()
         assert (
-            "途中保存できません。画面を閉じないでください"
-            in page2.locator("#storage-warning").inner_text()
+            page2.locator('[data-item-id="201"]').get_by_label("B-001 実数").input_value() == "10"
         )
         assert not page_errors
         browser.close()
@@ -627,6 +678,173 @@ def test_generated_html_indexeddb_minimum_round_trip(tmp_path: Path) -> None:
         browser.close()
 
 
+def test_generated_html_indexeddb_auto_save_and_resume(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
+
+        card = page.locator('[data-item-id="201"]')
+        card.get_by_label("B-001 実数").fill("7")
+        card.get_by_label("B-001 メモ").fill("自動保存")
+        card.get_by_role("button", name="この実数で確認").click()
+        _wait_for_storage_status(page, "saved")
+
+        record = _read_indexeddb_record(page, SESSION_ID)
+        assert record is not None
+        assert record["storage_revision"] == 3
+        draft = record["draft"]
+        assert isinstance(draft, dict)
+        assert draft["kind"] == "imm-stocktake-draft"
+        assert draft["client_id"] == 2
+        assert draft["started_at"] == "2026-10-17 02:00:00"
+        items = draft["items"]
+        assert isinstance(items, list)
+        assert items[0] == {
+            "item_id": 201,
+            "book_quantity": 10,
+            "actual": "7",
+            "note": "自動保存",
+            "confirmed": True,
+            "badInput": False,
+        }
+
+        page.reload()
+        _wait_for_storage_status(page, "saved")
+        card = page.locator('[data-item-id="201"]')
+        assert card.get_by_label("B-001 実数").input_value() == "7"
+        assert card.get_by_label("B-001 メモ").input_value() == "自動保存"
+        assert card.locator(".status-badge").inner_text() == "確認済"
+        assert card.get_by_role("button", name="確認解除").is_enabled()
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_indexeddb_failure_keeps_input_and_retries(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(
+            """window.__nativeIndexedDB = window.indexedDB;
+            Object.defineProperty(window, "indexedDB", {
+                configurable: true,
+                get() { throw new Error("IndexedDB denied"); }
+            });"""
+        )
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "error")
+        assert page.locator("#storage-warning").is_visible()
+        assert not page.locator("#items-container").evaluate("(element) => element.inert")
+
+        actual = page.locator('[data-item-id="201"]').get_by_label("B-001 実数")
+        actual.fill("6")
+        assert actual.input_value() == "6"
+        assert page.locator("#storage-warning").is_visible()
+
+        page.evaluate(
+            """() => Object.defineProperty(window, "indexedDB", {
+                configurable: true,
+                value: window.__nativeIndexedDB
+            })"""
+        )
+        page.get_by_role("button", name="再試行").click()
+        _wait_for_storage_status(page, "saved")
+        assert page.locator("#storage-warning").is_hidden()
+        record = _read_indexeddb_record(page, SESSION_ID)
+        assert record is not None
+        draft = record["draft"]
+        assert isinstance(draft, dict)
+        assert isinstance(draft["items"], list)
+        assert draft["items"][0]["actual"] == "6"
+        assert not page_errors
+        browser.close()
+
+
+def test_generated_html_disables_input_until_initial_read_finishes(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(
+            """(() => {
+                const originalOpen = IDBFactory.prototype.open;
+                IDBFactory.prototype.open = function(...args) {
+                    const request = originalOpen.apply(this, args);
+                    request.addEventListener("success", event => {
+                        event.stopImmediatePropagation();
+                        window.__heldStorageOpen = request;
+                    }, { once: true });
+                    return request;
+                };
+                window.__releaseStorageOpen = () => {
+                    const request = window.__heldStorageOpen;
+                    if (!request || typeof request.onsuccess !== "function") return false;
+                    request.onsuccess.call(request, new Event("success"));
+                    return true;
+                };
+            })();"""
+        )
+        page.goto(html_path.as_uri())
+        page.wait_for_function("() => window.__heldStorageOpen !== undefined")
+        assert page.locator("#storage-status").get_attribute("data-status") == "loading"
+        assert page.locator("#items-container").evaluate("(element) => element.inert")
+        assert page.locator("#reset-state").is_disabled()
+
+        assert page.evaluate("() => window.__releaseStorageOpen()") is True
+        _wait_for_storage_status(page, "ready")
+        assert not page.locator("#items-container").evaluate("(element) => element.inert")
+        assert page.locator("#reset-state").is_enabled()
+        browser.close()
+
+
+def test_generated_html_detects_other_tab_revision_conflict(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context()
+        first_page = context.new_page()
+        second_page = context.new_page()
+        first_page.on("pageerror", lambda error: page_errors.append(str(error)))
+        second_page.on("pageerror", lambda error: page_errors.append(str(error)))
+        first_page.goto(html_path.as_uri())
+        _wait_for_storage_status(first_page, "ready")
+        second_page.goto(html_path.as_uri())
+        _wait_for_storage_status(second_page, "ready")
+
+        first_page.locator('[data-item-id="201"]').get_by_label("B-001 実数").fill("5")
+        _wait_for_storage_status(first_page, "saved")
+        second_page.locator('[data-item-id="201"]').get_by_label("B-001 実数").fill("6")
+        second_page.locator("#storage-resolution").wait_for(state="visible")
+        assert second_page.locator("#storage-warning").is_visible()
+        assert (
+            second_page.locator('[data-item-id="201"]').get_by_label("B-001 実数").input_value()
+            == "6"
+        )
+
+        record = _read_indexeddb_record(first_page, SESSION_ID)
+        assert record is not None
+        assert isinstance(record["draft"], dict)
+        assert record["draft"]["items"][0]["actual"] == "5"
+
+        second_page.get_by_role("button", name="保存データを読み込む").click()
+        _wait_for_storage_status(second_page, "saved")
+        assert (
+            second_page.locator('[data-item-id="201"]').get_by_label("B-001 実数").input_value()
+            == "5"
+        )
+        assert not page_errors
+        context.close()
+        browser.close()
+
+
 def test_generated_html_copy_success_and_missing_clipboard(tmp_path: Path) -> None:
     html_path = _write_small_sheet(tmp_path)
     page_errors: list[str] = []
@@ -707,40 +925,69 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
     tmp_path: Path,
 ) -> None:
     html_path = _write_small_sheet(tmp_path)
-    storage_key = f"imm_stocktake_{SESSION_ID}"
-    valid_items: dict[str, dict[str, object]] = {
-        "201": {"actual": "7", "note": "", "confirmed": True},
-        "202": {"actual": "20", "note": "", "confirmed": True},
+    valid_items: list[dict[str, object]] = [
+        {
+            "item_id": 201,
+            "book_quantity": 10,
+            "actual": "7",
+            "note": "",
+            "confirmed": True,
+            "badInput": False,
+        },
+        {
+            "item_id": 202,
+            "book_quantity": 20,
+            "actual": "20",
+            "note": "",
+            "confirmed": True,
+            "badInput": False,
+        },
+    ]
+    valid_draft: dict[str, object] = {
+        "kind": "imm-stocktake-draft",
+        "v": 1,
+        "session_id": SESSION_ID,
+        "client_id": 2,
+        "started_at": "2026-10-17 02:00:00",
+        "items": valid_items,
     }
 
-    def wrapped(**overrides: object) -> str:
-        data: dict[str, object] = {"v": 1, "session_id": SESSION_ID, "items": valid_items}
+    def wrapped(**overrides: object) -> dict[str, object]:
+        data: dict[str, object] = {
+            "session_id": SESSION_ID,
+            "storage_revision": 1,
+            "draft": valid_draft,
+        }
         data.update(overrides)
-        return json.dumps(data)
+        return data
+
+    def changed_item(index: int, **overrides: object) -> list[dict[str, object]]:
+        items = [dict(item) for item in valid_items]
+        items[index].update(overrides)
+        return items
+
+    def changed_draft(**overrides: object) -> dict[str, object]:
+        draft = dict(valid_draft)
+        draft.update(overrides)
+        return wrapped(draft=draft)
 
     invalid_values = {
-        "broken_json": "{not json",
-        "array": "[]",
-        "version": wrapped(v=2),
-        "session": wrapped(session_id="f" * 32),
-        "items_not_object": wrapped(items=[]),
-        "missing_item": wrapped(items={"201": valid_items["201"]}),
-        "extra_item": wrapped(items={**valid_items, "203": valid_items["201"]}),
-        "confirmed_not_bool": wrapped(
-            items={**valid_items, "201": {"actual": "7", "note": "", "confirmed": "true"}}
-        ),
-        "actual_not_string": wrapped(
-            items={**valid_items, "201": {"actual": 7, "note": "", "confirmed": True}}
-        ),
-        "negative_actual": wrapped(
-            items={**valid_items, "201": {"actual": "-1", "note": "", "confirmed": True}}
-        ),
-        "note_too_long": wrapped(
-            items={
-                **valid_items,
-                "201": {"actual": "7", "note": "😀" * (MAX_NOTE_LENGTH + 1), "confirmed": True},
-            }
-        ),
+        "version": changed_draft(v=2),
+        "kind": changed_draft(kind="imm-stocktake-result"),
+        "session": changed_draft(session_id="f" * 32),
+        "client": changed_draft(client_id=3),
+        "started_at": changed_draft(started_at="2026-10-18 02:00:00"),
+        "items_not_array": changed_draft(items={}),
+        "missing_item": changed_draft(items=valid_items[:1]),
+        "extra_item": changed_draft(items=[*valid_items, dict(valid_items[0], item_id=203)]),
+        "duplicate_item": changed_draft(items=[valid_items[0], dict(valid_items[1], item_id=201)]),
+        "book_quantity": changed_draft(items=changed_item(0, book_quantity=11)),
+        "confirmed_not_bool": changed_draft(items=changed_item(0, confirmed="true")),
+        "bad_input_not_bool": changed_draft(items=changed_item(0, badInput="false")),
+        "actual_not_string": changed_draft(items=changed_item(0, actual=7)),
+        "negative_actual": changed_draft(items=changed_item(0, actual="-1")),
+        "note_too_long": changed_draft(items=changed_item(0, note="😀" * (MAX_NOTE_LENGTH + 1))),
+        "revision": wrapped(storage_revision=0),
     }
     page_errors: list[str] = []
     with sync_playwright() as playwright:
@@ -750,31 +997,26 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         copy_btn = page.get_by_role("button", name="📋 結果テキストをコピー(IMM1:...)")
         card = page.locator('[data-item-id="201"]')
+        page.goto(html_path.as_uri())
+        _wait_for_storage_status(page, "ready")
 
-        for name, raw in invalid_values.items():
-            page.goto(html_path.as_uri())
-            page.evaluate("([key, value]) => localStorage.setItem(key, value)", [storage_key, raw])
+        for name, record in invalid_values.items():
+            _seed_indexeddb_record(page, record)
             page.reload()
+            _wait_for_storage_status(page, "error")
             assert page.locator("#restore-warning").is_visible(), name
             assert copy_btn.is_disabled(), name
             assert card.get_by_label("B-001 実数").input_value() == "10", name
             assert card.get_by_label("B-001 メモ").input_value() == "", name
+            assert _read_indexeddb_record(page, SESSION_ID) == record, name
 
         # 正常な保存値は確認状態・数量・メモ(前後の Unicode 空白を含む)のまま復元される
         restored_note = "  \u3000復元メモ \t"
-        page.evaluate(
-            "([key, value]) => localStorage.setItem(key, value)",
-            [
-                storage_key,
-                wrapped(
-                    items={
-                        **valid_items,
-                        "201": {"actual": "7", "note": restored_note, "confirmed": True},
-                    }
-                ),
-            ],
-        )
+        valid_items[0]["note"] = restored_note
+        valid_record = wrapped(draft={**valid_draft, "items": valid_items})
+        _seed_indexeddb_record(page, valid_record)
         page.reload()
+        _wait_for_storage_status(page, "saved")
         assert page.locator("#restore-warning").is_hidden()
         assert copy_btn.is_enabled()
         assert card.get_by_label("B-001 実数").input_value() == "7"
@@ -786,4 +1028,5 @@ def test_generated_html_rejects_invalid_saved_states_and_restores_valid_one(
             (20, None),
         ]
         assert not page_errors
+        context.close()
         browser.close()
