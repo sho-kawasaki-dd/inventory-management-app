@@ -9,7 +9,29 @@ from inventory_manager_mini.core.models import MobileStocktakeItem, MobileStockt
 
 SESSION_ID = "0123456789abcdef0123456789abcdef"
 
-_PROBE_HTML = """
+_PROBE_SECTION_HTML = """
+<style>
+  #indexeddb-probe {
+    max-width: 900px;
+    margin: 16px auto 0;
+    padding: 12px;
+    border: 2px dashed #d97706;
+    border-radius: 10px;
+    background: #fffbeb;
+  }
+  #indexeddb-probe h2 { margin: 0 0 8px; font-size: 1rem; }
+  #indexeddb-probe p { margin: 6px 0; font-size: 0.85rem; }
+  #indexeddb-probe button { margin: 4px 6px 4px 0; padding: 8px 12px; font-size: 0.9rem; }
+  #indexeddb-probe label { display: block; margin-top: 10px; font-size: 0.85rem; }
+  #indexeddb-probe pre {
+    margin: 6px 0;
+    padding: 6px;
+    background: #ffffff;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+</style>
 <section id="indexeddb-probe" aria-labelledby="probe-title">
   <h2 id="probe-title">IndexedDB・JSON 先行実証</h2>
   <p>架空データを使った動作確認専用です。実データは入力しないでください。</p>
@@ -22,6 +44,9 @@ _PROBE_HTML = """
   <input id="probe-file" type="file" accept="application/json,.json">
   <p id="probe-file-status" role="status" aria-live="polite"></p>
 </section>
+"""
+
+_PROBE_SCRIPT_HTML = """
 <script>
 (() => {
   const sessionId = "__SESSION_ID__";
@@ -222,9 +247,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         html = render_stocktake_html(_sample_sheet())
-        probe = _PROBE_HTML.replace("__SESSION_ID__", SESSION_ID)
+        script = _PROBE_SCRIPT_HTML.replace("__SESSION_ID__", SESSION_ID)
+        # 本体はページ全体のスクロールが無効なため、内側のスクロール領域へ配置する
+        footer_end = "</footer>"
+        if html.count(footer_end) != 1 or html.count("</body>") != 1:
+            print("生成 HTML の構造が想定と異なります", file=sys.stderr)
+            return 1
+        html = html.replace(footer_end, f"{footer_end}{_PROBE_SECTION_HTML}", 1)
         output_path.write_text(
-            html.replace("</body>", f"{probe}</body>", 1),
+            html.replace("</body>", f"{script}</body>", 1),
             encoding="utf-8",
         )
     except OSError as error:
