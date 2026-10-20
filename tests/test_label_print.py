@@ -83,6 +83,9 @@ class _FakeMetrics:
     def ascent(self) -> int:
         return 10
 
+    def boundingRect(self, text: str) -> QRect:
+        return QRect(0, -self.ascent(), len(text), self.ascent())
+
 
 class _FakePainter:
     def __init__(
@@ -1268,7 +1271,7 @@ def test_render_labels_keeps_text_within_vertical_label_insets_at_device_dpi(
             assert family == fonts.print_font(10, bold).family()
             assert ascent > 0
             assert descent >= 0
-            assert baseline == pytest.approx((slot_y + offset_mm) * dpi / 25.4 + ascent)
+            assert baseline == pytest.approx((slot_y + offset_mm) * dpi / 25.4 - bounds.top())
             text_top = baseline + bounds.top()
             text_bottom = baseline + bounds.bottom()
             assert text_top >= label_top - rounding_tolerance_px

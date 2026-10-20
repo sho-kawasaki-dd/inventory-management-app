@@ -116,7 +116,8 @@ def render_labels(
                         inner_width,
                     )
                     if elided_text:
-                        baseline = _mm_to_device(y_mm + top_offset_mm, dpi_y) + metrics.ascent()
+                        text_top = _mm_to_device(y_mm + top_offset_mm, dpi_y)
+                        baseline = text_top - metrics.boundingRect(elided_text).top()
                         painter.drawText(QPointF(inner_x, baseline), elided_text)
     except BaseException as error:
         drawing_error = error
