@@ -537,6 +537,96 @@ def _write_small_sheet(tmp_path: Path) -> Path:
     return html_path
 
 
+def test_generated_html_indexeddb_minimum_round_trip(tmp_path: Path) -> None:
+    html_path = _write_small_sheet(tmp_path)
+    expected_record = {
+        "session_id": SESSION_ID,
+        "storage_revision": 1,
+        "draft": {
+            "kind": "imm-stocktake-draft",
+            "v": 1,
+            "session_id": SESSION_ID,
+            "client_id": 2,
+            "started_at": "2026-10-17 02:00:00",
+            "items": [
+                {
+                    "item_id": 201,
+                    "book_quantity": 10,
+                    "actual": "7",
+                    "note": "先行実証",
+                    "confirmed": True,
+                    "badInput": False,
+                },
+                {
+                    "item_id": 202,
+                    "book_quantity": 20,
+                    "actual": "",
+                    "note": "",
+                    "confirmed": False,
+                    "badInput": False,
+                },
+            ],
+        },
+    }
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context()
+        page = context.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+
+        transaction_completed = page.evaluate(
+            """async record => {
+                const database = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open("imm_stocktake", 1);
+                    request.onupgradeneeded = () => {
+                        request.result.createObjectStore("drafts", { keyPath: "session_id" });
+                    };
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                try {
+                    await new Promise((resolve, reject) => {
+                        const transaction = database.transaction("drafts", "readwrite");
+                        transaction.objectStore("drafts").put(record);
+                        transaction.oncomplete = () => resolve(true);
+                        transaction.onerror = () => reject(transaction.error);
+                        transaction.onabort = () => reject(transaction.error);
+                    });
+                    return true;
+                } finally {
+                    database.close();
+                }
+            }""",
+            expected_record,
+        )
+        assert transaction_completed is True
+
+        page.reload()
+        restored_record = page.evaluate(
+            """sessionId => new Promise((resolve, reject) => {
+                const request = indexedDB.open("imm_stocktake", 1);
+                request.onsuccess = () => {
+                    const database = request.result;
+                    const transaction = database.transaction("drafts", "readonly");
+                    const readRequest = transaction.objectStore("drafts").get(sessionId);
+                    readRequest.onsuccess = () => resolve(readRequest.result);
+                    readRequest.onerror = () => reject(readRequest.error);
+                    transaction.onabort = () => reject(transaction.error);
+                };
+                request.onerror = () => reject(request.error);
+            })""",
+            SESSION_ID,
+        )
+
+        assert page.url == html_path.as_uri()
+        assert restored_record == expected_record
+        assert not page_errors
+        context.close()
+        browser.close()
+
+
 def test_generated_html_copy_success_and_missing_clipboard(tmp_path: Path) -> None:
     html_path = _write_small_sheet(tmp_path)
     page_errors: list[str] = []
