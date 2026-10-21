@@ -390,6 +390,25 @@ def test_parse_rejects_invalid_payload_fields(invalid_obj: object) -> None:
         parse_stocktake_payload(raw_json)
 
 
+def test_parse_rejects_draft_backup_with_specific_error() -> None:
+    draft_json = json.dumps(
+        {
+            "kind": "imm-stocktake-draft",
+            "v": 1,
+            "session_id": VALID_SESSION_ID,
+            "client_id": 1,
+            "started_at": "2026-10-17 00:30:00",
+            "items": [],
+        }
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="これは途中保存用の下書きデータです。全品目を確認して出力した棚卸結果データを読み込んでください",
+    ):
+        parse_stocktake_payload(draft_json)
+
+
 def test_parse_and_encode_note_normalization_and_length_boundary() -> None:
     note_500 = "😀" * MAX_NOTE_LENGTH
     payload_500 = MobileStocktakePayload(
@@ -489,6 +508,9 @@ def test_render_stocktake_html_escapes_script_and_contains_required_elements() -
     assert "保管場所" in rendered
     assert "品名・管理番号・型番" in rendered
     assert "初期状態にリセット" in rendered
+    assert 'id="reset-confirmation"' in rendered
+    assert 'id="confirm-reset-state"' in rendered
+    assert 'id="cancel-reset-state"' in rendered
     assert "📋 結果テキストをコピー(IMM1:...)" in rendered
     assert "💾 結果ファイル(.json)を保存" in rendered
     assert "結果テキストを表示" in rendered
@@ -506,6 +528,29 @@ def test_render_stocktake_html_escapes_script_and_contains_required_elements() -
     )
     custom_html = render_stocktake_html(custom_sheet)
     assert "custom-time" in custom_html
+
+
+def test_render_uses_indexeddb_without_local_storage_or_network_access() -> None:
+    rendered = render_stocktake_html(_sample_sheet())
+
+    assert "indexedDB" in rendered
+    assert 'const STORAGE_DATABASE_NAME = "imm_stocktake";' in rendered
+    assert "imm-stocktake-draft" in rendered
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "fetch(",
+        "XMLHttpRequest",
+        "sendBeacon",
+        "WebSocket",
+        "EventSource",
+        "http://",
+        "https://",
+        "<link",
+        "src=",
+        "@import",
+    ):
+        assert forbidden not in rendered, forbidden
 
 
 def test_parse_rejects_repeated_end_marker_and_end_before_prefix() -> None:

@@ -224,6 +224,11 @@ def _validate_payload_object(data: object) -> MobileStocktakePayload:
         raise ValidationError("棚卸結果データの形式が正しくありません")
     payload_dict = cast(dict[str, object], data)
 
+    if payload_dict.get("kind") == "imm-stocktake-draft":
+        raise ValidationError(
+            "これは途中保存用の下書きデータです。全品目を確認して出力した棚卸結果データを読み込んでください"
+        )
+
     version = payload_dict.get("v")
     if type(version) is not int or version != PAYLOAD_VERSION:
         raise ValidationError("対応していない棚卸結果フォーマット版数です")
@@ -388,6 +393,9 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       padding: 8px 12px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
       z-index: 10;
+      max-height: 55vh;
+      max-height: 55dvh;
+      overflow-y: auto;
     }}
     .header-top {{
       display: flex;
@@ -415,6 +423,30 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       align-items: center;
       flex-wrap: wrap;
       gap: 6px 10px;
+    }}
+    .storage-badge {{
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      color: #374151;
+      font-size: 0.75rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .storage-badge[data-status="loading"],
+    .storage-badge[data-status="saving"] {{
+      background: #dbeafe;
+      color: #1e40af;
+    }}
+    .storage-badge[data-status="saved"],
+    .storage-badge[data-status="ready"] {{
+      background: #dcfce7;
+      color: #166534;
+    }}
+    .storage-badge[data-status="error"] {{
+      background: #fee2e2;
+      color: #991b1b;
     }}
     .progress-label {{
       font-size: 0.85rem;
@@ -485,6 +517,41 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       color: #991b1b;
       font-size: 0.8rem;
       font-weight: 600;
+    }}
+    .storage-warning-content,
+    .storage-resolution-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+    }}
+    .storage-warning-content > span {{
+      flex: 1 1 220px;
+    }}
+    .storage-resolution-actions {{
+      margin-top: 6px;
+    }}
+    .reset-confirmation {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      margin-top: 6px;
+      padding: 6px 10px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+      color: #78350f;
+      font-size: 0.8rem;
+    }}
+    .reset-confirmation p {{
+      flex: 1 1 240px;
+      margin: 0;
+    }}
+    .reset-confirmation-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }}
     .content-scroll {{
       flex: 1 1 auto;
@@ -742,6 +809,63 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       color: #111827;
       resize: vertical;
     }}
+    .draft-tools {{
+      border-top: 1px solid #d1d5db;
+      padding-top: 8px;
+    }}
+    .draft-tools summary {{
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }}
+    .draft-tools-content {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 8px;
+    }}
+    .draft-tools p {{
+      margin: 0;
+      font-size: 0.8rem;
+    }}
+    .draft-file-label {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }}
+    .draft-file-label input {{
+      min-width: 0;
+      max-width: 100%;
+    }}
+    .draft-confirmation {{
+      padding: 8px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+      color: #78350f;
+    }}
+    .draft-confirmation-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }}
+    #draft-text,
+    #draft-import-text {{
+      width: 100%;
+      min-height: 7rem;
+      padding: 8px;
+      border: 1px solid #9ca3af;
+      border-radius: 6px;
+      background: #f9fafb;
+      color: #111827;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      resize: vertical;
+    }}
     @media (max-height: 500px) {{
       .sticky-header {{
         padding: 4px 10px;
@@ -796,10 +920,29 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
           </p>
         </div>
         <div class="progress-block">
+          <span id="storage-status" class="storage-badge" data-status="loading"
+            role="status" aria-live="polite">読込中</span>
           <span id="progress-text" class="progress-label">確認済 0 / {total_count} 件</span>
           <progress id="progress-bar" value="0" max="{total_count}"></progress>
           <button type="button" id="reset-state" class="btn-secondary btn-small">
             初期状態にリセット
+          </button>
+        </div>
+      </div>
+      <div
+        id="reset-confirmation"
+        class="reset-confirmation"
+        role="group"
+        aria-label="初期状態へのリセット確認"
+        hidden
+      >
+        <p>このシートの入力をすべて帳簿数量・未確認の状態に戻します。</p>
+        <div class="reset-confirmation-actions">
+          <button type="button" id="confirm-reset-state" class="btn-secondary btn-small">
+            入力をリセット
+          </button>
+          <button type="button" id="cancel-reset-state" class="btn-secondary btn-small">
+            キャンセル
           </button>
         </div>
       </div>
@@ -845,7 +988,25 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
         </div>
       </div>
       <div id="storage-warning" class="warning-banner" role="alert" hidden>
-        途中保存できません。画面を閉じないでください。
+        <div class="storage-warning-content">
+          <span id="storage-warning-message">
+            途中保存できません。画面を閉じないでください。
+          </span>
+          <button type="button" id="retry-storage" class="btn-secondary btn-small">
+            再試行
+          </button>
+        </div>
+      </div>
+      <div id="storage-resolution" class="warning-banner" role="alert" hidden>
+        <span id="storage-resolution-message"></span>
+        <div class="storage-resolution-actions">
+          <button type="button" id="use-stored-state" class="btn-secondary btn-small">
+            保存データを読み込む
+          </button>
+          <button type="button" id="use-current-state" class="btn-secondary btn-small">
+            現在の入力で置き換える
+          </button>
+        </div>
       </div>
       <div id="restore-warning" class="warning-banner" role="alert" hidden>
         保存されていた途中データが不正または現在のシートと一致しないため、初期状態で読み込みました。
@@ -884,12 +1045,73 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
             hidden
           ></textarea>
         </div>
+        <details id="draft-tools" class="draft-tools">
+          <summary>途中データのバックアップ（未確認を含む）</summary>
+          <div class="draft-tools-content">
+            <p>
+              棚卸結果とは別の下書き JSON です。ファイル保存の完了は確認できないため、
+              必要に応じて JSON を表示してコピーしてください。
+              バックアップには入力内容が平文で含まれます。
+            </p>
+            <div class="completion-actions">
+              <button type="button" id="save-draft" class="btn-secondary">
+                途中データを保存
+              </button>
+              <button type="button" id="show-draft" class="btn-secondary">
+                JSON を表示
+              </button>
+              <button type="button" id="copy-draft" class="btn-secondary">
+                JSON をコピー
+              </button>
+            </div>
+            <label class="draft-file-label" for="draft-file">
+              途中バックアップファイルを選択
+              <input id="draft-file" type="file" accept=".json,application/json">
+            </label>
+            <label for="draft-import-text">途中バックアップ JSON を貼り付け</label>
+            <textarea
+              id="draft-import-text"
+              aria-label="途中バックアップ JSON を貼り付け"
+              rows="5"
+            ></textarea>
+            <div class="completion-actions">
+              <button type="button" id="read-draft-text" class="btn-secondary">
+                貼付データを検証
+              </button>
+            </div>
+            <p id="draft-feedback" class="result-feedback" role="status" hidden></p>
+            <div id="draft-preview" class="draft-confirmation" role="group" hidden>
+              <p id="draft-preview-summary"></p>
+              <p>現在の入力全体を置き換えます。内容を確認してから実行してください。</p>
+              <div class="draft-confirmation-actions">
+                <button type="button" id="confirm-draft-replace" class="btn-secondary">
+                  現在の入力全体を置き換える
+                </button>
+                <button type="button" id="cancel-draft-replace" class="btn-secondary">
+                  読み込みをキャンセル
+                </button>
+              </div>
+            </div>
+            <div id="draft-box" class="result-box" hidden>
+              <p>途中バックアップ JSON（長押しでコピーしてください）</p>
+              <textarea
+                id="draft-text"
+                aria-label="途中バックアップ JSON"
+                rows="7"
+                readonly
+                hidden
+              ></textarea>
+            </div>
+          </div>
+        </details>
       </footer>
     </div>
   </div>
   <script>
     const SHEET = {embedded_json};
-    const STORAGE_KEY = `imm_stocktake_${{SHEET.session_id}}`;
+    const STORAGE_DATABASE_NAME = "imm_stocktake";
+    const STORAGE_DATABASE_VERSION = 1;
+    const STORAGE_TIMEOUT_MS = 10000;
     const MAX_STOCK_QUANTITY = SHEET.max_quantity;
     const MAX_NOTE_LENGTH = SHEET.max_note_length;
     const NONE_LOCATION_VALUE = "__NONE__";
@@ -907,12 +1129,38 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     let statusFilter = "all";
     let locationFilter = "";
     let keywordFilter = "";
+    let databaseConnection = null;
+    let storageRevision = 0;
+    let storageWriteAllowed = false;
+    let initializationComplete = false;
+    let initializationGeneration = 0;
+    let changeNumber = 0;
+    let savedChangeNumber = 0;
+    let saveGeneration = 0;
+    let resetWritePending = false;
+    let pendingSnapshot = null;
+    let saveLoopActive = false;
+    let conflictCandidate = null;
+    let backupCandidate = null;
+    let backupReadGeneration = 0;
+    let backupDownloadGeneration = 0;
 
     const storageWarningEl = document.getElementById("storage-warning");
+    const storageWarningMessageEl = document.getElementById("storage-warning-message");
+    const storageStatusEl = document.getElementById("storage-status");
+    const retryStorageBtn = document.getElementById("retry-storage");
+    const storageResolutionEl = document.getElementById("storage-resolution");
+    const storageResolutionMessageEl = document.getElementById("storage-resolution-message");
+    const useStoredStateBtn = document.getElementById("use-stored-state");
+    const useCurrentStateBtn = document.getElementById("use-current-state");
     const restoreWarningEl = document.getElementById("restore-warning");
     const progressTextEl = document.getElementById("progress-text");
     const progressBarEl = document.getElementById("progress-bar");
     const resetStateBtn = document.getElementById("reset-state");
+    const resetConfirmationEl = document.getElementById("reset-confirmation");
+    const confirmResetStateBtn = document.getElementById("confirm-reset-state");
+    const cancelResetStateBtn = document.getElementById("cancel-reset-state");
+    const filterBarEl = document.querySelector(".filter-bar");
     const locationFilterEl = document.getElementById("location-filter");
     const searchInputEl = document.getElementById("search-input");
     const itemsContainerEl = document.getElementById("items-container");
@@ -924,6 +1172,20 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     const resultFeedbackEl = document.getElementById("result-feedback");
     const resultBoxEl = document.getElementById("result-box");
     const resultTextEl = document.getElementById("result-text");
+    const saveDraftBtn = document.getElementById("save-draft");
+    const showDraftBtn = document.getElementById("show-draft");
+    const copyDraftBtn = document.getElementById("copy-draft");
+    const draftFileInputEl = document.getElementById("draft-file");
+    const draftImportTextEl = document.getElementById("draft-import-text");
+    const readDraftTextBtn = document.getElementById("read-draft-text");
+    const draftFeedbackEl = document.getElementById("draft-feedback");
+    const draftPreviewEl = document.getElementById("draft-preview");
+    const draftPreviewSummaryEl = document.getElementById("draft-preview-summary");
+    const confirmDraftReplaceBtn = document.getElementById("confirm-draft-replace");
+    const cancelDraftReplaceBtn = document.getElementById("cancel-draft-replace");
+    const draftBoxEl = document.getElementById("draft-box");
+    const draftTextEl = document.getElementById("draft-text");
+    const completionPanelEl = document.getElementById("completion-panel");
 
     function stripNote(value) {{
       if (typeof value !== "string") {{
@@ -989,9 +1251,28 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
 
     let state = createInitialState();
 
-    function setStorageError(flag) {{
+    function setStorageError(flag, message = "") {{
       storageWarningEl.hidden = !flag;
+      if (flag && message) {{
+        storageWarningMessageEl.textContent = message;
+      }}
       document.body.dataset.storageError = flag ? "true" : "false";
+    }}
+
+    function setStorageStatus(status, message) {{
+      storageStatusEl.dataset.status = status;
+      storageStatusEl.textContent = message;
+    }}
+
+    function setInterfaceLoading(loading) {{
+      itemsContainerEl.inert = loading;
+      filterBarEl.inert = loading;
+      completionPanelEl.inert = loading;
+      storageResolutionEl.inert = loading;
+      resetConfirmationEl.inert = loading;
+      retryStorageBtn.disabled = loading;
+      resetStateBtn.disabled = loading;
+      document.body.dataset.storageLoading = loading ? "true" : "false";
     }}
 
     function setRestoreError(flag) {{
@@ -999,111 +1280,774 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       document.body.dataset.restoreError = flag ? "true" : "false";
     }}
 
-    function validateStoredPayload(parsed) {{
+    function createDraft(stateToSave = state) {{
+      return {{
+        kind: "imm-stocktake-draft",
+        v: 1,
+        session_id: SHEET.session_id,
+        client_id: SHEET.client_id,
+        started_at: SHEET.started_at,
+        items: SHEET.items.map(item => {{
+          const itemState = stateToSave[String(item.item_id)];
+          return {{
+            item_id: item.item_id,
+            book_quantity: item.book_quantity,
+            actual: itemState.actual,
+            note: itemState.note,
+            confirmed: itemState.confirmed,
+            badInput: itemState.badInput,
+          }};
+        }}),
+      }};
+    }}
+
+    function validateDraftStructure(parsed) {{
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {{
         return null;
       }}
-      let itemsMap = parsed;
-      if ("v" in parsed || "session_id" in parsed || "items" in parsed) {{
+      if (
+        parsed.kind !== "imm-stocktake-draft" ||
+        parsed.v !== 1 ||
+        parsed.session_id !== SHEET.session_id ||
+        parsed.client_id !== SHEET.client_id ||
+        parsed.started_at !== SHEET.started_at ||
+        !Array.isArray(parsed.items) ||
+        parsed.items.length !== SHEET.items.length
+      ) {{
+        return null;
+      }}
+
+      const entriesById = new Map();
+      for (const entry of parsed.items) {{
         if (
-          parsed.v !== 1 ||
-          parsed.session_id !== SHEET.session_id ||
-          typeof parsed.items !== "object" ||
-          parsed.items === null ||
-          Array.isArray(parsed.items)
+          typeof entry !== "object" ||
+          entry === null ||
+          Array.isArray(entry) ||
+          !Number.isSafeInteger(entry.item_id) ||
+          entriesById.has(entry.item_id)
         ) {{
           return null;
         }}
-        itemsMap = parsed.items;
-      }}
-
-      const keys = Object.keys(itemsMap);
-      if (keys.length !== SHEET.items.length) {{
-        return null;
+        entriesById.set(entry.item_id, entry);
       }}
 
       const restored = {{}};
       for (const item of SHEET.items) {{
         const key = String(item.item_id);
-        if (!Object.prototype.hasOwnProperty.call(itemsMap, key)) {{
-          return null;
-        }}
-        const entry = itemsMap[key];
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {{
+        const entry = entriesById.get(item.item_id);
+        if (!entry || entry.book_quantity !== item.book_quantity) {{
           return null;
         }}
         if (
           typeof entry.actual !== "string" ||
           typeof entry.note !== "string" ||
-          typeof entry.confirmed !== "boolean"
+          typeof entry.confirmed !== "boolean" ||
+          typeof entry.badInput !== "boolean"
         ) {{
           return null;
         }}
-        const check = validateItemState(entry.actual, entry.note, false);
-        if (!check.valid) {{
-          return null;
-        }}
         restored[key] = {{
-          actual: String(check.quantity),
+          actual: entry.actual,
           note: entry.note,
           confirmed: entry.confirmed,
-          badInput: false,
+          badInput: entry.badInput,
         }};
       }}
       return restored;
     }}
 
-    function loadSavedState() {{
-      let stored = null;
-      try {{
-        stored = window.localStorage.getItem(STORAGE_KEY);
-        setStorageError(false);
-      }} catch {{
-        setStorageError(true);
-        return;
+    function validateDraft(parsed) {{
+      const structuredState = validateDraftStructure(parsed);
+      if (structuredState === null) {{
+        return null;
       }}
-      if (stored === null) {{
-        return;
+      const restored = {{}};
+      for (const item of SHEET.items) {{
+        const key = String(item.item_id);
+        const entry = structuredState[key];
+        const check = validateItemState(entry.actual, entry.note, entry.badInput);
+        restored[key] = {{
+          actual: entry.actual,
+          note: entry.note,
+          confirmed: entry.confirmed && check.valid,
+          badInput: entry.badInput,
+        }};
       }}
+      return restored;
+    }}
+
+    function parseBackupDraft(text) {{
+      let parsed;
       try {{
-        const parsed = JSON.parse(stored);
-        const validated = validateStoredPayload(parsed);
-        if (validated === null) {{
-          state = createInitialState();
-          setRestoreError(true);
-          return;
+        parsed = JSON.parse(text);
+      }} catch (error) {{
+        throw new Error(
+          `JSON を解析できません。途中バックアップ JSON を指定してください。(${{error}})`
+        );
+      }}
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        (parsed.kind === "imm-stocktake-result" || "entries" in parsed)
+      ) {{
+        throw new Error("これは棚卸結果データです。途中バックアップ JSON を読み込んでください。");
+      }}
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        parsed.kind !== "imm-stocktake-draft"
+      ) {{
+        throw new Error("途中バックアップの形式が正しくありません。");
+      }}
+      if (parsed.v !== 1) {{
+        throw new Error("対応していない途中バックアップの版数です。");
+      }}
+      if (
+        parsed.session_id !== SHEET.session_id ||
+        parsed.client_id !== SHEET.client_id ||
+        parsed.started_at !== SHEET.started_at
+      ) {{
+        throw new Error("別の棚卸シートのバックアップです。現在のシートでは読み込めません。");
+      }}
+      const restoredState = validateDraft(parsed);
+      if (restoredState === null) {{
+        throw new Error("途中バックアップの品目または入力データが不正です。");
+      }}
+      let confirmedCount = 0;
+      for (const item of SHEET.items) {{
+        const entry = restoredState[String(item.item_id)];
+        const validation = validateItemState(entry.actual, entry.note, entry.badInput);
+        if (entry.confirmed && validation.valid) {{
+          confirmedCount += 1;
         }}
-        state = validated;
-        setRestoreError(false);
-      }} catch {{
-        state = createInitialState();
-        setRestoreError(true);
+      }}
+      return {{ state: restoredState, confirmedCount }};
+    }}
+
+    function setDraftFeedback(message) {{
+      draftFeedbackEl.textContent = message;
+      draftFeedbackEl.hidden = false;
+    }}
+
+    function clearBackupCandidate() {{
+      backupCandidate = null;
+      draftPreviewEl.hidden = true;
+      draftPreviewSummaryEl.textContent = "";
+    }}
+
+    function inspectBackupText(text, generation = ++backupReadGeneration) {{
+      clearBackupCandidate();
+      try {{
+        const candidate = parseBackupDraft(text);
+        if (generation !== backupReadGeneration) return;
+        backupCandidate = candidate;
+        draftPreviewSummaryEl.textContent =
+          `${{SHEET.client_name}} / ${{SHEET.started_at_display}} 開始 / ` +
+          `${{SHEET.items.length}} 件中 ${{candidate.confirmedCount}} 件を確認済として復元予定`;
+        draftPreviewEl.hidden = false;
+        setDraftFeedback("バックアップを検証しました。置き換えを承認するまで画面と保存データは変更しません。");
+      }} catch (error) {{
+        if (generation !== backupReadGeneration) return;
+        setDraftFeedback(`バックアップを読み込めませんでした: ${{error.message || error}}`);
       }}
     }}
 
-    function saveState() {{
+    function readBackupFile(file) {{
+      const generation = ++backupReadGeneration;
+      clearBackupCandidate();
+      if (!file) {{
+        setDraftFeedback("読み込むファイルが選択されていません。");
+        return;
+      }}
       try {{
-        const serializableItems = {{}};
-        for (const item of SHEET.items) {{
-          const key = String(item.item_id);
-          const itemState = state[key];
-          serializableItems[key] = {{
-            actual: itemState.actual,
-            note: itemState.note,
-            confirmed: itemState.confirmed,
-          }};
-        }}
-        const payload = {{
-          v: 1,
-          session_id: SHEET.session_id,
-          items: serializableItems,
+        const reader = new FileReader();
+        reader.onload = () => {{
+          if (generation !== backupReadGeneration) return;
+          if (typeof reader.result !== "string") {{
+            setDraftFeedback("ファイルの内容をテキストとして読み込めませんでした。");
+            return;
+          }}
+          draftImportTextEl.value = reader.result;
+          inspectBackupText(reader.result, generation);
         }};
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-        setStorageError(false);
-      }} catch {{
-        setStorageError(true);
+        reader.onerror = () => {{
+          if (generation === backupReadGeneration) {{
+            const detail = reader.error ? reader.error.message : "読み込みエラー";
+            setDraftFeedback(
+              `ファイルを読み込めませんでした: ${{detail}}`
+            );
+          }}
+        }};
+        reader.onabort = () => {{
+          if (generation === backupReadGeneration) {{
+            setDraftFeedback("ファイルの読み込みがキャンセルされました。画面と保存データは変更していません。");
+          }}
+        }};
+        reader.readAsText(file, "UTF-8");
+      }} catch (error) {{
+        if (generation === backupReadGeneration) {{
+          setDraftFeedback(`ファイルを読み込めませんでした: ${{error.message || error}}`);
+        }}
       }}
     }}
+
+    function validateStorageRecord(record) {{
+      if (
+        typeof record !== "object" ||
+        record === null ||
+        Array.isArray(record) ||
+        record.session_id !== SHEET.session_id ||
+        !Number.isSafeInteger(record.storage_revision) ||
+        record.storage_revision < 1
+      ) {{
+        return null;
+      }}
+      const restoredState = validateDraft(record.draft);
+      if (restoredState === null) {{
+        return null;
+      }}
+      return {{
+        revision: record.storage_revision,
+        state: restoredState,
+      }};
+    }}
+
+    function createStorageError(code, message, record = null) {{
+      const error = new Error(message);
+      error.code = code;
+      error.record = record;
+      return error;
+    }}
+
+    function bindDatabaseEvents(database) {{
+      database.onversionchange = () => {{
+        database.close();
+        if (databaseConnection === database) {{
+          databaseConnection = null;
+        }}
+        storageWriteAllowed = false;
+        setStorageError(
+          true,
+          "保存先のデータベースが更新されました。ほかの棚卸シートを閉じてから再試行してください。"
+        );
+        setStorageStatus("error", "保存先を再確認してください");
+      }};
+      database.addEventListener("close", () => {{
+        if (databaseConnection === database) {{
+          databaseConnection = null;
+        }}
+        storageWriteAllowed = false;
+        setStorageError(
+          true,
+          "保存先との接続が終了しました。入力内容は画面に保持されています。再試行してください。"
+        );
+        setStorageStatus("error", "保存先との接続終了");
+      }});
+    }}
+
+    function openDatabase() {{
+      if (databaseConnection) {{
+        return Promise.resolve(databaseConnection);
+      }}
+      return new Promise((resolve, reject) => {{
+        let request;
+        let settled = false;
+        let timeoutId = null;
+        const finishError = error => {{
+          if (settled) return;
+          settled = true;
+          if (timeoutId !== null) clearTimeout(timeoutId);
+          reject(error);
+        }};
+        const finishSuccess = database => {{
+          if (settled) {{
+            database.close();
+            return;
+          }}
+          settled = true;
+          if (timeoutId !== null) clearTimeout(timeoutId);
+          databaseConnection = database;
+          bindDatabaseEvents(database);
+          resolve(database);
+        }};
+
+        try {{
+          const factory = window.indexedDB;
+          if (!factory || typeof factory.open !== "function") {{
+            throw createStorageError(
+              "unavailable",
+              "このブラウザでは IndexedDB を利用できません。"
+            );
+          }}
+          request = factory.open(STORAGE_DATABASE_NAME, STORAGE_DATABASE_VERSION);
+          request.onupgradeneeded = () => {{
+            const database = request.result;
+            if (!database.objectStoreNames.contains("drafts")) {{
+              database.createObjectStore("drafts", {{ keyPath: "session_id" }});
+            }}
+          }};
+          request.onblocked = () => {{
+            setStorageError(
+              true,
+              "ほかのページが保存先を使用中です。ほかの棚卸シートを閉じて再試行してください。"
+            );
+            setStorageStatus("error", "保存先が使用中です");
+          }};
+          request.onerror = () => {{
+            finishError(
+              createStorageError(
+                "open",
+                request.error ? request.error.message : "保存先を開けませんでした。"
+              )
+            );
+          }};
+          request.onsuccess = () => finishSuccess(request.result);
+          timeoutId = setTimeout(() => {{
+            finishError(
+              createStorageError(
+                "timeout",
+                "保存先の準備が 10 秒以内に完了しませんでした。"
+              )
+            );
+          }}, STORAGE_TIMEOUT_MS);
+        }} catch (error) {{
+          finishError(
+            error && error.code
+              ? error
+              : createStorageError("open", String(error))
+          );
+        }}
+      }});
+    }}
+
+    function readStorageRecord() {{
+      return openDatabase().then(database => new Promise((resolve, reject) => {{
+        let transaction;
+        let timeoutId = null;
+        let settled = false;
+        let result;
+        let failure = null;
+        const finishError = error => {{
+          if (settled) return;
+          settled = true;
+          if (timeoutId !== null) clearTimeout(timeoutId);
+          reject(error);
+        }};
+        try {{
+          transaction = database.transaction("drafts", "readonly");
+          const request = transaction.objectStore("drafts").get(SHEET.session_id);
+          request.onsuccess = () => {{
+            result = request.result;
+          }};
+          request.onerror = () => {{
+            failure = createStorageError(
+              "read",
+              request.error ? request.error.message : "保存データを読み込めませんでした。"
+            );
+          }};
+          transaction.onerror = () => {{
+            failure = createStorageError(
+              "read",
+              transaction.error
+                ? transaction.error.message
+                : "保存データの読込処理に失敗しました。"
+            );
+          }};
+          transaction.onabort = () => {{
+            finishError(
+              failure ||
+              createStorageError("abort", "保存データの読込処理が中断されました。")
+            );
+          }};
+          transaction.oncomplete = () => {{
+            if (settled) return;
+            settled = true;
+            if (timeoutId !== null) clearTimeout(timeoutId);
+            resolve(result);
+          }};
+          timeoutId = setTimeout(() => {{
+            const error = createStorageError(
+              "timeout",
+              "保存データの読込が 10 秒以内に完了しませんでした。"
+            );
+            finishError(error);
+            try {{
+              transaction.abort();
+            }} catch {{
+              return;
+            }}
+          }}, STORAGE_TIMEOUT_MS);
+        }} catch (error) {{
+          finishError(createStorageError("read", String(error)));
+        }}
+      }}));
+    }}
+
+    function writeStorageRecord(draft, expectedRevision, forceReplace = false) {{
+      return openDatabase().then(database => new Promise((resolve, reject) => {{
+        let transaction;
+        let timeoutId = null;
+        let settled = false;
+        let failure = null;
+        let nextRevision = null;
+        const finishError = error => {{
+          if (settled) return;
+          settled = true;
+          if (timeoutId !== null) clearTimeout(timeoutId);
+          reject(error);
+        }};
+        try {{
+          transaction = database.transaction("drafts", "readwrite");
+          const store = transaction.objectStore("drafts");
+          const request = store.get(SHEET.session_id);
+          request.onerror = () => {{
+            failure = createStorageError(
+              "write",
+              request.error ? request.error.message : "保存先を確認できませんでした。"
+            );
+          }};
+          request.onsuccess = () => {{
+            if (settled) return;
+            let currentRevision = 0;
+            let currentRecord = null;
+            if (request.result !== undefined) {{
+              currentRecord = validateStorageRecord(request.result);
+              if (currentRecord === null) {{
+                if (!forceReplace) {{
+                  failure = createStorageError(
+                    "corrupt",
+                    "保存先に不正なデータがあります。現在の入力では上書きしません。"
+                  );
+                  try {{
+                    transaction.abort();
+                  }} catch {{
+                    finishError(failure);
+                  }}
+                  return;
+                }}
+                const storedRevision = request.result.storage_revision;
+                currentRevision =
+                  Number.isSafeInteger(storedRevision) && storedRevision >= 1
+                    ? storedRevision
+                    : 0;
+              }} else {{
+                currentRevision = currentRecord.revision;
+              }}
+            }}
+            if (!forceReplace && currentRevision !== expectedRevision) {{
+              failure = createStorageError(
+                "conflict",
+                "別のページで保存内容が更新されています。自動上書きは停止しました。",
+                currentRecord
+              );
+              try {{
+                transaction.abort();
+              }} catch {{
+                finishError(failure);
+              }}
+              return;
+            }}
+            nextRevision = currentRevision + 1;
+            try {{
+              store.put({{
+                session_id: SHEET.session_id,
+                storage_revision: nextRevision,
+                draft,
+              }});
+            }} catch (error) {{
+              failure = createStorageError("write", String(error));
+              try {{
+                transaction.abort();
+              }} catch {{
+                finishError(failure);
+              }}
+            }}
+          }};
+          transaction.onerror = () => {{
+            if (!failure) {{
+              failure = createStorageError(
+                "write",
+                transaction.error
+                  ? transaction.error.message
+                  : "保存トランザクションに失敗しました。"
+              );
+            }}
+          }};
+          transaction.onabort = () => {{
+            finishError(
+              failure ||
+              createStorageError("abort", "保存処理が中断されました。")
+            );
+          }};
+          transaction.oncomplete = () => {{
+            if (settled) return;
+            settled = true;
+            if (timeoutId !== null) clearTimeout(timeoutId);
+            resolve(nextRevision);
+          }};
+          timeoutId = setTimeout(() => {{
+            const error = createStorageError(
+              "timeout",
+              "保存処理が 10 秒以内に完了しませんでした。"
+            );
+            finishError(error);
+            try {{
+              transaction.abort();
+            }} catch {{
+              return;
+            }}
+          }}, STORAGE_TIMEOUT_MS);
+        }} catch (error) {{
+          finishError(createStorageError("write", String(error)));
+        }}
+      }}));
+    }}
+
+    function renderCurrentState() {{
+      for (const item of SHEET.items) {{
+        updateCardUI(item, true);
+      }}
+      applyFilters();
+      updateOverallProgress();
+    }}
+
+    function createSnapshot(forceReplace = false) {{
+      changeNumber += 1;
+      return {{
+        changeNumber,
+        saveGeneration,
+        forceReplace,
+        draft: createDraft(),
+      }};
+    }}
+
+    function showStorageConflict(candidate) {{
+      storageWriteAllowed = false;
+      conflictCandidate = candidate;
+      if (!candidate) {{
+        storageResolutionEl.hidden = true;
+        setStorageError(
+          true,
+          "別のページまたは不正な保存データが見つかりました。既存データを上書きしません。再試行してください。"
+        );
+        setStorageStatus("error", "保存データを確認してください");
+        return;
+      }}
+      storageResolutionMessageEl.textContent =
+        "別のページで保存された途中データがあります。保存データを読み込むか、現在の入力全体で置き換えるか選択してください。";
+      storageResolutionEl.hidden = false;
+      setStorageError(
+        true,
+        "別のページで保存内容が更新されています。選択するまで保存を停止しています。"
+      );
+      setStorageStatus("error", "別ページとの保存競合");
+    }}
+
+    async function drainSaveQueue() {{
+      if (saveLoopActive || !initializationComplete || !storageWriteAllowed) return;
+      saveLoopActive = true;
+      try {{
+        while (pendingSnapshot && storageWriteAllowed) {{
+          const snapshot = pendingSnapshot;
+          pendingSnapshot = null;
+          setStorageStatus("saving", "保存中");
+          try {{
+            storageRevision = await writeStorageRecord(
+              snapshot.draft,
+              storageRevision,
+              snapshot.forceReplace
+            );
+            if (
+              snapshot.saveGeneration === saveGeneration &&
+              !pendingSnapshot &&
+              snapshot.changeNumber === changeNumber
+            ) {{
+              savedChangeNumber = snapshot.changeNumber;
+              setStorageError(false);
+              if (snapshot.forceReplace) {{
+                resetWritePending = false;
+                setRestoreError(false);
+              }}
+              storageResolutionEl.hidden = true;
+              conflictCandidate = null;
+              setStorageStatus("saved", "保存済み");
+            }}
+          }} catch (error) {{
+            if (snapshot.saveGeneration !== saveGeneration) {{
+              continue;
+            }}
+            if (!pendingSnapshot || pendingSnapshot.changeNumber < snapshot.changeNumber) {{
+              pendingSnapshot = snapshot;
+            }}
+            if (error && error.code === "conflict") {{
+              showStorageConflict(error.record);
+            }} else if (error && error.code === "corrupt") {{
+              setRestoreError(true);
+              showStorageConflict(null);
+            }} else {{
+              const errorDetail = error ? ` (${{error.message}})` : "";
+              setStorageError(
+                true,
+                `途中保存できません。画面を閉じないでください。${{errorDetail}}`
+              );
+              setStorageStatus("error", "途中保存に失敗しました");
+            }}
+            return;
+          }}
+        }}
+      }} finally {{
+        saveLoopActive = false;
+      }}
+    }}
+
+    function saveState(forceReplace = false) {{
+      if (!initializationComplete) return;
+      pendingSnapshot = createSnapshot(forceReplace || resetWritePending);
+      if (!storageWriteAllowed) {{
+        if (!storageWarningEl.hidden) {{
+          setStorageStatus("error", "途中保存できません");
+        }}
+        return;
+      }}
+      setStorageStatus("saving", "保存中");
+      void drainSaveQueue();
+    }}
+
+    function statesMatch(first, second) {{
+      return JSON.stringify(createDraft(first)) === JSON.stringify(createDraft(second));
+    }}
+
+    function applyStoredState(record) {{
+      state = record.state;
+      storageRevision = record.revision;
+      storageWriteAllowed = true;
+      pendingSnapshot = null;
+      savedChangeNumber = changeNumber;
+      setRestoreError(false);
+      setStorageError(false);
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
+      renderCurrentState();
+      setStorageStatus("saved", "保存済み");
+    }}
+
+    async function loadSavedState(isRetry = false) {{
+      const generation = ++initializationGeneration;
+      setInterfaceLoading(true);
+      setStorageStatus("loading", "読込中");
+      try {{
+        const stored = await readStorageRecord();
+        if (generation !== initializationGeneration) return;
+        let record = null;
+        if (stored !== undefined) {{
+          record = validateStorageRecord(stored);
+          if (record === null) {{
+            throw createStorageError(
+              "corrupt",
+              "保存データの形式またはシート情報が一致しません。"
+            );
+          }}
+        }}
+
+        if (!isRetry && !initializationComplete) {{
+          if (record) {{
+            applyStoredState(record);
+          }} else {{
+            storageRevision = 0;
+            storageWriteAllowed = true;
+            setRestoreError(false);
+            setStorageError(false);
+            setStorageStatus("ready", "入力待ち");
+          }}
+        }} else if (!record) {{
+          storageRevision = 0;
+          storageWriteAllowed = true;
+          setRestoreError(false);
+          storageResolutionEl.hidden = true;
+          conflictCandidate = null;
+          if (changeNumber > savedChangeNumber && !pendingSnapshot) {{
+            pendingSnapshot = createSnapshot();
+          }}
+          if (pendingSnapshot) {{
+            setStorageStatus("saving", "保存中");
+          }} else {{
+            setStorageError(false);
+            setStorageStatus("ready", "入力待ち");
+          }}
+        }} else if (statesMatch(state, record.state)) {{
+          applyStoredState(record);
+        }} else {{
+          showStorageConflict(record);
+        }}
+      }} catch (error) {{
+        if (generation !== initializationGeneration) return;
+        storageWriteAllowed = false;
+        if (error && error.code === "corrupt") {{
+          setRestoreError(true);
+          showStorageConflict(null);
+        }} else {{
+          const errorDetail = error ? ` (${{error.message}})` : "";
+          setStorageError(
+            true,
+            `途中保存データを確認できません。現在の入力で保存先を上書きしません。再試行してください。${{errorDetail}}`
+          );
+          setStorageStatus("error", "保存先を確認できません");
+        }}
+      }} finally {{
+        if (generation === initializationGeneration) {{
+          initializationComplete = true;
+          setInterfaceLoading(false);
+          if (pendingSnapshot && storageWriteAllowed) {{
+            void drainSaveQueue();
+          }}
+        }}
+      }}
+    }}
+
+    function retryStorage() {{
+      if (storageWriteAllowed && !conflictCandidate) {{
+        if (!pendingSnapshot && changeNumber > savedChangeNumber) {{
+          pendingSnapshot = createSnapshot();
+        }}
+        setStorageStatus("saving", "保存中");
+        void drainSaveQueue();
+        return;
+      }}
+      void loadSavedState(true);
+    }}
+
+    retryStorageBtn.addEventListener("click", retryStorage);
+
+    useStoredStateBtn.addEventListener("click", () => {{
+      if (conflictCandidate) {{
+        applyStoredState(conflictCandidate);
+      }}
+    }});
+
+    useCurrentStateBtn.addEventListener("click", () => {{
+      if (!conflictCandidate) return;
+      storageRevision = conflictCandidate.revision;
+      storageWriteAllowed = true;
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
+      pendingSnapshot = createSnapshot();
+      setStorageStatus("saving", "保存中");
+      void drainSaveQueue();
+    }});
+
+    document.addEventListener("visibilitychange", () => {{
+      if (document.visibilityState === "hidden" && pendingSnapshot) {{
+        void drainSaveQueue();
+      }}
+    }});
+
+    window.addEventListener("pagehide", () => {{
+      if (pendingSnapshot) {{
+        void drainSaveQueue();
+      }}
+    }});
 
     function hideResultOutput() {{
       resultTextEl.value = "";
@@ -1570,10 +2514,128 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
       resultTextEl.select();
     }}
 
+    function showDraftInTextarea(jsonText, message, selectText = true) {{
+      draftTextEl.value = jsonText;
+      draftBoxEl.hidden = false;
+      draftTextEl.hidden = false;
+      setDraftFeedback(message);
+      if (selectText) {{
+        draftTextEl.focus();
+        draftTextEl.select();
+      }}
+    }}
+
+    function createDraftJsonText() {{
+      return JSON.stringify(createDraft(), null, 2);
+    }}
+
     function buildDownloadFilename() {{
       const safeClient =
         String(SHEET.client_name).replace(/[\\\\/:*?"<>|\\u0000-\\u001f]+/g, "_") || "client";
       return `棚卸結果_${{safeClient}}_${{SHEET.filename_timestamp}}.json`;
+    }}
+
+    function buildDraftDownloadFilename() {{
+      const safeClient =
+        String(SHEET.client_name).replace(/[\\\\/:*?"<>|\\u0000-\\u001f]+/g, "_") || "client";
+      return (
+        `棚卸途中_${{safeClient}}_${{SHEET.filename_timestamp}}_` +
+        `${{SHEET.session_id.slice(0, 8)}}.json`
+      );
+    }}
+
+    function saveDraftBackup() {{
+      let jsonText;
+      try {{
+        jsonText = createDraftJsonText();
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+        return;
+      }}
+
+      const generation = ++backupDownloadGeneration;
+      let url = null;
+      let link = null;
+      try {{
+        const blob = new Blob([jsonText], {{ type: "application/json" }});
+        if (!window.URL || typeof window.URL.createObjectURL !== "function") {{
+          throw new Error("createObjectURL is unavailable");
+        }}
+        url = window.URL.createObjectURL(blob);
+        link = document.createElement("a");
+        link.href = url;
+        link.download = buildDraftDownloadFilename();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }} catch (error) {{
+        if (link) link.remove();
+        if (url && window.URL && typeof window.URL.revokeObjectURL === "function") {{
+          try {{
+            window.URL.revokeObjectURL(url);
+          }} catch {{
+            // URL cleanup failure does not affect the backup text fallback.
+          }}
+        }}
+        showDraftInTextarea(
+          jsonText,
+          `ファイル保存を開始できませんでした: ${{error}} JSON をコピーして保管してください。`
+        );
+        return;
+      }}
+
+      setDraftFeedback(
+        "途中バックアップの保存処理を開始しました。実際の保存完了は確認できません。"
+      );
+      setTimeout(() => {{
+        if (window.URL && typeof window.URL.revokeObjectURL === "function") {{
+          try {{
+            window.URL.revokeObjectURL(url);
+          }} catch {{
+            // URL cleanup failure does not affect the backup text fallback.
+          }}
+        }}
+        if (generation === backupDownloadGeneration) {{
+          showDraftInTextarea(
+            jsonText,
+            "保存完了は確認できません。ファイルが見当たらない場合は、" +
+              "以下の JSON をコピーして保管してください。",
+            false
+          );
+        }}
+      }}, 1500);
+    }}
+
+    function copyDraftBackup() {{
+      let jsonText;
+      try {{
+        jsonText = createDraftJsonText();
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+        return;
+      }}
+      const onCopied = () => {{
+        setDraftFeedback("途中バックアップ JSON をクリップボードにコピーしました。");
+      }};
+      const onFailed = () => {{
+        showDraftInTextarea(
+          jsonText,
+          "直接コピーできませんでした。表示した JSON を長押ししてコピーしてください。"
+        );
+      }};
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {{
+        navigator.clipboard.writeText(jsonText).then(onCopied, () => {{
+          if (copyTextLegacy(jsonText)) {{
+            onCopied();
+          }} else {{
+            onFailed();
+          }}
+        }});
+      }} else if (copyTextLegacy(jsonText)) {{
+        onCopied();
+      }} else {{
+        onFailed();
+      }}
     }}
 
     document.querySelectorAll(".tab-btn").forEach(btn => {{
@@ -1599,15 +2661,88 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
     }});
 
     resetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = false;
+      confirmResetStateBtn.focus();
+    }});
+
+    cancelResetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = true;
+      resetStateBtn.focus();
+    }});
+
+    confirmResetStateBtn.addEventListener("click", () => {{
+      resetConfirmationEl.hidden = true;
+      clearBackupCandidate();
+      saveGeneration += 1;
+      resetWritePending = true;
+      pendingSnapshot = null;
       state = createInitialState();
-      setRestoreError(false);
+      storageWriteAllowed = true;
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
       hideResultOutput();
-      saveState();
       for (const item of SHEET.items) {{
         updateCardUI(item, true);
       }}
       applyFilters();
       updateOverallProgress();
+      saveState(true);
+    }});
+
+    saveDraftBtn.addEventListener("click", saveDraftBackup);
+
+    showDraftBtn.addEventListener("click", () => {{
+      backupDownloadGeneration += 1;
+      try {{
+        showDraftInTextarea(
+          createDraftJsonText(),
+          "途中バックアップ JSON を表示しました。長押しでコピーしてください。"
+        );
+      }} catch (error) {{
+        setDraftFeedback(`途中データを作成できませんでした: ${{error}}`);
+      }}
+    }});
+
+    copyDraftBtn.addEventListener("click", copyDraftBackup);
+
+    draftFileInputEl.addEventListener("change", () => {{
+      const file = draftFileInputEl.files && draftFileInputEl.files[0];
+      draftFileInputEl.value = "";
+      readBackupFile(file);
+    }});
+
+    readDraftTextBtn.addEventListener("click", () => {{
+      inspectBackupText(draftImportTextEl.value);
+    }});
+
+    cancelDraftReplaceBtn.addEventListener("click", () => {{
+      backupReadGeneration += 1;
+      clearBackupCandidate();
+      setDraftFeedback("読み込みをキャンセルしました。画面と保存データは変更していません。");
+      readDraftTextBtn.focus();
+    }});
+
+    confirmDraftReplaceBtn.addEventListener("click", () => {{
+      if (!backupCandidate) return;
+      const replacement = backupCandidate.state;
+      clearBackupCandidate();
+      backupReadGeneration += 1;
+      backupDownloadGeneration += 1;
+      saveGeneration += 1;
+      resetWritePending = true;
+      pendingSnapshot = null;
+      state = replacement;
+      storageWriteAllowed = true;
+      storageResolutionEl.hidden = true;
+      conflictCandidate = null;
+      resetConfirmationEl.hidden = true;
+      hideResultOutput();
+      renderCurrentState();
+      setDraftFeedback(
+        "バックアップの入力を復元しました。" +
+          "IndexedDB への保存状態を確認してください。"
+      );
+      saveState(true);
     }});
 
     showResultBtn.addEventListener("click", () => {{
