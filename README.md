@@ -70,7 +70,7 @@ GitHub Release からインストーラーと同じ版の `.sha256` ファイル
 起動前にハッシュを照合してください。
 
 ```powershell
-$installer = '.\inventory-manager-mini-0.3.2-setup.exe'
+$installer = '.\inventory-manager-mini-0.4.0-setup.exe'
 $expected = ((Get-Content "$installer.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
 $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'SHA256 が一致しません。インストーラーを実行しないでください。' }
@@ -126,16 +126,16 @@ Windows x64、Python 3.13、uv、および Inno Setup 6.7.3 が必要です。�
 ```powershell
 uv sync --locked
 uv run python scripts/fetch_dependency_sources.py
-.\packaging\build.ps1 -Version 0.3.2
+.\packaging\build.ps1 -Version 0.4.0
 ```
 
-PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.3.2` のように
+PowerShell の実行ポリシーで `build.ps1` が拒否される場合は、`pwsh -File packaging/build.ps1 -Version 0.4.0` のように
 実行するか、利用者の判断で現在のセッションだけ実行ポリシーを変更してください。
 
 検証用 rc ビルドでは接尾辞を別に指定します。
 
 ```powershell
-.\packaging\build.ps1 -Version 0.3.2 -Suffix '-rc1'
+.\packaging\build.ps1 -Version 0.4.0 -Suffix '-rc1'
 ```
 
 成果物は毎回異なるビルド ID の `dist/releases/<ビルドID>/` に出力されます。そこにはインストーラー、
