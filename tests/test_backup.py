@@ -23,6 +23,11 @@ from inventory_manager_mini.db.connection import connect, connect_readonly
 from inventory_manager_mini.db.migrations import SCHEMA_VERSION, create_schema
 from tests.conftest import unchecked_constraints
 
+_SNAPSHOT_SQL = (
+    "INSERT INTO active_stocktake_items (client_id, item_id) "
+    "SELECT client_id, id FROM items WHERE client_id = 1 AND is_active = 1"
+)
+
 
 def _create_inventory_database(
     path: Path,
@@ -416,8 +421,45 @@ def test_inspect_database_accepts_v5_with_active_stocktake(tmp_path: Path) -> No
             "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
             (1, "a" * 32, 1),
         )
+        conn.execute(_SNAPSHOT_SQL)
 
         assert BackupService().inspect_database(conn, SCHEMA_VERSION) == []
+    finally:
+        conn.close()
+
+
+def test_inspect_database_rejects_active_stocktake_without_snapshot(tmp_path: Path) -> None:
+    database_path = tmp_path / "no-snapshot.db"
+    _create_inventory_database(database_path, "棚卸品目")
+    conn = connect(database_path)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "a" * 32, 1),
+        )
+
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
+
+        assert any("棚卸対象品目がありません" in reason for reason in reasons)
+    finally:
+        conn.close()
+
+
+def test_inspect_database_rejects_snapshot_with_inactive_item(tmp_path: Path) -> None:
+    database_path = tmp_path / "inactive-snapshot.db"
+    _create_inventory_database(database_path, "棚卸品目")
+    conn = connect(database_path)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "a" * 32, 1),
+        )
+        conn.execute(_SNAPSHOT_SQL)
+        conn.execute("UPDATE items SET is_active = 0")
+
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
+
+        assert any("有効品目でない品目" in reason for reason in reasons)
     finally:
         conn.close()
 
@@ -597,6 +639,7 @@ def test_backup_and_restore_keep_active_stocktakes_of_source(tmp_path: Path) -> 
             "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
             (1, "b" * 32, 1),
         )
+        source.execute(_SNAPSHOT_SQL)
         backup_path = BackupService().create_backup(source, tmp_path / "backups")
     finally:
         source.close()

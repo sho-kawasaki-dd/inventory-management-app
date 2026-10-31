@@ -352,6 +352,31 @@ def find_stocktake_snapshot_migration_violations(conn: sqlite3.Connection) -> li
     ]
 
 
+def find_stocktake_snapshot_violations(conn: sqlite3.Connection) -> list[str]:
+    violations: list[str] = []
+    rows = conn.execute(
+        """SELECT s.client_id,
+            (SELECT COUNT(*) FROM active_stocktake_items AS a
+                WHERE a.client_id = s.client_id) AS snapshot_count,
+            (SELECT COUNT(*) FROM active_stocktake_items AS a
+                JOIN items AS i ON i.id = a.item_id
+                WHERE a.client_id = s.client_id
+                AND (i.client_id != s.client_id OR i.is_active != 1)) AS invalid_count
+        FROM active_stocktakes AS s ORDER BY s.client_id"""
+    ).fetchall()
+    for client_id, snapshot_count, invalid_count in rows:
+        if int(snapshot_count) == 0:
+            violations.append(
+                f"active_stocktakes のクライアント ID {client_id} に棚卸対象品目がありません"
+            )
+        elif int(invalid_count) > 0:
+            violations.append(
+                f"active_stocktake_items のクライアント ID {client_id} に"
+                "対象クライアントの有効品目でない品目が含まれています"
+            )
+    return violations
+
+
 def _format_violation(table: str, row_id: object, column: str, value: object, limit: str) -> str:
     return f"{table} ID {row_id} の {column}={value!r} は上限 {limit} の範囲外です"
 

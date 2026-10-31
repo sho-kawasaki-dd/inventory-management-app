@@ -35,13 +35,14 @@ def _new_item(
     client_id: int = 1,
     quantity: int = 0,
     reference_price: int | None = 100,
+    category_id: int = 2,
 ):
     return inventory.create_item(
         NewItem(
             client_id=client_id,
             purchaser_id=1,
             name=name,
-            category_id=2,
+            category_id=category_id,
             initial_quantity=quantity,
             initial_staff_id=1 if quantity else None,
             reference_price=reference_price,
@@ -554,10 +555,10 @@ def test_mobile_stocktake_rejects_results_that_do_not_match_the_sheet(
     )
     rejected = (
         (wrong_client, "棚卸結果のクライアントがシートと一致しません"),
-        (_payload(sheet, both[:1]), "品目一覧が対象クライアントの有効品目と一致しません"),
+        (_payload(sheet, both[:1]), "品目一覧がシートの対象品目と一致しません"),
         (
             _payload(sheet, (*both, MobileStocktakeEntry(9999, 1))),
-            "品目一覧が対象クライアントの有効品目と一致しません",
+            "品目一覧がシートの対象品目と一致しません",
         ),
         (unknown_session, "この棚卸シートは無効です"),
     )
@@ -766,3 +767,212 @@ def test_master_lock_does_not_block_unrelated_master_operations(
     master.delete_client(2)
     master.delete_staff(2)
     assert inventory.get_active_stocktake(1) is not None
+
+
+def _category_tree(master: MasterService) -> tuple[int, int, int]:
+    # 備品(1) > 文具(2) > ペン、備品(1) > 工具 の ID を返す
+    pen = master.add_category("ペン", "PN", 2)
+    tool = master.add_category("工具", "TL", 1)
+    return pen.id, tool.id, 2
+
+
+def _snapshot_ids(conn: sqlite3.Connection, client_id: int = 1) -> set[int]:
+    rows = conn.execute(
+        "SELECT item_id FROM active_stocktake_items WHERE client_id = ?", (client_id,)
+    ).fetchall()
+    return {int(row[0]) for row in rows}
+
+
+def test_mobile_stocktake_category_limits_snapshot_to_descendant_items(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    pen_id, tool_id, stationery_id = _category_tree(master)
+    stationery = _new_item(inventory, "文具品目", quantity=1, category_id=stationery_id)
+    pen = _new_item(inventory, "ペン品目", quantity=2, category_id=pen_id)
+    tool = _new_item(inventory, "工具品目", quantity=3, category_id=tool_id)
+
+    sheet = inventory.export_mobile_stocktake_html(
+        tmp_path / "sheet.html", 1, 1, category_id=stationery_id
+    )
+
+    assert {item.item_id for item in sheet.items} == {stationery.id, pen.id}
+    assert (sheet.category_id, sheet.category_path) == (stationery_id, "備品 > 文具")
+    assert _snapshot_ids(inventory.conn) == {stationery.id, pen.id}
+    active = inventory.get_active_stocktake(1)
+    assert active is not None
+    assert (active.category_id, active.category_path, active.item_count) == (
+        stationery_id,
+        "備品 > 文具",
+        2,
+    )
+
+    all_sheet = inventory.export_mobile_stocktake_html(tmp_path / "all.html", 1, 1)
+    assert {item.item_id for item in all_sheet.items} == {stationery.id, pen.id, tool.id}
+    assert (all_sheet.category_id, all_sheet.category_path) == (None, None)
+    assert _snapshot_ids(inventory.conn) == {stationery.id, pen.id, tool.id}
+
+
+def test_mobile_stocktake_category_completion_leaves_other_items_untouched(
+    inventory: InventoryService,
+    master: MasterService,
+    fixed_clock,
+    tmp_path: Path,
+) -> None:
+    _, tool_id, stationery_id = _category_tree(master)
+    target = _new_item(inventory, "対象", quantity=3, category_id=stationery_id)
+    other = _new_item(inventory, "対象外", quantity=4, category_id=tool_id)
+    sheet = inventory.export_mobile_stocktake_html(
+        tmp_path / "sheet.html", 1, 1, category_id=stationery_id
+    )
+    before_other = inventory.movements.latest_moved_at(other.id)
+    result = _payload(sheet, (MobileStocktakeEntry(target.id, 1),))
+
+    preview = inventory.preview_mobile_stocktake(result)
+    assert [row.item_id for row in preview.rows] == [target.id]
+    assert (preview.category_id, preview.category_path) == (stationery_id, "備品 > 文具")
+    with pytest.raises(ValidationError, match="対象品目と一致しません"):
+        inventory.preview_mobile_stocktake(
+            _payload(sheet, (MobileStocktakeEntry(target.id, 1), MobileStocktakeEntry(other.id, 4)))
+        )
+
+    fixed_clock.advance(seconds=1)
+    movements = inventory.complete_mobile_stocktake(result, staff_id=1)
+
+    assert [movement.item_id for movement in movements] == [target.id]
+    refreshed_other = inventory.get_item(other.id)
+    assert refreshed_other is not None and refreshed_other.quantity == 4
+    assert inventory.movements.latest_moved_at(other.id) == before_other
+    assert inventory.get_active_stocktake(1) is None
+    assert _snapshot_ids(inventory.conn) == set()
+
+
+def test_mobile_stocktake_snapshot_survives_category_hierarchy_changes(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    pen_id, tool_id, stationery_id = _category_tree(master)
+    pen = _new_item(inventory, "ペン品目", quantity=2, category_id=pen_id)
+    sheet = inventory.export_mobile_stocktake_html(
+        tmp_path / "sheet.html", 1, 1, category_id=stationery_id
+    )
+
+    master.move_category(pen_id, tool_id)
+    master.rename_category(stationery_id, "事務用品")
+
+    result = _payload(sheet, (MobileStocktakeEntry(pen.id, 2),))
+    preview = inventory.preview_mobile_stocktake(result)
+    assert [row.item_id for row in preview.rows] == [pen.id]
+    assert preview.category_path == "備品 > 事務用品"
+    assert len(inventory.complete_mobile_stocktake(result, staff_id=1)) == 1
+
+
+def test_mobile_stocktake_rejects_snapshot_item_that_is_no_longer_valid(
+    inventory: InventoryService,
+    tmp_path: Path,
+) -> None:
+    first, second = _two_items(inventory)
+    sheet = inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    inventory.conn.execute("UPDATE items SET is_active = 0 WHERE id = ?", (second.id,))
+    result = _payload(
+        sheet, (MobileStocktakeEntry(first.id, 2), MobileStocktakeEntry(second.id, 5))
+    )
+
+    with pytest.raises(ValidationError, match="対象品目と一致しません"):
+        inventory.preview_mobile_stocktake(result)
+    with pytest.raises(ValidationError, match="対象品目と一致しません"):
+        inventory.complete_mobile_stocktake(result, staff_id=1)
+
+
+def test_mobile_stocktake_rejects_session_without_snapshot(
+    inventory: InventoryService,
+    tmp_path: Path,
+) -> None:
+    item = _new_item(inventory, "対象", quantity=1)
+    sheet = inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    inventory.conn.execute("DELETE FROM active_stocktake_items")
+
+    with pytest.raises(ValidationError, match="対象品目と一致しません"):
+        inventory.preview_mobile_stocktake(_payload(sheet, (MobileStocktakeEntry(item.id, 1),)))
+
+
+def test_mobile_stocktake_rejects_empty_or_invalid_category_without_changes(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    _, tool_id, _ = _category_tree(master)
+    _new_item(inventory, "文具品目", quantity=1)
+    output_path = tmp_path / "sheet.html"
+
+    with pytest.raises(ValidationError, match="対象クライアント・カテゴリに有効な品目がありません"):
+        inventory.export_mobile_stocktake_html(output_path, 1, 1, category_id=tool_id)
+    with pytest.raises(ValidationError, match="カテゴリが見つかりません"):
+        inventory.export_mobile_stocktake_html(output_path, 1, 1, category_id=9999)
+    with pytest.raises(ValidationError, match="カテゴリ ID"):
+        inventory.export_mobile_stocktake_html(output_path, 1, 1, category_id=0)
+
+    assert not output_path.exists()
+    assert inventory.list_active_stocktakes() == []
+    assert _snapshot_ids(inventory.conn) == set()
+
+
+def test_mobile_stocktake_reexport_replaces_snapshot_and_failure_keeps_old_one(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    _, tool_id, stationery_id = _category_tree(master)
+    stationery = _new_item(inventory, "文具品目", quantity=1, category_id=stationery_id)
+    tool = _new_item(inventory, "工具品目", quantity=1, category_id=tool_id)
+    first = inventory.export_mobile_stocktake_html(
+        tmp_path / "first.html", 1, 1, category_id=stationery_id
+    )
+
+    with pytest.raises(FileOutputError):
+        inventory.export_mobile_stocktake_html(tmp_path / "first.html", 1, 1, category_id=tool_id)
+    active = inventory.get_active_stocktake(1)
+    assert active is not None and active.session_id == first.session_id
+    assert active.category_id == stationery_id
+    assert _snapshot_ids(inventory.conn) == {stationery.id}
+
+    inventory.export_mobile_stocktake_html(tmp_path / "second.html", 1, 1, category_id=tool_id)
+    active = inventory.get_active_stocktake(1)
+    assert active is not None and active.category_id == tool_id
+    assert _snapshot_ids(inventory.conn) == {tool.id}
+
+
+def test_cancel_mobile_stocktake_removes_snapshot(
+    inventory: InventoryService,
+    tmp_path: Path,
+) -> None:
+    _new_item(inventory, "対象", quantity=1)
+    inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1)
+    assert _snapshot_ids(inventory.conn)
+
+    inventory.cancel_mobile_stocktake(1)
+
+    assert _snapshot_ids(inventory.conn) == set()
+
+
+def test_master_service_blocks_deleting_category_referenced_by_stocktake(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    pen_id, _, stationery_id = _category_tree(master)
+    _new_item(inventory, "ペン品目", quantity=1, category_id=pen_id)
+    inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1, category_id=pen_id)
+
+    assert master.stocktake_lock_reason("category", pen_id) == (
+        "スマホ棚卸の対象カテゴリとして登録中のため削除できません"
+    )
+    assert master.stocktake_lock_reason("category", stationery_id) is None
+    assert not master.can_delete_category(pen_id)
+    with pytest.raises(StocktakeInProgressError, match="対象カテゴリ"):
+        master.delete_category(pen_id)
+
+    inventory.cancel_mobile_stocktake(1)
+    assert master.stocktake_lock_reason("category", pen_id) is None

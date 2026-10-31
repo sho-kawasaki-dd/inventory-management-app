@@ -1945,6 +1945,10 @@ def test_restore_confirmation_shows_current_and_source_stocktake_clients(
             "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
             ("c" * 32,),
         )
+        conn.execute(
+            "INSERT INTO active_stocktake_items (client_id, item_id) "
+            "SELECT client_id, id FROM items WHERE client_id = 1"
+        )
     finally:
         conn.close()
     record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
@@ -1972,6 +1976,10 @@ def test_restore_confirmation_shows_none_for_the_side_without_stocktake(
             conn.execute(
                 "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
                 ("d" * 32,),
+            )
+            conn.execute(
+                "INSERT INTO active_stocktake_items (client_id, item_id) "
+                "SELECT client_id, id FROM items WHERE client_id = 1"
             )
         finally:
             conn.close()

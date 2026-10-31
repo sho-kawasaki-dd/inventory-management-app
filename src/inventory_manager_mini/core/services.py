@@ -77,6 +77,7 @@ from inventory_manager_mini.db.integrity import (
     compute_aggregates,
     find_fifo_violations,
     find_limit_violations,
+    find_stocktake_snapshot_violations,
 )
 from inventory_manager_mini.db.migrations import (
     MIGRATIONS,
@@ -428,14 +429,37 @@ class InventoryService:
     def get_active_stocktake(self, client_id: int) -> ActiveStocktake | None:
         return self.stocktakes.get(client_id)
 
-    def _begin_mobile_stocktake(self, client_id: int, staff_id: int) -> MobileStocktakeSheet:
+    def _category_full_path(self, category_id: int) -> str | None:
+        by_id = {category.id: category for category in self.masters.list_categories()}
+        current = by_id.get(category_id)
+        if current is None:
+            return None
+        names: list[str] = []
+        visited: set[int] = set()
+        while current is not None and current.id not in visited:
+            visited.add(current.id)
+            names.append(current.name)
+            current = None if current.parent_id is None else by_id.get(current.parent_id)
+        return " > ".join(reversed(names))
+
+    def _begin_mobile_stocktake(
+        self, client_id: int, staff_id: int, category_id: int | None = None
+    ) -> MobileStocktakeSheet:
         client = _active_master(
             self.masters.get_client(_integer(client_id, "クライアント ID", 1)), "クライアント"
         )
         staff = self._require_active_staff(staff_id)
-        items = self.items.list(ItemFilter(client_id=client.id))
+        normalized_category_id = _optional_integer(category_id, "カテゴリ ID", 1)
+        category_path: str | None = None
+        if normalized_category_id is not None:
+            category_path = self._category_full_path(normalized_category_id)
+            if category_path is None:
+                raise ValidationError("カテゴリが見つかりません")
+        items = self.items.list(ItemFilter(client_id=client.id, category_id=normalized_category_id))
         if not items:
-            raise ValidationError("対象クライアントに有効な品目がありません")
+            if normalized_category_id is None:
+                raise ValidationError("対象クライアントに有効な品目がありません")
+            raise ValidationError("対象クライアント・カテゴリに有効な品目がありません")
 
         session_id = secrets.token_hex(16)
         started_at = utc_now_str(self.clock())
@@ -444,7 +468,9 @@ class InventoryService:
             session_id=session_id,
             staff_id=staff.id,
             started_at=started_at,
+            category_id=normalized_category_id,
         )
+        self.stocktakes.replace_items(client.id, [item.id for item in items])
         return MobileStocktakeSheet(
             session_id=session_id,
             client_id=client.id,
@@ -452,6 +478,8 @@ class InventoryService:
             staff_id=staff.id,
             staff_name=staff.name,
             started_at=started_at,
+            category_id=normalized_category_id,
+            category_path=category_path,
             items=tuple(
                 MobileStocktakeItem(
                     item_id=item.id,
@@ -467,13 +495,13 @@ class InventoryService:
         )
 
     def export_mobile_stocktake_html(
-        self, path: Path, client_id: int, staff_id: int
+        self, path: Path, client_id: int, staff_id: int, category_id: int | None = None
     ) -> MobileStocktakeSheet:
         output_path = Path(path)
         created_file = False
         try:
             with transaction(self.conn):
-                sheet = self._begin_mobile_stocktake(client_id, staff_id)
+                sheet = self._begin_mobile_stocktake(client_id, staff_id, category_id)
                 content = render_stocktake_html(sheet)
                 try:
                     with output_path.open("x", encoding="utf-8") as output_file:
@@ -531,10 +559,16 @@ class InventoryService:
         if payload.client_id != active_stocktake.client_id:
             raise ValidationError("棚卸結果のクライアントがシートと一致しません")
 
-        items = self.items.list(ItemFilter(client_id=active_stocktake.client_id))
+        snapshot_ids = self.stocktakes.list_item_ids(active_stocktake.client_id)
+        client_items = self.items.list(ItemFilter(client_id=active_stocktake.client_id))
+        items = [item for item in client_items if item.id in snapshot_ids]
         entries_by_id = {entry.item_id: entry for entry in payload.entries}
-        if {item.id for item in items} != set(entries_by_id):
-            raise ValidationError("棚卸結果の品目一覧が対象クライアントの有効品目と一致しません")
+        if (
+            not snapshot_ids
+            or {item.id for item in items} != snapshot_ids
+            or set(entries_by_id) != snapshot_ids
+        ):
+            raise ValidationError("棚卸結果の品目一覧がシートの対象品目と一致しません")
 
         rows = tuple(
             MobileStocktakePreviewRow(
@@ -556,6 +590,8 @@ class InventoryService:
             staff_id=active_stocktake.staff_id,
             staff_name=active_stocktake.staff_name,
             started_at=active_stocktake.started_at,
+            category_id=active_stocktake.category_id,
+            category_path=active_stocktake.category_path,
             rows=rows,
             unchanged_count=sum(row.delta == 0 for row in rows),
             increased_count=sum(row.delta > 0 for row in rows),
@@ -1020,10 +1056,18 @@ class MasterService:
             if self.stocktakes.is_staff_referenced(normalized_id):
                 return "スマホ棚卸のシート作成担当者として登録中のため削除できません"
             return None
+        if kind == "category":
+            if self.stocktakes.is_category_referenced(normalized_id):
+                return "スマホ棚卸の対象カテゴリとして登録中のため削除できません"
+            return None
         raise ValidationError("棚卸ロックの対象種別が正しくありません")
 
     def can_delete_category(self, entity_id: int) -> bool:
-        return self._exists("category", entity_id) and not self.category_in_use(entity_id)
+        return (
+            self._exists("category", entity_id)
+            and not self.stocktakes.is_category_referenced(entity_id)
+            and not self.category_in_use(entity_id)
+        )
 
     def can_delete_location(self, entity_id: int) -> bool:
         return self._exists("location", entity_id) and not self.location_in_use(entity_id)
@@ -1056,6 +1100,10 @@ class MasterService:
                 )
             if kind == "staff" and self.stocktakes.is_staff_referenced(normalized_id):
                 raise StocktakeInProgressError("スマホ棚卸のシート作成担当者は削除できません")
+            if kind == "category" and self.stocktakes.is_category_referenced(normalized_id):
+                raise StocktakeInProgressError(
+                    "スマホ棚卸の対象カテゴリとして登録中のため削除できません"
+                )
             if self._in_use(kind, normalized_id):
                 raise MasterInUseError("使用中または保持が必要なマスタは削除できません")
             if kind == "client":
@@ -1255,6 +1303,9 @@ class BackupService:
 
             if version >= 4:
                 reasons.extend(find_fifo_violations(conn))
+
+            if version >= 6:
+                reasons.extend(find_stocktake_snapshot_violations(conn))
 
             invalid_reversals = MovementRepository(conn).find_invalid_reversals()
             if invalid_reversals:
