@@ -16,7 +16,9 @@ from inventory_manager_mini.core.errors import (
     RestoreError,
     ValidationError,
 )
-from inventory_manager_mini.core.services import BackupService
+from inventory_manager_mini.core.mobile_stocktake import encode_stocktake_payload
+from inventory_manager_mini.core.models import MobileStocktakeEntry, MobileStocktakePayload
+from inventory_manager_mini.core.services import BackupService, InventoryService
 from inventory_manager_mini.db import backup, migrations
 from inventory_manager_mini.db.backup import check_sqlite_integrity, copy_database
 from inventory_manager_mini.db.connection import connect, connect_readonly
@@ -52,6 +54,9 @@ def _create_inventory_database(
         elif schema_version == 4:
             schema_v4 = files("inventory_manager_mini.db").joinpath("schema_v4.sql")
             create_schema(conn, schema_v4.read_text(encoding="utf-8"), version=4)
+        elif schema_version == 5:
+            schema_v5 = files("inventory_manager_mini.db").joinpath("schema_v5.sql")
+            create_schema(conn, schema_v5.read_text(encoding="utf-8"), version=5)
         else:
             create_schema(conn, version=schema_version)
         conn.executemany("INSERT INTO clients (id, name) VALUES (?, ?)", [(1, "クライアント")])
@@ -413,13 +418,31 @@ def test_prepare_restore_migrates_v4_backup_to_v5(tmp_path: Path) -> None:
 
 
 def test_inspect_database_accepts_v5_with_active_stocktake(tmp_path: Path) -> None:
-    database_path = tmp_path / "active-stocktake.db"
-    _create_inventory_database(database_path, "棚卸品目")
+    database_path = tmp_path / "active-stocktake-v5.db"
+    _create_inventory_database(database_path, "棚卸品目", schema_version=5)
     conn = connect(database_path)
     try:
         conn.execute(
             "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
             (1, "a" * 32, 1),
+        )
+
+        assert BackupService().inspect_database(conn, 5) == []
+    finally:
+        conn.close()
+
+
+def test_inspect_database_accepts_latest_with_active_stocktake_and_snapshot(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "active-stocktake.db"
+    _create_inventory_database(database_path, "棚卸品目")
+    conn = connect(database_path)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id, category_id) "
+            "VALUES (?, ?, ?, ?)",
+            (1, "a" * 32, 1, 1),
         )
         conn.execute(_SNAPSHOT_SQL)
 
@@ -462,6 +485,117 @@ def test_inspect_database_rejects_snapshot_with_inactive_item(tmp_path: Path) ->
         assert any("有効品目でない品目" in reason for reason in reasons)
     finally:
         conn.close()
+
+
+def test_inspect_database_rejects_snapshot_with_other_client_item(tmp_path: Path) -> None:
+    database_path = tmp_path / "other-client-snapshot.db"
+    _create_inventory_database(database_path, "棚卸品目")
+    conn = connect(database_path)
+    try:
+        conn.execute("INSERT INTO clients (id, name) VALUES (2, '別クライアント')")
+        conn.execute(
+            "INSERT INTO items (client_id, purchaser_id, code, name, category_id) "
+            "VALUES (2, 1, 'EQ-0002', '別品目', 1)"
+        )
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "a" * 32, 1),
+        )
+        conn.execute(
+            "INSERT INTO active_stocktake_items (client_id, item_id) VALUES (1, 1), (1, 2)"
+        )
+
+        reasons = BackupService().inspect_database(conn, SCHEMA_VERSION)
+
+        assert any("有効品目でない品目" in reason for reason in reasons)
+    finally:
+        conn.close()
+
+
+def _add_v5_stocktake(path: Path, *, active_items: bool = True) -> str:
+    session_id = "c" * 32
+    conn = connect(path)
+    try:
+        conn.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, session_id, 1),
+        )
+        if not active_items:
+            conn.execute("UPDATE items SET is_active = 0")
+    finally:
+        conn.close()
+    return session_id
+
+
+def test_prepare_restore_migrates_v5_backup_and_keeps_pre_migration_sheet_importable(
+    tmp_path: Path,
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source-v5.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "v5品目", schema_version=5)
+    session_id = _add_v5_stocktake(source_path)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    result_text = encode_stocktake_payload(
+        MobileStocktakePayload(session_id, 1, (MobileStocktakeEntry(1, 0),))
+    )
+    service = BackupService(clock=lambda: datetime(2026, 11, 1, 3, 4, 5, tzinfo=UTC), tz=UTC)
+
+    with service.prepare_restore(source_path) as prepared:
+        assert prepared.source_version == 5
+        assert prepared.stocktake_client_names == ("クライアント",)
+        service.apply_restore(prepared, current_path, tmp_path / "backups")
+
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+    restored = connect(current_path)
+    try:
+        assert restored.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+        assert migrations.inspect_schema(restored, SCHEMA_VERSION) == []
+        assert restored.execute(
+            "SELECT client_id, session_id, category_id FROM active_stocktakes"
+        ).fetchall() == [(1, session_id, None)]
+        assert restored.execute(
+            "SELECT client_id, item_id FROM active_stocktake_items"
+        ).fetchall() == [(1, 1)]
+        inventory = InventoryService(restored)
+        preview = inventory.preview_mobile_stocktake(result_text)
+        assert (preview.client_id, preview.category_path, len(preview.rows)) == (1, None, 1)
+        assert len(inventory.complete_mobile_stocktake(result_text, 1)) == 1
+        assert tuple(restored.execute("SELECT COUNT(*) FROM active_stocktakes").fetchone()) == (0,)
+        assert tuple(
+            restored.execute("SELECT COUNT(*) FROM active_stocktake_items").fetchone()
+        ) == (0,)
+    finally:
+        restored.close()
+
+
+def test_prepare_restore_rejects_v5_session_without_active_items_and_keeps_databases(
+    tmp_path: Path,
+) -> None:
+    current_path = tmp_path / "current.db"
+    source_path = tmp_path / "source-v5.db"
+    _create_inventory_database(current_path, "現行品目")
+    _create_inventory_database(source_path, "v5品目", schema_version=5)
+    _add_v5_stocktake(source_path, active_items=False)
+    source_hash = hashlib.sha256(source_path.read_bytes()).digest()
+    current_hash = hashlib.sha256(current_path.read_bytes()).digest()
+
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert any(
+        "事前検査" in reason and "クライアント ID 1" in reason for reason in error.value.reasons
+    )
+    assert hashlib.sha256(source_path.read_bytes()).digest() == source_hash
+    assert hashlib.sha256(current_path.read_bytes()).digest() == current_hash
+    source = connect_readonly(source_path)
+    try:
+        assert source.execute("PRAGMA user_version").fetchone() == (5,)
+        assert migrations.inspect_schema(source, 5) == []
+        assert source.execute("SELECT COUNT(*) FROM active_stocktakes").fetchone() == (1,)
+        assert source.execute("SELECT name FROM items").fetchone() == ("v5品目",)
+    finally:
+        source.close()
 
 
 def test_backup_service_stops_before_business_checks_when_schema_is_invalid(
@@ -636,8 +770,9 @@ def test_backup_and_restore_keep_active_stocktakes_of_source(tmp_path: Path) -> 
     source = connect(source_path)
     try:
         source.execute(
-            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
-            (1, "b" * 32, 1),
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id, category_id) "
+            "VALUES (?, ?, ?, ?)",
+            (1, "b" * 32, 1, 1),
         )
         source.execute(_SNAPSHOT_SQL)
         backup_path = BackupService().create_backup(source, tmp_path / "backups")
@@ -651,10 +786,33 @@ def test_backup_and_restore_keep_active_stocktakes_of_source(tmp_path: Path) -> 
 
     restored = connect_readonly(current_path)
     try:
-        rows = restored.execute("SELECT client_id, session_id FROM active_stocktakes").fetchall()
-        assert rows == [(1, "b" * 32)]
+        rows = restored.execute(
+            "SELECT client_id, session_id, category_id FROM active_stocktakes"
+        ).fetchall()
+        assert rows == [(1, "b" * 32, 1)]
+        assert restored.execute(
+            "SELECT client_id, item_id FROM active_stocktake_items"
+        ).fetchall() == [(1, 1)]
     finally:
         restored.close()
+
+
+def test_prepare_restore_rejects_latest_session_with_empty_snapshot(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    _create_inventory_database(source_path, "復元品目")
+    source = connect(source_path)
+    try:
+        source.execute(
+            "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (?, ?, ?)",
+            (1, "b" * 32, 1),
+        )
+    finally:
+        source.close()
+
+    with pytest.raises(InvalidBackupError) as error:
+        BackupService().prepare_restore(source_path)
+
+    assert any("棚卸対象品目がありません" in reason for reason in error.value.reasons)
 
 
 @pytest.mark.parametrize("schema_version", [1, 2, 3, 4])

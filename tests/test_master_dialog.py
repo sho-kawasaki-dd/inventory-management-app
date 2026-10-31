@@ -284,6 +284,36 @@ def test_sheet_creator_staff_cannot_be_deleted_but_can_be_deactivated(
     assert tab.delete_button.toolTip() == ""
 
 
+def test_stocktake_category_disables_delete_with_reason(
+    qtbot, dialog_context, tmp_path: Path
+) -> None:
+    dialog_context.inventory.create_item(
+        NewItem(client_id=1, purchaser_id=1, name="棚卸対象", category_id=2)
+    )
+    dialog_context.inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1, 2)
+    dialog = MasterDialog(dialog_context, MasterTab.CATEGORY)
+    qtbot.addWidget(dialog)
+    tab = dialog.category_tab
+
+    _select_category(tab, 2)
+
+    reason = dialog_context.master.stocktake_lock_reason("category", 2)
+    assert reason == "スマホ棚卸の対象カテゴリとして登録中のため削除できません"
+    assert not tab.delete_button.isEnabled()
+    assert tab.delete_button.toolTip() == reason
+
+    _select_category(tab, 1)
+
+    assert dialog_context.master.stocktake_lock_reason("category", 1) is None
+    assert tab.delete_button.toolTip() != reason
+
+    dialog_context.inventory.cancel_mobile_stocktake(1)
+    _select_category(tab, 2)
+
+    assert dialog_context.master.stocktake_lock_reason("category", 2) is None
+    assert tab.delete_button.toolTip() != reason
+
+
 def test_category_controls_create_move_cycle_prefix_and_delete(
     qtbot, dialog_context, monkeypatch
 ) -> None:

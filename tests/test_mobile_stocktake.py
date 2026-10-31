@@ -10,6 +10,7 @@ import pytest
 from inventory_manager_mini.core.errors import ValidationError
 from inventory_manager_mini.core.mobile_stocktake import (
     MAX_NOTE_LENGTH,
+    PAYLOAD_VERSION,
     RESULT_CODE_PREFIX,
     RESULT_CODE_SUFFIX,
     dump_stocktake_payload_json,
@@ -631,3 +632,52 @@ def test_render_shows_started_at_in_local_time_and_builds_filename_timestamp() -
     )
     assert fallback_embedded["started_at_display"] == "custom-time"
     assert fallback_embedded["filename_timestamp"] == "customtime"
+
+
+def _with_category(category_path: str | None) -> MobileStocktakeSheet:
+    sheet = _sample_sheet()
+    return MobileStocktakeSheet(
+        session_id=sheet.session_id,
+        client_id=sheet.client_id,
+        client_name=sheet.client_name,
+        staff_id=sheet.staff_id,
+        staff_name=sheet.staff_name,
+        started_at=sheet.started_at,
+        items=sheet.items,
+        category_id=None if category_path is None else 7,
+        category_path=category_path,
+    )
+
+
+def test_render_shows_escaped_category_in_title_header_and_embedded_data() -> None:
+    category_path = '備品 > <文具> & "紙"'
+    rendered = render_stocktake_html(_with_category(category_path))
+
+    escaped = "備品 &gt; &lt;文具&gt; &amp; &quot;紙&quot;"
+    assert f"A社 &lt;テスト &amp; Co.&gt; ({escaped})</title>" in rendered
+    assert f'カテゴリ: <strong id="category-name">{escaped}</strong>' in rendered
+    assert "備品 > <文具>" not in rendered.split("const SHEET")[0]
+    embedded = json.loads(re.search(r"const SHEET = (\{.*\});\n", rendered).group(1))  # type: ignore[union-attr]
+    assert embedded["category_path"] == category_path
+
+
+def test_render_without_category_shows_all_categories_label() -> None:
+    rendered = render_stocktake_html(_with_category(None))
+
+    assert "(すべてのカテゴリ)</title>" in rendered
+    assert 'カテゴリ: <strong id="category-name">すべてのカテゴリ</strong>' in rendered
+    embedded = json.loads(re.search(r"const SHEET = (\{.*\});\n", rendered).group(1))  # type: ignore[union-attr]
+    assert embedded["category_path"] is None
+
+
+def test_category_does_not_change_result_payload_format() -> None:
+    payload = _sample_payload()
+
+    assert PAYLOAD_VERSION == 1
+    assert set(json.loads(dump_stocktake_payload_json(payload))) == {
+        "v",
+        "session_id",
+        "client_id",
+        "entries",
+    }
+    assert parse_stocktake_payload(encode_stocktake_payload(payload)) == payload

@@ -655,6 +655,12 @@ def test_version_five_session_without_active_items_is_rejected_without_changes(
         assert conn.execute("PRAGMA user_version").fetchone() == (5,)
         assert inspect_schema(conn, 5) == []
         assert conn.execute("SELECT COUNT(*) FROM active_stocktakes").fetchone() == (2,)
+        assert conn.execute("SELECT COUNT(*) FROM items").fetchone() == (4,)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(active_stocktakes)")]
+        assert "category_id" not in columns
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'active_stocktake_items'"
+        ).fetchone() == (0,)
     finally:
         conn.close()
     assert not (tmp_path / "backups").exists()

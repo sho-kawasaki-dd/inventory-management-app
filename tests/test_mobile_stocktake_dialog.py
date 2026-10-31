@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QTableWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QTableWidget
 
 from inventory_manager_mini.core.mobile_stocktake import (
     dump_stocktake_payload_json,
@@ -21,6 +21,7 @@ from inventory_manager_mini.core.services import InventoryService, MasterService
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialogs import mobile_stocktake_dialog as dialog_module
 from inventory_manager_mini.ui.dialogs.mobile_stocktake_dialog import MobileStocktakeDialog
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPickerDialog
 from tests.conftest import create_test_context
 
 _SHEET_QUESTION = "棚卸シートの再作成"
@@ -514,3 +515,199 @@ def test_empty_input_cannot_be_previewed(qtbot, context: AppContext, dialogs: _D
     assert dialog._preview is None
     assert not dialog.confirm_button.isEnabled()
     assert dialogs.warnings == []
+
+
+def _new_item_in(inventory: InventoryService, name: str, quantity: int, category_id: int) -> Item:
+    return inventory.create_item(
+        NewItem(
+            client_id=1,
+            purchaser_id=1,
+            name=name,
+            category_id=category_id,
+            initial_quantity=quantity,
+            initial_staff_id=1,
+        )
+    )
+
+
+def _pick_category(
+    monkeypatch: pytest.MonkeyPatch, dialog: MobileStocktakeDialog, category_id: int | None
+) -> None:
+    def fake_exec(picker_dialog: CategoryPickerDialog) -> QDialog.DialogCode:
+        picker_dialog.tree.setCurrentItem(picker_dialog._items[category_id])
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(CategoryPickerDialog, "exec", fake_exec)
+    dialog.category_picker.open_dialog()
+
+
+def test_category_selection_updates_target_count_and_export_button(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    master: MasterService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _new_item(inventory, "文具品", 1)
+    _new_item_in(inventory, "備品", 1, 1)
+    empty = master.add_category("空", "EM")
+    dialog = _open_dialog(qtbot, context)
+    _select_export(dialog, 1, 1)
+
+    assert dialog.category_picker.display.text() == "すべてのカテゴリ"
+    assert dialog.target_count_label.text() == "対象品目: 2 件"
+    assert dialog.export_button.isEnabled()
+
+    _pick_category(monkeypatch, dialog, 2)
+    assert dialog.target_count_label.text() == "対象品目: 1 件"
+    assert dialog.export_button.isEnabled()
+
+    _pick_category(monkeypatch, dialog, 1)
+    assert dialog.target_count_label.text() == "対象品目: 2 件"
+
+    _pick_category(monkeypatch, dialog, empty.id)
+    assert dialog.target_count_label.text() == "対象品目: 0 件"
+    assert not dialog.export_button.isEnabled()
+
+    _pick_category(monkeypatch, dialog, None)
+    assert dialog.target_count_label.text() == "対象品目: 2 件"
+    assert dialog.export_button.isEnabled()
+
+    dialog.client_combo.setCurrentIndex(dialog.client_combo.findData(2))
+    assert dialog.target_count_label.text() == "対象品目: 0 件"
+    assert not dialog.export_button.isEnabled()
+
+
+def test_export_with_category_passes_category_and_shows_total_count_for_locked_client(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    dialogs: _Dialogs,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _new_item(inventory, "文具品", 1)
+    _new_item_in(inventory, "備品", 1, 1)
+    calls: list[tuple[Any, ...]] = []
+    original = inventory.export_mobile_stocktake_html
+
+    def record(path: Path, client_id: int, staff_id: int, category_id: int | None = None):
+        calls.append((client_id, staff_id, category_id))
+        return original(path, client_id, staff_id, category_id)
+
+    monkeypatch.setattr(inventory, "export_mobile_stocktake_html", record)
+    dialog = _open_dialog(qtbot, context)
+    _select_export(dialog, 1, 1)
+    _pick_category(monkeypatch, dialog, 2)
+    dialogs.save_path = tmp_path / "sheet.html"
+
+    dialog.export_button.click()
+
+    assert calls == [(1, 1, 2)]
+    assert Path(dialogs.save_calls[0][2]).name.startswith("棚卸シート_総務_文具_")
+    stocktake = inventory.get_active_stocktake(1)
+    assert stocktake is not None
+    assert (stocktake.category_id, stocktake.category_path, stocktake.item_count) == (
+        2,
+        "備品 > 文具",
+        1,
+    )
+    assert dialog.active_table.columnCount() == 5
+    assert _cell(dialog.active_table, 0, 0) == "総務"
+    assert _cell(dialog.active_table, 0, 1) == "備品 > 文具"
+    assert _cell(dialog.active_table, 0, 4) == "1"
+    combo_text = dialog.client_combo.itemText(dialog.client_combo.findData(1))
+    assert "有効品目 2 件" in combo_text
+    assert "(棚卸中)" in combo_text
+
+
+def test_category_filename_falls_back_to_unnamed_for_unusable_names(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    master: MasterService,
+    dialogs: _Dialogs,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dots = master.add_category("..", "DT")
+    _new_item_in(inventory, "ドット", 1, dots.id)
+    dialog = _open_dialog(qtbot, context)
+    _select_export(dialog, 1, 1)
+    _pick_category(monkeypatch, dialog, dots.id)
+    dialogs.save_path = tmp_path / "dots.html"
+
+    dialog.export_button.click()
+
+    assert Path(dialogs.save_calls[0][2]).name.startswith("棚卸シート_総務_unnamed_")
+
+
+def test_reissue_confirmation_shows_current_and_new_category(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    dialogs: _Dialogs,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _new_item(inventory, "文具品", 1)
+    old_sheet = inventory.export_mobile_stocktake_html(tmp_path / "old.html", 1, 1)
+    dialog = _open_dialog(qtbot, context)
+    _select_export(dialog, 1, 1)
+    _pick_category(monkeypatch, dialog, 2)
+
+    dialog.export_button.click()
+
+    _title, text, _default = dialogs.questions[0]
+    assert "現在の対象カテゴリ: すべてのカテゴリ" in text
+    assert "再作成後の対象カテゴリ: 備品 > 文具" in text
+    active = inventory.get_active_stocktake(1)
+    assert active is not None and active.session_id == old_sheet.session_id
+    assert active.category_id is None
+
+
+def test_cancel_confirmation_shows_category(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    dialogs: _Dialogs,
+    tmp_path: Path,
+) -> None:
+    _new_item(inventory, "文具品", 1)
+    inventory.export_mobile_stocktake_html(tmp_path / "category.html", 1, 1, 2)
+    dialog = _open_dialog(qtbot, context)
+    dialog.active_table.selectRow(0)
+
+    dialog.cancel_stocktake_button.click()
+
+    assert "総務（カテゴリ: 備品 > 文具）の棚卸を中止します" in dialogs.questions[0][1]
+
+
+def test_preview_and_completion_show_category_without_extra_confirmation(
+    qtbot,
+    context: AppContext,
+    inventory: InventoryService,
+    dialogs: _Dialogs,
+    tmp_path: Path,
+) -> None:
+    stationery = _new_item(inventory, "文具品", 2)
+    equipment = _new_item_in(inventory, "備品", 3, 1)
+    sheet = inventory.export_mobile_stocktake_html(tmp_path / "category.html", 1, 1, 2)
+    text = _result_text(sheet, (MobileStocktakeEntry(stationery.id, 1),))
+    dialog = _open_dialog(qtbot, context)
+    dialog.result_edit.setPlainText(text)
+
+    dialog.preview_button.click()
+
+    assert "総務 / カテゴリ: 備品 > 文具 / 棚卸開始:" in dialog.preview_status_label.text()
+    assert dialog.preview_summary_label.text().startswith("対象 1 件")
+    assert dialog.preview_table.rowCount() == 1
+
+    dialog.confirm_button.click()
+
+    assert dialogs.questions == []
+    assert dialogs.information == [
+        ("棚卸完了", "総務（カテゴリ: 備品 > 文具）の棚卸を 1 件確定しました。")
+    ]
+    assert [_quantity(inventory, stationery), _quantity(inventory, equipment)] == [1, 3]
+    assert inventory.get_active_stocktake(1) is None

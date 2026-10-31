@@ -869,6 +869,40 @@ def test_mobile_stocktake_snapshot_survives_category_hierarchy_changes(
     assert len(inventory.complete_mobile_stocktake(result, staff_id=1)) == 1
 
 
+def test_mobile_stocktake_lock_covers_items_outside_category_but_not_other_clients(
+    inventory: InventoryService,
+    master: MasterService,
+    tmp_path: Path,
+) -> None:
+    _, tool_id, stationery_id = _category_tree(master)
+    target = _new_item(inventory, "対象", quantity=3, category_id=stationery_id)
+    outside = _new_item(inventory, "対象外", quantity=4, category_id=tool_id)
+    other_client = _new_item(inventory, "別クライアント", client_id=2, quantity=2)
+    inventory.export_mobile_stocktake_html(tmp_path / "sheet.html", 1, 1, category_id=stationery_id)
+
+    assert _snapshot_ids(inventory.conn) == {target.id}
+    with pytest.raises(StocktakeInProgressError):
+        inventory.receive(outside.id, 1, 1)
+    with pytest.raises(StocktakeInProgressError):
+        inventory.issue(outside.id, 1, 1, "使用先")
+    with pytest.raises(StocktakeInProgressError):
+        inventory.stocktake(outside.id, 1, 3)
+    with pytest.raises(StocktakeInProgressError):
+        inventory.update_item(_update_item(outside, name="編集禁止"))
+    with pytest.raises(StocktakeInProgressError):
+        inventory.deactivate_item(outside.id)
+    with pytest.raises(StocktakeInProgressError):
+        _new_item(inventory, "追加禁止", category_id=tool_id)
+
+    assert inventory.receive(other_client.id, 1, 1).delta == 1
+    refreshed = inventory.get_item(outside.id)
+    assert refreshed is not None and refreshed.quantity == 4
+
+    inventory.cancel_mobile_stocktake(1)
+    assert _snapshot_ids(inventory.conn) == set()
+    assert inventory.receive(outside.id, 1, 1).delta == 1
+
+
 def test_mobile_stocktake_rejects_snapshot_item_that_is_no_longer_valid(
     inventory: InventoryService,
     tmp_path: Path,
