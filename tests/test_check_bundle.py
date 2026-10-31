@@ -21,6 +21,7 @@ FIXED_FILES = [
     "_internal/inventory_manager_mini/db/schema.sql",
     "_internal/inventory_manager_mini/db/schema_v3.sql",
     "_internal/inventory_manager_mini/db/schema_v4.sql",
+    "_internal/inventory_manager_mini/db/schema_v5.sql",
     f"_internal/inventory_manager_mini-{VERSION}.dist-info/METADATA",
     "LICENSE",
     "DISTRIBUTION_LICENSE.txt",

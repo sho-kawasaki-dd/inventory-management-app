@@ -19,10 +19,11 @@ from inventory_manager_mini.db.integrity import (
     find_fifo_migration_violations,
     find_fifo_violations,
     find_limit_violations,
+    find_stocktake_snapshot_migration_violations,
     replay_allocations,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 MIN_SUPPORTED_SCHEMA_VERSION = 1
 
 
@@ -295,6 +296,25 @@ def _schema_spec_from_ddl(ddl: str) -> SchemaSpec:
         return _read_schema_spec(conn)
     finally:
         conn.close()
+
+
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "ALTER TABLE active_stocktakes ADD COLUMN category_id INTEGER REFERENCES categories(id)"
+    )
+    conn.execute(
+        """CREATE TABLE active_stocktake_items (
+            client_id INTEGER NOT NULL REFERENCES active_stocktakes(client_id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL REFERENCES items(id),
+            PRIMARY KEY (client_id, item_id)
+        )"""
+    )
+    # 移行前に作成したシートは、従来どおり対象クライアントの全有効品目を対象とする
+    conn.execute(
+        """INSERT INTO active_stocktake_items (client_id, item_id)
+        SELECT s.client_id, i.id FROM active_stocktakes AS s
+        JOIN items AS i ON i.client_id = s.client_id AND i.is_active = 1"""
+    )
 
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
@@ -576,6 +596,7 @@ MIGRATIONS: dict[int, MigrationStep] = {
     3: MigrationStep(_migrate_v2_to_v3, find_limit_violations, rebuilds_tables=True),
     4: MigrationStep(_migrate_v3_to_v4, find_fifo_migration_violations, rebuilds_tables=True),
     5: MigrationStep(_MIGRATION_V5_SQL),
+    6: MigrationStep(_migrate_v5_to_v6, find_stocktake_snapshot_migration_violations),
 }
 
 SCHEMA_SPECS: dict[int, SchemaSpec] = {
@@ -588,6 +609,9 @@ SCHEMA_SPECS: dict[int, SchemaSpec] = {
         files("inventory_manager_mini.db").joinpath("schema_v4.sql").read_text(encoding="utf-8")
     ),
     5: _schema_spec_from_ddl(
+        files("inventory_manager_mini.db").joinpath("schema_v5.sql").read_text(encoding="utf-8")
+    ),
+    6: _schema_spec_from_ddl(
         files("inventory_manager_mini.db").joinpath("schema.sql").read_text(encoding="utf-8")
     ),
 }

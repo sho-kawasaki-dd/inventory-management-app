@@ -166,5 +166,12 @@ CREATE TABLE active_stocktakes (
     AND session_id NOT GLOB '*[^0-9a-f]*'
   ),
   staff_id INTEGER NOT NULL REFERENCES staff(id),
-  started_at TEXT NOT NULL DEFAULT (datetime('now'))
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  category_id INTEGER REFERENCES categories(id)
+);
+
+CREATE TABLE active_stocktake_items (
+  client_id INTEGER NOT NULL REFERENCES active_stocktakes(client_id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  PRIMARY KEY (client_id, item_id)
 );

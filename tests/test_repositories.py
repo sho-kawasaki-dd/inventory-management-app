@@ -957,6 +957,8 @@ def test_stocktake_repository_crud_and_master_usage_are_independent(
     _insert_item(repository_conn, item_id=1, active=1)
     _insert_item(repository_conn, item_id=2, active=0)
     _insert_item(repository_conn, item_id=3, client_id=2)
+    repo.replace_items(1, [1])
+    repo.replace_items(2, [3])
     assert repo.get(1) == repo.get_by_session("a" * 32)
     client_stocktake = repo.get(1)
     assert client_stocktake is not None
@@ -988,6 +990,108 @@ def test_stocktake_repository_crud_and_master_usage_are_independent(
     assert repo.get(1) is None
     assert not repo.is_client_locked(1)
     assert not repo.is_staff_referenced(3)
+
+
+def test_stocktake_repository_category_and_item_snapshot(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = StocktakeRepository(repository_conn)
+    for item_id in (1, 2, 3):
+        _insert_item(repository_conn, item_id=item_id)
+
+    repo.upsert(
+        client_id=1,
+        session_id="a" * 32,
+        staff_id=1,
+        started_at="2026-01-02 00:00:00",
+        category_id=2,
+    )
+    repo.replace_items(1, [1, 2])
+    stocktake = repo.get(1)
+    assert stocktake is not None
+    assert (stocktake.category_id, stocktake.category_path, stocktake.item_count) == (
+        2,
+        "備品 > 文具",
+        2,
+    )
+    assert repo.list_item_ids(1) == {1, 2}
+    assert repo.list_item_ids(2) == set()
+    assert repo.is_category_referenced(2)
+    assert not repo.is_category_referenced(1)
+    assert not repo.is_category_referenced(3)
+
+    # 再出力でカテゴリ・スナップショットが置き換わり、旧スナップショットは残らない
+    repo.upsert(
+        client_id=1,
+        session_id="b" * 32,
+        staff_id=1,
+        started_at="2026-01-03 00:00:00",
+    )
+    repo.replace_items(1, [3])
+    replaced = repo.get(1)
+    assert replaced is not None
+    assert (replaced.category_id, replaced.category_path, replaced.item_count) == (None, None, 1)
+    assert repo.list_item_ids(1) == {3}
+    assert not repo.is_category_referenced(2)
+
+    # カテゴリ名の変更・移動はスナップショットを変えず、表示パスだけが追随する
+    repository_conn.execute("UPDATE categories SET parent_id = NULL, name = '消耗品' WHERE id = 3")
+    repo.upsert(
+        client_id=1,
+        session_id="c" * 32,
+        staff_id=1,
+        started_at="2026-01-04 00:00:00",
+        category_id=3,
+    )
+    moved = repo.get(1)
+    assert moved is not None
+    assert moved.category_path == "消耗品"
+
+    repo.replace_items(1, [])
+    assert repo.list_item_ids(1) == set()
+    assert repo.get(1) is not None
+
+
+def test_stocktake_repository_delete_cascades_item_snapshot(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = StocktakeRepository(repository_conn)
+    _insert_item(repository_conn, item_id=1)
+    _insert_item(repository_conn, item_id=2, client_id=2)
+    repo.upsert(client_id=1, session_id="a" * 32, staff_id=1, started_at="2026-01-02 00:00:00")
+    repo.upsert(client_id=2, session_id="b" * 32, staff_id=1, started_at="2026-01-02 00:00:00")
+    repo.replace_items(1, [1])
+    repo.replace_items(2, [2])
+
+    assert repo.delete(1)
+
+    rows = repository_conn.execute(
+        "SELECT client_id, item_id FROM active_stocktake_items"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [(2, 2)]
+
+
+def test_stocktake_repository_converts_integrity_errors(
+    repository_conn: sqlite3.Connection,
+) -> None:
+    repo = StocktakeRepository(repository_conn)
+    _insert_item(repository_conn, item_id=1)
+    repo.upsert(client_id=1, session_id="a" * 32, staff_id=1, started_at="2026-01-02 00:00:00")
+
+    with pytest.raises(ValidationError, match="重複"):
+        repo.replace_items(1, [1, 1])
+    with pytest.raises(ValidationError, match="見つかりません"):
+        repo.replace_items(1, [999])
+    with pytest.raises(ValidationError, match="見つかりません"):
+        repo.replace_items(2, [1])
+    with pytest.raises(ValidationError, match="見つかりません"):
+        repo.upsert(
+            client_id=2,
+            session_id="b" * 32,
+            staff_id=1,
+            started_at="2026-01-02 00:00:00",
+            category_id=999,
+        )
 
 
 def test_settings_repository_get_set_all(repository_conn: sqlite3.Connection) -> None:

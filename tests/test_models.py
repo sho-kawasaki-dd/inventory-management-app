@@ -256,6 +256,8 @@ def test_mobile_stocktake_models_match_the_data_contract() -> None:
         "staff_name",
         "started_at",
         "item_count",
+        "category_id",
+        "category_path",
     }
     assert _field_names(MobileStocktakeItem) == {
         "item_id",
@@ -274,6 +276,8 @@ def test_mobile_stocktake_models_match_the_data_contract() -> None:
         "staff_name",
         "started_at",
         "items",
+        "category_id",
+        "category_path",
     }
     assert _field_names(MobileStocktakeEntry) == {
         "item_id",
@@ -306,5 +310,7 @@ def test_mobile_stocktake_models_match_the_data_contract() -> None:
         "unchanged_count",
         "increased_count",
         "decreased_count",
+        "category_id",
+        "category_path",
     }
     assert MobileStocktakeEntry(item_id=1, actual_quantity=2).note is None

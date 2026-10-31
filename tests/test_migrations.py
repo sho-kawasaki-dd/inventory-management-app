@@ -35,6 +35,14 @@ def _schema_v4_sql() -> str:
     return files("inventory_manager_mini.db").joinpath("schema_v4.sql").read_text(encoding="utf-8")
 
 
+def _schema_v5_sql() -> str:
+    return files("inventory_manager_mini.db").joinpath("schema_v5.sql").read_text(encoding="utf-8")
+
+
+def _schema_v3_sql() -> str:
+    return files("inventory_manager_mini.db").joinpath("schema_v3.sql").read_text(encoding="utf-8")
+
+
 def _create_database(
     path: Path, *, schema_sql: str | None = None, version: int = SCHEMA_VERSION
 ) -> None:
@@ -563,6 +571,154 @@ def test_version_four_database_migrates_to_v5(tmp_path: Path) -> None:
             "SELECT client_id, session_id, staff_id FROM active_stocktakes"
         ).fetchone() == (1, "a" * 32, 1)
     finally:
+        migrated.close()
+
+
+def test_schema_versions_five_and_six_are_distinct_fixed_definitions() -> None:
+    assert SCHEMA_VERSION == 6
+    assert SCHEMA_SPECS[5] == migrations._schema_spec_from_ddl(_schema_v5_sql())
+    assert SCHEMA_SPECS[6] == migrations._schema_spec_from_ddl(_schema_sql())
+    assert SCHEMA_SPECS[5] != SCHEMA_SPECS[6]
+    assert _schema_v5_sql() != _schema_sql()
+
+
+def _create_version_five_database_with_sessions(path: Path, *, empty_client: bool = False) -> None:
+    _create_database(path, schema_sql=_schema_v5_sql(), version=5)
+    conn = sqlite3.connect(path, autocommit=True)
+    try:
+        conn.executescript(
+            """INSERT INTO clients (id, name) VALUES (1, '利用者'), (2, '別利用者');
+            INSERT INTO purchasers (id, name) VALUES (1, '発注主体');
+            INSERT INTO staff (id, name) VALUES (1, '担当者');
+            INSERT INTO categories (id, name, code_prefix) VALUES (1, '備品', 'EQ');
+            INSERT INTO items (id, client_id, purchaser_id, code, name, category_id, is_active)
+            VALUES (1, 1, 1, 'EQ-0001', '有効A', 1, 1),
+                (2, 1, 1, 'EQ-0002', '廃止', 1, 0),
+                (3, 1, 1, 'EQ-0003', '有効B', 1, 1),
+                (4, 2, 1, 'EQ-0004', '別クライアント', 1, 1);
+            INSERT INTO active_stocktakes (client_id, session_id, staff_id)
+            VALUES (1, 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', 1);"""
+        )
+        if empty_client:
+            conn.executescript(
+                """UPDATE items SET is_active = 0 WHERE client_id = 2;
+                INSERT INTO active_stocktakes (client_id, session_id, staff_id)
+                VALUES (2, 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0', 1);"""
+            )
+    finally:
+        conn.close()
+
+
+def test_version_five_sessions_get_active_item_snapshot_and_null_category(tmp_path: Path) -> None:
+    path = tmp_path / "version-five.db"
+    _create_version_five_database_with_sessions(path)
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261101_120000")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (6,)
+        assert inspect_schema(migrated, 6) == []
+        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert migrated.execute(
+            "SELECT client_id, session_id, category_id FROM active_stocktakes"
+        ).fetchall() == [(1, "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", None)]
+        assert migrated.execute(
+            "SELECT client_id, item_id FROM active_stocktake_items ORDER BY item_id"
+        ).fetchall() == [(1, 1), (1, 3)]
+    finally:
+        migrated.close()
+
+
+def test_version_five_without_sessions_migrates_with_empty_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "version-five-empty.db"
+    _create_database(path, schema_sql=_schema_v5_sql(), version=5)
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261101_120000")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (6,)
+        assert inspect_schema(migrated, 6) == []
+        assert migrated.execute("SELECT COUNT(*) FROM active_stocktake_items").fetchone() == (0,)
+    finally:
+        migrated.close()
+
+
+def test_version_five_session_without_active_items_is_rejected_without_changes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "version-five-invalid.db"
+    _create_version_five_database_with_sessions(path, empty_client=True)
+
+    with pytest.raises(MigrationError, match="移行前検査に失敗しました.*クライアント ID 2"):
+        open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261101_120000")
+
+    conn = sqlite3.connect(path, autocommit=True)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone() == (5,)
+        assert inspect_schema(conn, 5) == []
+        assert conn.execute("SELECT COUNT(*) FROM active_stocktakes").fetchone() == (2,)
+    finally:
+        conn.close()
+    assert not (tmp_path / "backups").exists()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3, 4])
+def test_older_databases_skip_stocktake_precheck_and_migrate_to_latest(
+    tmp_path: Path, version: int
+) -> None:
+    ddl = {
+        1: migrations._SCHEMA_V1_DDL,
+        2: migrations._SCHEMA_V1_DDL + "\n" + migrations._MIGRATION_V2_SQL,
+        3: _schema_v3_sql(),
+        4: _schema_v4_sql(),
+    }[version]
+    path = tmp_path / f"version-{version}.db"
+    _create_database(path, schema_sql=ddl, version=version)
+    source = sqlite3.connect(path, autocommit=True)
+    try:
+        assert migrations.find_stocktake_snapshot_migration_violations(source) == []
+        migrations.check_migration_prechecks(source, version, SCHEMA_VERSION)
+    finally:
+        source.close()
+
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261101_120000")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+        assert inspect_schema(migrated, SCHEMA_VERSION) == []
+        assert migrated.execute("SELECT COUNT(*) FROM active_stocktake_items").fetchone() == (0,)
+    finally:
+        migrated.close()
+
+
+def test_migrated_stocktake_tables_match_new_schema_and_enforce_constraints(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "constraints.db"
+    _create_version_five_database_with_sessions(path)
+    migrated = open_database(path, tmp_path / "backups", backup_timestamp=lambda: "20261101_120000")
+    fresh = connect_memory()
+    try:
+        create_schema(fresh)
+        for table in ("active_stocktakes", "active_stocktake_items"):
+            assert normalize_sql(
+                next(
+                    t for t in migrations._read_schema_spec(migrated).tables if t.name == table
+                ).sql
+            ) == normalize_sql(
+                next(t for t in migrations._read_schema_spec(fresh).tables if t.name == table).sql
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute("INSERT INTO active_stocktake_items VALUES (1, 1)")
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute("INSERT INTO active_stocktake_items VALUES (1, 999)")
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute("INSERT INTO active_stocktake_items VALUES (2, 4)")
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute("UPDATE active_stocktakes SET category_id = 999 WHERE client_id = 1")
+
+        migrated.execute("DELETE FROM active_stocktakes WHERE client_id = 1")
+        assert migrated.execute("SELECT COUNT(*) FROM active_stocktake_items").fetchone() == (0,)
+    finally:
+        fresh.close()
         migrated.close()
 
 
