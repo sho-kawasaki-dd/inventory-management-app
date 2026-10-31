@@ -302,6 +302,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
         "client_name": sheet.client_name,
         "staff_id": sheet.staff_id,
         "staff_name": sheet.staff_name,
+        "category_path": sheet.category_path,
         "started_at": sheet.started_at,
         "started_at_display": started_at_display,
         "filename_timestamp": filename_timestamp,
@@ -323,6 +324,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
 
     escaped_client = html.escape(sheet.client_name, quote=True)
     escaped_staff = html.escape(sheet.staff_name, quote=True)
+    escaped_category_label = html.escape(sheet.category_path or "すべてのカテゴリ", quote=True)
     escaped_started_utc = html.escape(sheet.started_at, quote=True)
     escaped_started_display = html.escape(started_at_display, quote=True)
     total_count = len(sheet.items)
@@ -338,7 +340,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>スマホ棚卸シート - {escaped_client}</title>
+  <title>スマホ棚卸シート - {escaped_client} ({escaped_category_label})</title>
   <style>
     *, *::before, *::after {{
       box-sizing: border-box;
@@ -909,6 +911,7 @@ def render_stocktake_html(sheet: MobileStocktakeSheet) -> str:
           <h1>スマホ棚卸シート: <span id="client-name">{escaped_client}</span></h1>
           <p class="meta-line">
             <span>担当: <strong id="staff-name">{escaped_staff}</strong></span>
+            <span>カテゴリ: <strong id="category-name">{escaped_category_label}</strong></span>
             <span>
               開始日時:
               <time

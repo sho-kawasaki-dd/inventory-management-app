@@ -399,12 +399,23 @@ class _CategoryTab(QWidget):
         self.prefix_button.setToolTip(
             "" if prefix_editable or not enabled else "採番済みのため変更できません"
         )
-        can_delete = enabled and self._can_delete_category(category.id)
+        lock_reason = None
+        if category is not None:
+            succeeded, reason = run_guarded(
+                self,
+                lambda: self.context.master.stocktake_lock_reason("category", category.id),
+            )
+            if succeeded:
+                lock_reason = reason
+        can_delete = enabled and lock_reason is None and self._can_delete_category(category.id)
         self.delete_button.setEnabled(can_delete)
         self.delete_button.setToolTip(
-            ""
-            if can_delete or not enabled
-            else "子カテゴリ・品目・採番実績があるため削除できません"
+            lock_reason
+            or (
+                ""
+                if can_delete or not enabled
+                else "子カテゴリ・品目・採番実績があるため削除できません"
+            )
         )
 
     def _can_delete_category(self, category_id: int) -> bool:

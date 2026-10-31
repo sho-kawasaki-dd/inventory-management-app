@@ -181,7 +181,8 @@ def test_export_creates_sheet_locks_client_and_reports_result(
     assert changes == [True]
     assert dialog.active_table.rowCount() == 1
     assert _cell(dialog.active_table, 0, 0) == "総務"
-    assert _cell(dialog.active_table, 0, 1) == "担当B"
+    assert _cell(dialog.active_table, 0, 1) == "すべてのカテゴリ"
+    assert _cell(dialog.active_table, 0, 2) == "担当B"
     assert "(棚卸中)" in dialog.client_combo.itemText(dialog.client_combo.findData(1))
     assert len(dialogs.information) == 1
     assert str(output) in dialogs.information[0][1]
@@ -293,7 +294,7 @@ def test_cancel_stocktake_requires_confirmation_defaulting_to_no(
 
     title, text, default = dialogs.questions[0]
     assert (title, default) == (_CANCEL_QUESTION, QMessageBox.StandardButton.No)
-    assert "総務の棚卸を中止します" in text
+    assert "総務（カテゴリ: すべてのカテゴリ）の棚卸を中止します" in text
     assert inventory.get_active_stocktake(1) is not None
     assert changes == []
 
