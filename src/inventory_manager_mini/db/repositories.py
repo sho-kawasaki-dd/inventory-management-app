@@ -166,6 +166,30 @@ _UNIQUE_VALIDATION = (
 )
 
 
+_STOCKTAKE_ITEM_MAPPINGS = (
+    (
+        "SQLITE_CONSTRAINT_PRIMARYKEY",
+        "active_stocktake_items",
+        ValidationError,
+        "棚卸対象の品目が重複しています",
+    ),
+    (
+        "SQLITE_CONSTRAINT_FOREIGNKEY",
+        "",
+        ValidationError,
+        "棚卸対象の品目またはセッションが見つかりません",
+    ),
+)
+_STOCKTAKE_SESSION_MAPPINGS = (
+    (
+        "SQLITE_CONSTRAINT_FOREIGNKEY",
+        "",
+        ValidationError,
+        "クライアント・担当者・カテゴリのいずれかが見つかりません",
+    ),
+)
+
+
 class ItemRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -1004,13 +1028,20 @@ class MasterRepository:
 
 
 class StocktakeRepository:
-    _SELECT = """SELECT s.client_id, c.name AS client_name, s.session_id, s.staff_id,
-        st.name AS staff_name, s.started_at,
-        (SELECT COUNT(*) FROM items AS i
-            WHERE i.client_id = s.client_id AND i.is_active = 1) AS item_count
+    _SELECT = """WITH RECURSIVE category_tree(id, path) AS (
+            SELECT id, name FROM categories WHERE parent_id IS NULL
+            UNION ALL
+            SELECT c.id, category_tree.path || ' > ' || c.name
+            FROM categories AS c JOIN category_tree ON c.parent_id = category_tree.id
+        )
+        SELECT s.client_id, c.name AS client_name, s.session_id, s.staff_id,
+        st.name AS staff_name, s.started_at, s.category_id, ct.path AS category_path,
+        (SELECT COUNT(*) FROM active_stocktake_items AS a
+            WHERE a.client_id = s.client_id) AS item_count
         FROM active_stocktakes AS s
         JOIN clients AS c ON c.id = s.client_id
-        JOIN staff AS st ON st.id = s.staff_id"""
+        JOIN staff AS st ON st.id = s.staff_id
+        LEFT JOIN category_tree AS ct ON ct.id = s.category_id"""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -1039,14 +1070,48 @@ class StocktakeRepository:
         ).fetchone()
         return bool(row[0])
 
-    def upsert(self, *, client_id: int, session_id: str, staff_id: int, started_at: str) -> None:
-        self.conn.execute(
-            """INSERT INTO active_stocktakes (client_id, session_id, staff_id, started_at)
-            VALUES (?, ?, ?, ?)
+    def is_category_referenced(self, category_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM active_stocktakes WHERE category_id = ?)", (category_id,)
+        ).fetchone()
+        return bool(row[0])
+
+    def list_item_ids(self, client_id: int) -> set[int]:
+        rows = self.conn.execute(
+            "SELECT item_id FROM active_stocktake_items WHERE client_id = ?", (client_id,)
+        ).fetchall()
+        return {int(row[0]) for row in rows}
+
+    def upsert(
+        self,
+        *,
+        client_id: int,
+        session_id: str,
+        staff_id: int,
+        started_at: str,
+        category_id: int | None = None,
+    ) -> None:
+        _execute(
+            self.conn,
+            """INSERT INTO active_stocktakes
+                (client_id, session_id, staff_id, started_at, category_id)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(client_id) DO UPDATE SET session_id = excluded.session_id,
-                staff_id = excluded.staff_id, started_at = excluded.started_at""",
-            (client_id, session_id, staff_id, started_at),
+                staff_id = excluded.staff_id, started_at = excluded.started_at,
+                category_id = excluded.category_id""",
+            (client_id, session_id, staff_id, started_at, category_id),
+            integrity_mappings=_STOCKTAKE_SESSION_MAPPINGS,
         )
+
+    def replace_items(self, client_id: int, item_ids: Sequence[int]) -> None:
+        _execute(self.conn, "DELETE FROM active_stocktake_items WHERE client_id = ?", (client_id,))
+        for item_id in item_ids:
+            _execute(
+                self.conn,
+                "INSERT INTO active_stocktake_items (client_id, item_id) VALUES (?, ?)",
+                (client_id, item_id),
+                integrity_mappings=_STOCKTAKE_ITEM_MAPPINGS,
+            )
 
     def delete(self, client_id: int) -> bool:
         cursor = self.conn.execute(
@@ -1068,6 +1133,8 @@ class StocktakeRepository:
             staff_name=str(row["staff_name"]),
             started_at=str(row["started_at"]),
             item_count=int(row["item_count"]),
+            category_id=None if row["category_id"] is None else int(row["category_id"]),
+            category_path=None if row["category_path"] is None else str(row["category_path"]),
         )
 
 

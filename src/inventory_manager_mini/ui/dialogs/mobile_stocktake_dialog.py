@@ -28,11 +28,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from inventory_manager_mini.core.models import ItemFilter, MobileStocktakePreview
+from inventory_manager_mini.core.models import Category, ItemFilter, MobileStocktakePreview
 from inventory_manager_mini.core.timeutil import format_local, utc_now_str
 from inventory_manager_mini.ui.context import AppContext
 from inventory_manager_mini.ui.dialog_placement import center_dialog
 from inventory_manager_mini.ui.error_handling import run_guarded
+from inventory_manager_mini.ui.widgets.category_picker import CategoryPicker
+
+ALL_CATEGORIES_LABEL = "すべてのカテゴリ"
+
+
+def _safe_filename_part(text: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", text).strip(" .")
+    return safe or "unnamed"
 
 
 class MobileStocktakeDialog(QDialog):
@@ -40,6 +48,9 @@ class MobileStocktakeDialog(QDialog):
         super().__init__(parent)
         self.context = context
         self._active_stocktakes = []
+        self._categories: list[Category] = []
+        self._sources_loaded = False
+        self._target_count = 0
         self._preview: MobileStocktakePreview | None = None
         self._preview_raw_text: str | None = None
         self.setWindowTitle("スマホ棚卸")
@@ -66,32 +77,33 @@ class MobileStocktakeDialog(QDialog):
         form = QFormLayout()
         self.client_combo = QComboBox(tab)
         form.addRow("クライアント", self.client_combo)
+        self.category_picker = CategoryPicker(tab)
+        form.addRow("カテゴリ", self.category_picker)
         self.export_staff_combo = QComboBox(tab)
         form.addRow("シート作成担当者", self.export_staff_combo)
         layout.addLayout(form)
+        self.target_count_label = QLabel("対象品目: 0 件", tab)
+        layout.addWidget(self.target_count_label)
+        self.client_combo.currentIndexChanged.connect(self._update_target_count)
+        self.category_picker.category_changed.connect(self._update_target_count)
 
         self.export_button = QPushButton("棚卸シート(.html)を作成して保存…", tab)
         self.export_button.clicked.connect(self._export_sheet)
         layout.addWidget(self.export_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.active_table = QTableWidget(0, 4, tab)
+        self.active_table = QTableWidget(0, 5, tab)
         self.active_table.setHorizontalHeaderLabels(
-            ("クライアント", "担当者", "開始日時", "品目数")
+            ("クライアント", "カテゴリ", "担当者", "開始日時", "品目数")
         )
         self.active_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.active_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.active_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.active_table.verticalHeader().setVisible(False)
-        self.active_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.active_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.active_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.active_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
+        active_header = self.active_table.horizontalHeader()
+        for column in (0, 1):
+            active_header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        for column in (2, 3, 4):
+            active_header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self.active_table.currentCellChanged.connect(self._update_cancel_button)
         layout.addWidget(QLabel("現在棚卸手続き中のクライアント", tab))
         layout.addWidget(self.active_table, 1)
@@ -180,38 +192,40 @@ class MobileStocktakeDialog(QDialog):
                 self.context.master.list_clients(),
                 self.context.master.list_staff(),
                 self.context.inventory.list_active_stocktakes(),
+                self.context.master.list_categories(),
             ),
         )
         if not succeeded or values is None:
+            self._sources_loaded = False
             self.export_button.setEnabled(False)
             return
-        clients, staff, self._active_stocktakes = values
+        clients, staff, self._active_stocktakes, self._categories = values
+        self.category_picker.set_categories(self._categories, leading_label=ALL_CATEGORIES_LABEL)
         locked_by_client = {entry.client_id: entry for entry in self._active_stocktakes}
         previous_client_id = self.client_combo.currentData()
+        self.client_combo.blockSignals(True)
         self.client_combo.clear()
         for client in clients:
-            if client.id in locked_by_client:
-                item_count = locked_by_client[client.id].item_count
-                suffix = " (棚卸中)"
-            else:
-                item_succeeded, items = run_guarded(
-                    self,
-                    lambda client_id=client.id: self.context.inventory.list_items(
-                        ItemFilter(client_id=client_id)
-                    ),
-                )
-                if not item_succeeded or items is None:
-                    self.export_button.setEnabled(False)
-                    return
-                item_count = len(items)
-                suffix = ""
+            item_succeeded, items = run_guarded(
+                self,
+                lambda client_id=client.id: self.context.inventory.list_items(
+                    ItemFilter(client_id=client_id)
+                ),
+            )
+            if not item_succeeded or items is None:
+                self.client_combo.blockSignals(False)
+                self._sources_loaded = False
+                self.export_button.setEnabled(False)
+                return
+            suffix = " (棚卸中)" if client.id in locked_by_client else ""
             self.client_combo.addItem(
-                f"{client.name} / 有効品目 {item_count} 件{suffix}", client.id
+                f"{client.name} / 有効品目 {len(items)} 件{suffix}", client.id
             )
         if previous_client_id is not None:
             index = self.client_combo.findData(previous_client_id)
             if index >= 0:
                 self.client_combo.setCurrentIndex(index)
+        self.client_combo.blockSignals(False)
 
         previous_export_staff = self.export_staff_combo.currentData()
         self.export_staff_combo.clear()
@@ -234,14 +248,32 @@ class MobileStocktakeDialog(QDialog):
                 self.confirm_staff_combo.setCurrentIndex(index)
         self._render_active_stocktakes()
         self._update_cancel_button()
-        self.export_button.setEnabled(bool(clients and staff))
+        self._sources_loaded = bool(clients and staff)
+        self._update_target_count()
         self._update_confirm_button()
+
+    def _update_target_count(self, *_args) -> None:
+        client_id = self.client_combo.currentData()
+        count = 0
+        if client_id is not None:
+            category_id = self.category_picker.current_category_id()
+            succeeded, items = run_guarded(
+                self,
+                lambda: self.context.inventory.list_items(
+                    ItemFilter(client_id=client_id, category_id=category_id)
+                ),
+            )
+            count = len(items) if succeeded and items is not None else 0
+        self._target_count = count
+        self.target_count_label.setText(f"対象品目: {count:,} 件")
+        self.export_button.setEnabled(self._sources_loaded and count > 0)
 
     def _render_active_stocktakes(self) -> None:
         self.active_table.setRowCount(len(self._active_stocktakes))
         for row, stocktake in enumerate(self._active_stocktakes):
             values = (
                 stocktake.client_name,
+                stocktake.category_path or ALL_CATEGORIES_LABEL,
                 stocktake.staff_name,
                 format_local(stocktake.started_at),
                 f"{stocktake.item_count:,}",
@@ -266,25 +298,35 @@ class MobileStocktakeDialog(QDialog):
         if client_id is None or staff_id is None:
             QMessageBox.warning(self, "棚卸シート", "クライアントと担当者を選択してください")
             return
+        category_id = self.category_picker.current_category_id()
+        new_category_label = self.category_picker.display.text() or ALL_CATEGORIES_LABEL
         active = next(
             (entry for entry in self._active_stocktakes if entry.client_id == client_id), None
         )
+        client_name = self.client_combo.currentText().split(" / 有効品目", 1)[0]
         if active is not None:
+            current_category_label = active.category_path or ALL_CATEGORIES_LABEL
             answer = QMessageBox.question(
                 self,
                 "棚卸シートの再作成",
+                f"{client_name} は現在棚卸手続き中です。\n"
+                f"現在の対象カテゴリ: {current_category_label}\n"
+                f"再作成後の対象カテゴリ: {new_category_label}\n"
                 "再作成すると前のシートは無効になります。続行しますか？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        client_name = self.client_combo.currentText().split(" / 有効品目", 1)[0]
-        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", client_name).strip(" .")
+        name_parts = [_safe_filename_part(client_name)]
+        if category_id is not None:
+            category = next((entry for entry in self._categories if entry.id == category_id), None)
+            if category is not None:
+                name_parts.append(_safe_filename_part(category.name))
         timestamp = (
             format_local(utc_now_str())[:16].replace("-", "").replace(" ", "_").replace(":", "")
         )
-        suggested = f"棚卸シート_{safe_name}_{timestamp}_{secrets.token_hex(4)}.html"
+        suggested = f"棚卸シート_{'_'.join(name_parts)}_{timestamp}_{secrets.token_hex(4)}.html"
         initial_path = self.context.paths.data_dir / suggested
         path_text, _selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -300,7 +342,9 @@ class MobileStocktakeDialog(QDialog):
             path = path.with_suffix(".html")
         succeeded, _sheet = run_guarded(
             self,
-            lambda: self.context.inventory.export_mobile_stocktake_html(path, client_id, staff_id),
+            lambda: self.context.inventory.export_mobile_stocktake_html(
+                path, client_id, staff_id, category_id
+            ),
         )
         if not succeeded:
             return
@@ -328,8 +372,9 @@ class MobileStocktakeDialog(QDialog):
         answer = QMessageBox.question(
             self,
             "棚卸の中止",
-            f"{stocktake.client_name}の棚卸を中止します。持ち出したシートの結果は"
-            "取り込めなくなります。よろしいですか？",
+            f"{stocktake.client_name}（カテゴリ: "
+            f"{stocktake.category_path or ALL_CATEGORIES_LABEL}）の棚卸を中止します。"
+            "持ち出したシートの結果は取り込めなくなります。よろしいですか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -390,7 +435,9 @@ class MobileStocktakeDialog(QDialog):
         self._preview = preview
         self._preview_raw_text = raw_text
         self.preview_status_label.setText(
-            f"{preview.client_name} / 棚卸開始: {format_local(preview.started_at)}"
+            f"{preview.client_name} / カテゴリ: "
+            f"{preview.category_path or ALL_CATEGORIES_LABEL} / "
+            f"棚卸開始: {format_local(preview.started_at)}"
         )
         self.preview_summary_label.setText(
             f"対象 {len(preview.rows):,} 件 / 変動なし {preview.unchanged_count:,} 件 / "
@@ -450,6 +497,8 @@ class MobileStocktakeDialog(QDialog):
         QMessageBox.information(
             self,
             "棚卸完了",
-            f"{self._preview.client_name}の棚卸を {len(movements):,} 件確定しました。",
+            f"{self._preview.client_name}（カテゴリ: "
+            f"{self._preview.category_path or ALL_CATEGORIES_LABEL}）の棚卸を "
+            f"{len(movements):,} 件確定しました。",
         )
         self.accept()

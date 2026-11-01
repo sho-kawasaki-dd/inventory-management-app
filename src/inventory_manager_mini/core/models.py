@@ -280,6 +280,8 @@ class ActiveStocktake:
     staff_name: str
     started_at: str
     item_count: int
+    category_id: int | None = None
+    category_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +304,8 @@ class MobileStocktakeSheet:
     staff_name: str
     started_at: str
     items: tuple[MobileStocktakeItem, ...]
+    category_id: int | None = None
+    category_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,3 +346,5 @@ class MobileStocktakePreview:
     unchanged_count: int
     increased_count: int
     decreased_count: int
+    category_id: int | None = None
+    category_path: str | None = None

@@ -152,7 +152,7 @@ def test_about_dialog_shows_legal_notice_and_opens_license_document(
     monkeypatch, tmp_path: Path, window_with_items
 ) -> None:
     window, _first, _second = window_with_items
-    window.context.app_version = "0.4.0"
+    window.context.app_version = "0.4.1"
     window.context.schema_version = SCHEMA_VERSION
     license_path = tmp_path / "DISTRIBUTION_LICENSE.txt"
     license_path.write_text("license text", encoding="utf-8")
@@ -166,8 +166,8 @@ def test_about_dialog_shows_legal_notice_and_opens_license_document(
 
     def click_license_button(dialog: QMessageBox) -> int:
         notice = dialog.informativeText()
-        assert dialog.text() == "Inventory Manager mini 0.4.0"
-        assert notice.startswith("スキーマ版: 5\nDB:")
+        assert dialog.text() == "Inventory Manager mini 0.4.1"
+        assert notice.startswith("スキーマ版: 6\nDB:")
         assert "Copyright (C) 2026 IKinoCore" in notice
         assert "GNU General Public License version 3 (GPLv3)" in notice
         assert "再配布・改変できます" in notice
@@ -1945,6 +1945,10 @@ def test_restore_confirmation_shows_current_and_source_stocktake_clients(
             "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
             ("c" * 32,),
         )
+        conn.execute(
+            "INSERT INTO active_stocktake_items (client_id, item_id) "
+            "SELECT client_id, id FROM items WHERE client_id = 1"
+        )
     finally:
         conn.close()
     record = _patch_restore_dialogs(monkeypatch, source, QMessageBox.StandardButton.No)
@@ -1972,6 +1976,10 @@ def test_restore_confirmation_shows_none_for_the_side_without_stocktake(
             conn.execute(
                 "INSERT INTO active_stocktakes (client_id, session_id, staff_id) VALUES (1, ?, 1)",
                 ("d" * 32,),
+            )
+            conn.execute(
+                "INSERT INTO active_stocktake_items (client_id, item_id) "
+                "SELECT client_id, id FROM items WHERE client_id = 1"
             )
         finally:
             conn.close()

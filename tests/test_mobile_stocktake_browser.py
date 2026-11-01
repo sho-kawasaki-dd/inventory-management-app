@@ -1914,3 +1914,80 @@ def test_generated_html_500_items_layout_in_storage_and_backup_states(tmp_path: 
         assert external_requests == []
         assert not page_errors
         browser.close()
+
+
+def test_generated_html_long_category_label_does_not_overlap_header(tmp_path: Path) -> None:
+    long_category = "備品 > " + "非常に長いカテゴリ名の階層 > " * 4 + "末端カテゴリ"
+    items = tuple(
+        MobileStocktakeItem(
+            item_id=index,
+            code=f"ITM-{index:04d}",
+            name=f"テスト備品 {index} 番",
+            manufacturer_part_number=None,
+            location_name=f"棚{(index % 3) + 1}",
+            book_quantity=index,
+            unit="個",
+        )
+        for index in range(1, 31)
+    )
+    sheets = {
+        "category": MobileStocktakeSheet(
+            session_id=SESSION_ID,
+            client_id=10,
+            client_name="大規模クライアント株式会社",
+            staff_id=1,
+            staff_name="佐藤",
+            started_at="2026-10-17 03:00:00",
+            items=items,
+            category_id=3,
+            category_path=long_category,
+        ),
+        "all": MobileStocktakeSheet(
+            session_id=SESSION_ID,
+            client_id=10,
+            client_name="大規模クライアント株式会社",
+            staff_id=1,
+            staff_name="佐藤",
+            started_at="2026-10-17 03:00:00",
+            items=items,
+        ),
+    }
+    viewports = [
+        ("desktop", 1280, 800),
+        ("mobile_portrait", 390, 844),
+        ("mobile_landscape", 844, 390),
+    ]
+    page_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        for sheet_name, sheet in sheets.items():
+            html_path = tmp_path / f"sheet_{sheet_name}.html"
+            html_path.write_text(render_stocktake_html(sheet), encoding="utf-8")
+            expected_label = sheet.category_path or "すべてのカテゴリ"
+            for _label, width, height in viewports:
+                context = browser.new_context(viewport={"width": width, "height": height})
+                page = context.new_page()
+                page.on("pageerror", lambda error: page_errors.append(str(error)))
+                page.goto(html_path.as_uri())
+
+                assert page.locator("#category-name").inner_text() == expected_label
+                assert expected_label in page.title()
+                meta_boxes = []
+                for selector in ("#staff-name", "#category-name", "#started-at"):
+                    box = page.locator(selector).bounding_box()
+                    assert box is not None, selector
+                    meta_boxes.append(box)
+                for index, first in enumerate(meta_boxes):
+                    for second in meta_boxes[index + 1 :]:
+                        assert not _boxes_overlap(first, second)
+                    assert first["x"] >= -1.0
+                    assert first["x"] + first["width"] <= width + 1.0
+                header_box = page.locator("#app-header").bounding_box()
+                assert header_box is not None
+                assert header_box["y"] + header_box["height"] <= height + 1.0
+                _assert_header_controls_do_not_overlap(page)
+                _assert_control_reachable(page, '[data-item-id="1"] .input-actual', height)
+                _assert_control_reachable(page, '[data-item-id="30"] .input-note', height)
+                context.close()
+        assert not page_errors
+        browser.close()

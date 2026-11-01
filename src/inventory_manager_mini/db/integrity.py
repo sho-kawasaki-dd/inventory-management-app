@@ -336,6 +336,47 @@ def find_fifo_migration_violations(conn: sqlite3.Connection) -> list[str]:
     return violations
 
 
+def find_stocktake_snapshot_migration_violations(conn: sqlite3.Connection) -> list[str]:
+    # 事前検査は移行元のスキーマで実行される。active_stocktakes があるのは v5 のみ
+    if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 5:
+        return []
+    rows = conn.execute(
+        """SELECT s.client_id FROM active_stocktakes AS s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM items AS i WHERE i.client_id = s.client_id AND i.is_active = 1
+        ) ORDER BY s.client_id"""
+    ).fetchall()
+    return [
+        f"active_stocktakes のクライアント ID {row[0]} に棚卸対象の有効品目がありません"
+        for row in rows
+    ]
+
+
+def find_stocktake_snapshot_violations(conn: sqlite3.Connection) -> list[str]:
+    violations: list[str] = []
+    rows = conn.execute(
+        """SELECT s.client_id,
+            (SELECT COUNT(*) FROM active_stocktake_items AS a
+                WHERE a.client_id = s.client_id) AS snapshot_count,
+            (SELECT COUNT(*) FROM active_stocktake_items AS a
+                JOIN items AS i ON i.id = a.item_id
+                WHERE a.client_id = s.client_id
+                AND (i.client_id != s.client_id OR i.is_active != 1)) AS invalid_count
+        FROM active_stocktakes AS s ORDER BY s.client_id"""
+    ).fetchall()
+    for client_id, snapshot_count, invalid_count in rows:
+        if int(snapshot_count) == 0:
+            violations.append(
+                f"active_stocktakes のクライアント ID {client_id} に棚卸対象品目がありません"
+            )
+        elif int(invalid_count) > 0:
+            violations.append(
+                f"active_stocktake_items のクライアント ID {client_id} に"
+                "対象クライアントの有効品目でない品目が含まれています"
+            )
+    return violations
+
+
 def _format_violation(table: str, row_id: object, column: str, value: object, limit: str) -> str:
     return f"{table} ID {row_id} の {column}={value!r} は上限 {limit} の範囲外です"
 
