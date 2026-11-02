@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "inventory-manager-mini"
 version = "0.4.1"
-authors = [{ name = "IKinoCore" }]
+authors = [{ name = "Kawasaki Sho" }]
 license = "MIT"
 license-files = [
     "LICENSE",

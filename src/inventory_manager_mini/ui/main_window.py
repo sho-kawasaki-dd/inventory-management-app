@@ -1025,7 +1025,7 @@ class MainWindow(QMainWindow):
         dialog.setInformativeText(
             f"スキーマ版: {self.context.schema_version}\n"
             f"DB: {self.context.db_path}\n\n"
-            "Copyright (C) 2026 IKinoCore\n"
+            "Copyright (C) 2026 Kawasaki Sho\n"
             "自作コードは MIT ライセンスです。Qt Charts を含む本アプリの配布物全体は "
             "GNU General Public License version 3 (GPLv3) で配布します。GPLv3 の条件に従って "
             "再配布・改変できます。\n"

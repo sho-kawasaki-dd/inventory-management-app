@@ -168,7 +168,7 @@ def test_about_dialog_shows_legal_notice_and_opens_license_document(
         notice = dialog.informativeText()
         assert dialog.text() == "Inventory Manager mini 0.4.1"
         assert notice.startswith("スキーマ版: 6\nDB:")
-        assert "Copyright (C) 2026 IKinoCore" in notice
+        assert "Copyright (C) 2026 Kawasaki Sho" in notice
         assert "GNU General Public License version 3 (GPLv3)" in notice
         assert "再配布・改変できます" in notice
         assert "無保証" in notice

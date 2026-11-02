@@ -1,7 +1,7 @@
 ﻿Inventory Manager mini 配布条件
 ===============================
 
-Copyright (C) 2026 IKinoCore
+Copyright (C) 2026 Kawasaki Sho
 
 本プロジェクトの自作コードは MIT License で提供します。一方、Qt Charts を含む本アプリの
 結合作成物は GNU General Public License version 3 (GPLv3) の条件で配布します。
